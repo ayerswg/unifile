@@ -316,6 +316,13 @@ export class Editor {
       this._view.focus();
     }));
 
+    // ABC playback state → suppress active-line background while playing so it
+    // doesn't cover the green play-cursor highlight (editor may be unfocused).
+    this._unsub.push(state.on('abc-play-state', ({ playing }) => {
+      if (!this._view) return;
+      this._view.dom.classList.toggle('abc-play-active', playing);
+    }));
+
     // ABC playback cursor → highlight the currently sounding note in green.
     // event is { from, to } while playing, or null when stopped.
     this._unsub.push(state.on('abc-play-cursor', (event) => {

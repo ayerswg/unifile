@@ -37,18 +37,25 @@ export const catppuccinTheme = EditorView.theme(
       userSelect: 'none'
     },
     '.cm-lineNumbers .cm-gutterElement': {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
       padding: '0 6px 0 4px',
       minWidth: '26px',
-      textAlign: 'right',
       fontSize: '12px'
     },
     '.cm-activeLineGutter': { background: '#28283e', color: '#89b4fa' },
     // Lines
     '.cm-activeLine': { background: 'rgba(36,36,58,.7)' },
+    // When focused the active-line tint competes with text selection, so clear it.
+    // The cursor position (and blue gutter number) already mark the active line.
+    '&.cm-focused .cm-activeLine': { background: 'transparent !important' },
     '.cm-line': { padding: '0 4px 0 0' },
-    // Selection
-    '.cm-selectionBackground': { background: '#45475a' },
-    '&.cm-focused .cm-selectionBackground': { background: '#383857' },
+    // Selection — use the accent blue so it's clearly visible against the dark bg.
+    // !important is required to beat drawSelection()'s higher-specificity injected
+    // theme (.ͼN.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground).
+    '.cm-selectionBackground': { background: 'rgba(137,180,250,.28) !important' },
+    '&.cm-focused .cm-selectionBackground': { background: 'rgba(137,180,250,.38) !important' },
     '&.cm-focused .cm-selectionMatch': { background: '#45475a55' },
     '.cm-selectionMatch': { background: '#45475a44' },
     // Matching brackets
@@ -125,7 +132,9 @@ export const catppuccinThemeLight = EditorView.theme(
       '.cm-gutters': { background: '#e6e9ef', color: '#9ca0b0', borderRight: '1px solid #ccd0da' },
       '.cm-activeLineGutter': { background: '#dce0e8', color: '#1e66f5' },
       '.cm-activeLine': { background: 'rgba(230,233,239,.6)' },
-      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { background: '#ccd0da' },
+      '&.cm-focused .cm-activeLine': { background: 'transparent !important' },
+      '.cm-selectionBackground': { background: 'rgba(30,102,245,.18) !important' },
+      '&.cm-focused .cm-selectionBackground': { background: 'rgba(30,102,245,.26) !important' },
       '.cm-matchingBracket': { background: '#ccd0da', color: '#1e66f5 !important' },
       '.cm-cursor': { borderLeftColor: '#1e66f5' },
       '.cm-tooltip': { background: '#dce0e8', border: '1px solid #ccd0da', color: '#4c4f69' },

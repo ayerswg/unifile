@@ -104,6 +104,9 @@ class AppState extends EventBus {
 
     /** @type {boolean} Whether ABC audio is currently playing */
     this.abcPlaying = false;
+
+    /** @type {boolean} Whether a valid ABC tune is loaded and ready to play */
+    this.abcHasTune = false;
   }
 
   // -------------------------------------------------------------------------

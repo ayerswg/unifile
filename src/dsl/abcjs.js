@@ -123,6 +123,7 @@ async function render(content, el) {
 
   if (!content.trim()) {
     el.innerHTML = '<p class="preview-empty">Enter ABC notation to see sheet music.</p>';
+    _setHasTune(false);
     return;
   }
 
@@ -147,9 +148,17 @@ async function render(content, el) {
     _engraver    = tuneObjects?.[0]?.engraver ?? null;
     _tuneObjects = tuneObjects ?? null;
     _playEl      = container;
+    _setHasTune(!!(tuneObjects?.[0]));
   } catch (e) {
     el.innerHTML = `<pre class="error">ABC parse error:\n${e.message}</pre>`;
+    _setHasTune(false);
   }
+}
+
+function _setHasTune(hasTune) {
+  if (state.abcHasTune === hasTune) return;
+  state.abcHasTune = hasTune;
+  state.emit('abc-tune-state', { hasTune });
 }
 
 // ---------------------------------------------------------------------------

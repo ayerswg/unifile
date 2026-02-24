@@ -165,8 +165,8 @@
 [data-theme="light"] .cm-gutters        { background: #e6e9ef !important; color: #9ca0b0 !important; border-right: 1px solid #ccd0da !important; }
 [data-theme="light"] .cm-activeLineGutter { background: #dce0e8 !important; color: #1e66f5 !important; }
 [data-theme="light"] .cm-activeLine     { background: rgba(220,224,232,.6) !important; }
-[data-theme="light"] .cm-selectionBackground,
-[data-theme="light"] .cm-editor.cm-focused .cm-selectionBackground { background: #ccd0da !important; }
+[data-theme="light"] .cm-selectionBackground                      { background: rgba(30,102,245,.18) !important; }
+[data-theme="light"] .cm-editor.cm-focused .cm-selectionBackground { background: rgba(30,102,245,.26) !important; }
 [data-theme="light"] .cm-cursor         { border-left-color: #1e66f5 !important; }
 [data-theme="light"] .cm-tooltip        { background: #dce0e8 !important; border-color: #ccd0da !important; color: #4c4f69 !important; }
 [data-theme="light"] .cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments { background: rgba(223,142,29,.18) !important; color: #df8e1d !important; }
@@ -187,11 +187,19 @@
   :root:not([data-theme]) .cm-play-highlight { background: rgba(64,160,43,.17); outline-color: rgba(64,160,43,.45); }
 }
 
+/* Active line disappears when the editor is focused — selection highlight takes over */
+.cm-editor.cm-focused .cm-activeLine { background: transparent !important; }
+/* Active line also disappears during ABC playback (editor may be unfocused after
+ * clicking the play button, but the active-line tint would otherwise cover both
+ * the static text selection and the green play-cursor highlight). */
+.cm-editor.abc-play-active .cm-activeLine { background: transparent !important; }
+
 [data-theme="dark"] .cm-editor          { background: #1e1e2e !important; color: #cdd6f4 !important; }
 [data-theme="dark"] .cm-gutters         { background: #181825 !important; color: #4a4a6a !important; border-right: 1px solid #313244 !important; }
 [data-theme="dark"] .cm-activeLineGutter { background: #28283e !important; color: #89b4fa !important; }
 [data-theme="dark"] .cm-activeLine      { background: rgba(36,36,58,.7) !important; }
-[data-theme="dark"] .cm-selectionBackground { background: #45475a !important; }
+[data-theme="dark"] .cm-selectionBackground               { background: rgba(137,180,250,.28) !important; }
+[data-theme="dark"] .cm-editor.cm-focused .cm-selectionBackground { background: rgba(137,180,250,.38) !important; }
 [data-theme="dark"] .cm-cursor          { border-left-color: #89b4fa !important; }
 
 /* ---- Reset ---- */
@@ -296,36 +304,41 @@ html, body {
 }
 .topbar-center > * { pointer-events: auto; }
 
-/* ABC play / stop button — chained with .topbar-btn to win the cascade */
+/* ABC play / stop button — three states mirroring the commit button design:
+ *   default   → faded/invisible (no tune loaded), like .commit-btn at rest
+ *   .has-tune → lit up like .commit-btn.dirty (tune loaded, ready to play)
+ *   .playing  → accent filled, inverted like .branch-pill (actively playing)
+ */
 .topbar-btn.play-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 26px;
-  padding: 0;
-  border-radius: 50%;
-  background: rgba(166,227,161,.12);
-  border: 1px solid rgba(166,227,161,.35);
-  color: #a6e3a1;
-  cursor: pointer;
-  transition: background .12s, border-color .12s, color .12s;
+  padding: 4px 6px;
+  background: none;
+  border-color: transparent;
+  color: var(--text-muted);
+  opacity: 0.25;
+  transition: opacity .15s, color .15s, border-color .15s, background .15s, filter .15s;
 }
-.topbar-btn.play-btn:hover {
-  background: rgba(166,227,161,.25);
-  border-color: rgba(166,227,161,.65);
-  color: #a6e3a1;
+/* Tune loaded — mirrors .commit-btn.dirty */
+.topbar-btn.play-btn.has-tune {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent);
 }
-/* Stop state — shows when music is playing */
+.topbar-btn.play-btn.has-tune:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  filter: brightness(1.05);
+}
+/* Playing state — accent filled, inverted (matches .branch-pill) */
 .topbar-btn.play-btn.playing {
-  background: rgba(243,139,168,.12);
-  border-color: rgba(243,139,168,.35);
-  color: #f38ba8;
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--bg);
+  opacity: 1;
 }
 .topbar-btn.play-btn.playing:hover {
-  background: rgba(243,139,168,.25);
-  border-color: rgba(243,139,168,.65);
-  color: #f38ba8;
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--bg);
+  filter: brightness(1.1);
 }
 
 /* Right section */
@@ -691,8 +704,8 @@ html, body {
   #uf-editor-wrap .cm-activeLineGutter { background: #dce0e8; color: #1e66f5; }
   #uf-editor-wrap .cm-activeLine { background: rgba(230,233,239,.6); }
   #uf-editor-wrap .cm-cursor { border-left-color: #1e66f5; }
-  #uf-editor-wrap .cm-selectionBackground,
-  #uf-editor-wrap.cm-focused .cm-selectionBackground { background: #ccd0da; }
+  #uf-editor-wrap .cm-selectionBackground              { background: rgba(30,102,245,.18); }
+  #uf-editor-wrap.cm-focused .cm-selectionBackground  { background: rgba(30,102,245,.26); }
   #uf-editor-wrap .cm-comment-focus-line { background: rgba(223,142,29,.07); border-left-color: rgba(223,142,29,.4); }
 }
 

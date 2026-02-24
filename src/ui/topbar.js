@@ -43,6 +43,13 @@ export class TopBar {
       btn.innerHTML = playing ? iconStop() : iconPlay();
     }));
 
+    // Tune-ready state: toggle has-tune class on the play button.
+    this._unsub.push(state.on('abc-tune-state', ({ hasTune }) => {
+      const btn = this.el.querySelector('#tb-play');
+      if (!btn) return;
+      btn.classList.toggle('has-tune', hasTune);
+    }));
+
     this.render();
   }
 
@@ -77,7 +84,7 @@ export class TopBar {
         <!-- Centre section — format-specific actions (e.g. ABC play button) -->
         <div class="topbar-center">
           ${dslType === 'abcjs' ? `
-            <button class="topbar-btn play-btn${state.abcPlaying ? ' playing' : ''}"
+            <button class="topbar-btn play-btn${state.abcPlaying ? ' playing' : ''}${state.abcHasTune ? ' has-tune' : ''}"
               id="tb-play"
               title="${state.abcPlaying ? 'Stop (Space)' : 'Play (Space)'}">
               ${state.abcPlaying ? iconStop() : iconPlay()}
