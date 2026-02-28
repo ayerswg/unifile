@@ -82,9 +82,9 @@ const dslHighlightField = StateField.define({
 // ---------------------------------------------------------------------------
 // Playback cursor decoration
 //
-// While ABC audio is playing, the source character range for the currently
-// sounding note is decorated with a green highlight so the user can follow
-// along in the editor text.  Cleared when playback stops.
+// While ABC audio is playing, all currently-sounding note ranges (one per
+// voice) are decorated with green text colour so the user can follow along.
+// The value emitted on 'abc-play-cursor' is Array<{from,to}> | null.
 // ---------------------------------------------------------------------------
 
 const setPlayHighlight = StateEffect.define();
@@ -96,13 +96,18 @@ const playHighlightField = StateField.define({
     deco = deco.map(tr.changes);
     for (const e of tr.effects) {
       if (e.is(setPlayHighlight)) {
-        if (e.value === null) {
+        if (!e.value || e.value.length === 0) {
           deco = Decoration.none;
         } else {
-          const { from, to } = e.value;
-          deco = Decoration.set([
-            Decoration.mark({ class: 'cm-play-highlight' }).range(from, to)
-          ]);
+          // Build a sorted, non-empty set of marks — one per simultaneously
+          // playing voice.  Clamp to document bounds to avoid CM6 errors.
+          const docLen = tr.state.doc.length;
+          const marks = e.value
+            .filter(r => r.from < r.to && r.from < docLen)
+            .map(r => Decoration.mark({ class: 'cm-play-note' })
+              .range(r.from, Math.min(r.to, docLen)))
+            .sort((a, b) => a.from - b.from);
+          deco = marks.length ? Decoration.set(marks, true) : Decoration.none;
         }
       }
     }
@@ -323,14 +328,11 @@ export class Editor {
       this._view.dom.classList.toggle('abc-play-active', playing);
     }));
 
-    // ABC playback cursor → highlight the currently sounding note in green.
-    // event is { from, to } while playing, or null when stopped.
-    this._unsub.push(state.on('abc-play-cursor', (event) => {
+    // ABC playback cursor → colour the currently sounding notes green.
+    // ranges is Array<{from,to}> (one entry per voice) while playing, or null.
+    this._unsub.push(state.on('abc-play-cursor', (ranges) => {
       if (!this._view) return;
-      const effect = event
-        ? setPlayHighlight.of({ from: event.from, to: event.to })
-        : setPlayHighlight.of(null);
-      this._view.dispatch({ effects: effect });
+      this._view.dispatch({ effects: setPlayHighlight.of(ranges ?? null) });
     }));
 
     // DSL change → swap language extension

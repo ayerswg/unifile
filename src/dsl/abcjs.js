@@ -166,17 +166,21 @@ function _setHasTune(hasTune) {
 //
 // When the user selects or positions the cursor in CodeMirror, the editor
 // emits 'editor-select' with the selection range.  We call
-// engraver.rangeHighlight(from, to) which walks the rendered tune tree,
-// finds every note/rest whose source char range overlaps [from, to], and
-// applies the standard abcjs selection visual (abcjs-note_selected class +
-// fill="#ff0000").  A collapsed cursor (from === to) clears the selection.
+// engraver.rangeHighlight(from, to) to drive the preview selection.
+//
+// A collapsed cursor (from === to) uses rangeHighlight(0, 0) which calls
+// clearSelection() and then matches nothing — effectively clearing all
+// SVG highlights.  This fixes the "selection persists after clicking in
+// the text editor" bug (the previous rangeHighlight(pos, pos) call sometimes
+// left inline fill attributes set by abcjs's own click handler intact).
 // ---------------------------------------------------------------------------
 
 state.on('editor-select', ({ from, to }) => {
   _lastEditorSel = { from, to };
   if (_engraver && state.data?.dslType === 'abcjs' && !state.abcPlaying) {
     try {
-      _engraver.rangeHighlight(from, to);
+      // Collapsed cursor → clear all highlights; real selection → show range.
+      _engraver.rangeHighlight(from === to ? 0 : from, from === to ? 0 : to);
     } catch { /* engraver may be stale after a re-render — ignore */ }
   }
 });
@@ -225,12 +229,17 @@ async function startPlayback() {
     return; // tune may be malformed
   }
 
+  // Use primary startChar for single-voice event matching; multi-voice events
+  // expose startCharArray / endCharArray with one entry per simultaneous voice.
   const noteEvents = (previewTc.noteTimings ?? []).filter(e => e.type === 'event');
 
   if (selFrom !== selTo && selTo > selFrom) {
-    // ── Range selection: play from first note that starts at/after selFrom,
-    //    stop before the first note that starts at/after selTo.
-    const startEv = noteEvents.find(e => e.startChar >= selFrom);
+    // ── Range selection: play from first note that starts at/after selFrom
+    //    (searching across all voices via startCharArray).
+    const startEv = noteEvents.find(e => {
+      const chars = e.startCharArray ?? [e.startChar];
+      return chars.some(c => c !== undefined && c >= selFrom);
+    });
     if (startEv) startSeconds = startEv.milliseconds / 1000;
     stopChar = selTo;
   } else if (selFrom > 0) {
@@ -281,17 +290,40 @@ async function startPlayback() {
         return;
       }
 
-      // Range mode: stop when we reach the first note past the selection end.
-      if (stopChar !== null && event.startChar >= stopChar) {
-        stopPlayback();
-        return;
+      // ── Range mode stop check ──────────────────────────────────────────────
+      // For multi-voice scores, startCharArray contains one char per voice.
+      // We stop when ALL voices have moved past the selection end so that no
+      // voice is prematurely cut off.
+      if (stopChar !== null) {
+        const chars = event.startCharArray ?? (event.startChar !== undefined ? [event.startChar] : []);
+        if (chars.length > 0 && chars.every(c => c >= stopChar)) {
+          stopPlayback();
+          return;
+        }
       }
 
-      // Green note highlight in the preview pane.
-      try { _engraver?.rangeHighlight(event.startChar, event.endChar); } catch { /* stale */ }
+      // ── SVG: highlight all simultaneously-playing note elements ────────────
+      // We use event.elements (array-of-arrays, one sub-array per voice) to
+      // directly add/remove our own CSS class rather than calling rangeHighlight,
+      // which only supports a single range and clears all other highlights.
+      if (_playEl) {
+        _playEl.querySelectorAll('.abcjs-note_playing').forEach(el => {
+          el.classList.remove('abcjs-note_playing');
+        });
+        if (event.elements) {
+          event.elements.flat().forEach(svgEl => {
+            svgEl?.classList.add('abcjs-note_playing');
+          });
+        }
+      }
 
-      // Green text highlight in the editor.
-      state.emit('abc-play-cursor', { from: event.startChar, to: event.endChar });
+      // ── Editor: emit all voice char ranges for text-colour highlighting ────
+      const starts = event.startCharArray ?? [event.startChar];
+      const ends   = event.endCharArray   ?? [event.endChar];
+      const ranges = starts
+        .map((s, i) => ({ from: s, to: ends[i] }))
+        .filter(r => r.from !== undefined && r.to !== undefined && r.from < r.to);
+      state.emit('abc-play-cursor', ranges.length ? ranges : null);
     }
   });
 
@@ -315,6 +347,13 @@ function stopPlayback() {
 
   try { _audioContext?.close(); }    catch { /* ignore */ }
   _audioContext = null;
+
+  // Remove the direct per-note SVG play highlights.
+  if (_playEl) {
+    _playEl.querySelectorAll('.abcjs-note_playing').forEach(el => {
+      el.classList.remove('abcjs-note_playing');
+    });
+  }
 
   _playEl?.classList.remove('abc-playing');
 

@@ -180,11 +180,13 @@
   :root:not([data-theme]) .cm-dsl-highlight { background: rgba(30,102,245,.13); outline-color: rgba(30,102,245,.35); }
 }
 
-/* ABC playback cursor highlight — green text range tracking the playing note */
-.cm-play-highlight { background: rgba(166,227,161,.25); border-radius: 2px; outline: 1px solid rgba(166,227,161,.55); }
-[data-theme="light"] .cm-play-highlight { background: rgba(64,160,43,.17) !important; outline-color: rgba(64,160,43,.45) !important; }
+/* ABC playback cursor — playing notes shown in green text colour.
+ * Uses !important to override syntax-highlight colour tokens (e.g. --hl-atom).
+ * Multiple ranges emitted simultaneously for multi-voice scores. */
+.cm-play-note { color: #a6e3a1 !important; }
+[data-theme="light"] .cm-play-note { color: #40a02b !important; }
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .cm-play-highlight { background: rgba(64,160,43,.17); outline-color: rgba(64,160,43,.45); }
+  :root:not([data-theme]) .cm-play-note { color: #40a02b !important; }
 }
 
 /* Active line disappears when the editor is focused — selection highlight takes over */
@@ -272,7 +274,7 @@ html, body {
   text-overflow: clip;
 }
 
-/* DSL type icon — small muted icon to the left of the title */
+/* DSL type icon — small muted icon to the left of the title (legacy, kept for reference) */
 .dsl-icon {
   flex-shrink: 0;
   display: flex;
@@ -280,6 +282,34 @@ html, body {
   color: var(--text-muted);
   opacity: 0.55;
   user-select: none;
+}
+
+/* DSL menu button — clickable icon at far left, opens the tools/settings dropdown */
+.dsl-icon-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  opacity: 0.55;
+  padding: 3px 5px;
+  cursor: pointer;
+  transition: opacity .15s, color .15s, border-color .15s, background .15s;
+  user-select: none;
+}
+.dsl-icon-btn:hover {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg-surface);
+}
+.dsl-icon-btn.active {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg-overlay);
 }
 
 
@@ -500,6 +530,28 @@ html, body {
   font-weight: normal;
   filter: none;
 }
+/* Split commit pill — left action part (shown when dirty).
+   Placed after .vcs-pill.dirty to win the border-color cascade. */
+.vcs-pill.commit-action-pill {
+  color: var(--accent);
+  border-color: var(--accent);
+  border-right: 1px solid color-mix(in srgb, var(--accent) 35%, transparent) !important;
+}
+.vcs-pill.commit-action-pill:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  filter: brightness(1.05);
+}
+/* Split commit pill — right caret part (shown when dirty) */
+.vcs-pill.commit-caret-pill {
+  color: var(--accent);
+  border-color: var(--accent);
+  padding: 3px 7px;
+}
+.vcs-pill.commit-caret-pill:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  filter: brightness(1.05);
+}
+
 .vcs-pill-text { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .vcs-pill-mono { font-family: var(--font-mono); letter-spacing: 0.02em; }
 .vcs-pill-caret { color: var(--text-muted); font-size: 9px; line-height: 1; }
@@ -521,9 +573,11 @@ html, body {
 }
 .vcs-dropdown.open { display: block; }
 
-/* Position the VCS dropdowns under their respective pill buttons */
-#tb-branch-dd { right: 128px; }
-#tb-commit-dd { right: 52px; }
+/* Position the VCS dropdowns under their respective pill buttons.
+   Right edge of topbar has 12px padding; commit pill is rightmost (~90px wide),
+   branch pill is next (~110px wide). */
+#tb-branch-dd { right: 104px; }
+#tb-commit-dd { right: 12px; }
 
 /* Detached HEAD notice inside the branch dropdown */
 .dd-detached-notice {
@@ -759,30 +813,30 @@ html, body {
   filter: drop-shadow(0 0 5px #ff0000);
 }
 
-/* While ABC audio is playing, override the note selection colour to green.
-   abcjs still sets fill="#ff0000" on paths — we override it with a green fill
-   and swap the glow colour.  Green (#00c800) survives the dark-mode invert+hue-rotate
-   double-transform: invert → magenta, hue-rotate(180°) → green. So we use
-   the "invert-safe" value that maps back to a visible green after the transform. */
-.abc-playing.abc-preview-wrap svg g.abcjs-note_selected path,
-.abc-playing.abc-preview-wrap svg g.abcjs-note_selected rect {
+/* While ABC audio is playing, .abcjs-note_playing is added directly to each
+   simultaneously-playing SVG group element (one per voice).  CSS fill overrides
+   abcjs's inline fill attribute.
+   Green #00c800 survives the dark-mode invert+hue-rotate double-transform:
+   invert → magenta, hue-rotate(180°) → green. */
+.abc-playing.abc-preview-wrap svg g.abcjs-note_playing path,
+.abc-playing.abc-preview-wrap svg g.abcjs-note_playing rect {
   fill: #00c800 !important;
 }
-.abc-playing.abc-preview-wrap svg g.abcjs-note_selected {
+.abc-playing.abc-preview-wrap svg g.abcjs-note_playing {
   filter: drop-shadow(0 0 5px #00c800);
 }
-/* Light / no-dark-transform mode: use a pleasant Catppuccin green directly */
-[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_selected path,
-[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_selected rect {
+/* Light / no-dark-transform mode: Catppuccin Latte green */
+[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_playing path,
+[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_playing rect {
   fill: #40a02b !important;
 }
-[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_selected {
+[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_playing {
   filter: drop-shadow(0 0 5px #40a02b);
 }
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_selected path,
-  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_selected rect { fill: #40a02b !important; }
-  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_selected { filter: drop-shadow(0 0 5px #40a02b); }
+  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_playing path,
+  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_playing rect { fill: #40a02b !important; }
+  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_playing { filter: drop-shadow(0 0 5px #40a02b); }
 }
 
 .preview-spinner {
@@ -1371,7 +1425,15 @@ html, body {
 .ct-author-input { font-size: 12px !important; padding: 4px 8px !important; }
 .ct-actions { display: flex; justify-content: flex-end; }
 
-/* Tools dropdown — ⋯ menu with Blame / Export / Import */
+/* DSL menu dropdown — opens below the far-left DSL icon button */
+.dsl-menu-dropdown {
+  width: 220px;
+  left: 8px;   /* align with left edge under the DSL icon */
+  right: auto; /* override any inherited right positioning */
+  padding: 6px 0;
+}
+
+/* Tools dropdown — ⋯ menu with Blame / Export / Import (legacy, kept for reference) */
 .tools-dropdown {
   width: 220px;
   right: 52px;  /* aligns under the ⋯ button */

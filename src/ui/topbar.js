@@ -2,7 +2,7 @@
  * Top bar component
  *
  * Layout (left → right):
- *   [editable title]  [DSL type label]  [↑commit]  [branch ▾][hash ▾]  [⋯]  [⚙]
+ *   [DSL menu icon ▾]  [editable title]  [↑commit]  [branch ▾][hash ▾]
  *
  * The view-mode toggle (Editor / Split / Preview) has been moved to the
  * pane divider bar — click it to cycle through modes.
@@ -10,9 +10,11 @@
  * Two independent VCS dropdowns:
  *   - Branch pill  → lists all branches; click to switch
  *   - Commit pill  → lists commits on current branch; click to checkout
+ *                    When dirty: becomes a split button — left half commits,
+ *                    right half (▾) opens the history dropdown.
  *
- * The commit trigger (↑) is a small icon button to the left of the pill group.
- * It is invisible when no changes exist and lights up in accent colour when dirty.
+ * The DSL icon at the far left is a dropdown menu that replaces the former
+ * ⋯ tools menu and ⚙ settings gear.
  */
 
 import { state, PANELS } from './state.js';
@@ -28,7 +30,7 @@ export class TopBar {
     this.handlers = handlers;
     this._branchOpen = false;
     this._commitOpen = false;
-    this._toolsOpen = false;
+    this._dslMenuOpen = false;
     this._unsub = [];
 
     this._unsub.push(state.on('change', () => this.render()));
@@ -70,9 +72,10 @@ export class TopBar {
 
     this.el.innerHTML = `
       <div class="topbar">
-        <span class="dsl-icon" title="Document type: ${escHtml(dslType)}" aria-label="${escHtml(dslType)}">
+        <button class="dsl-icon-btn${this._dslMenuOpen ? ' active' : ''}" id="tb-dsl-menu-toggle"
+          title="Menu" aria-label="Menu">
           ${iconForDsl(dslType)}
-        </span>
+        </button>
         <span
           class="topbar-title"
           contenteditable="true"
@@ -93,12 +96,6 @@ export class TopBar {
         </div>
 
         <div class="topbar-right">
-          <!-- Subtle commit trigger — invisible when clean, accent when dirty -->
-          <button class="topbar-btn commit-btn${isDirty ? ' dirty' : ''}" id="tb-commit"
-            title="Commit changes (Ctrl+S)" ${isDirty ? '' : 'disabled'}>
-            ${iconCommit()}
-          </button>
-
           <div class="vcs-pill-group">
             <button class="vcs-pill branch-pill${isDetached ? ' detached' : ''}" id="tb-branch-toggle"
               title="${isDetached ? 'Detached HEAD — click to manage branches' : `Branch: ${escHtml(branch)}`}">
@@ -106,27 +103,29 @@ export class TopBar {
               <span class="vcs-pill-text">${isDetached ? '⚠ detached' : escHtml(branch)}</span>
               <span class="vcs-pill-caret">▾</span>
             </button>
-            <button class="vcs-pill commit-pill${isDirty ? ' dirty' : ''}" id="tb-commit-toggle"
-              title="Commit: ${escHtml(hash)}${isDirty ? ' (uncommitted changes)' : ''}">
-              <span class="vcs-pill-text vcs-pill-mono">${escHtml(hash)}</span>
-              ${isDirty ? '<span class="dirty-dot" title="Uncommitted changes">●</span>' : ''}
-              <span class="vcs-pill-caret">▾</span>
-            </button>
+            ${isDirty ? `
+              <button class="vcs-pill commit-pill dirty commit-action-pill" id="tb-commit-action"
+                title="Commit changes (Ctrl+S)">
+                <span class="vcs-pill-text vcs-pill-mono">${escHtml(hash)}</span>
+                <span class="dirty-dot" title="Uncommitted changes">●</span>
+              </button>
+              <button class="vcs-pill commit-pill dirty commit-caret-pill" id="tb-commit-toggle"
+                title="View commits on this branch">
+                <span class="vcs-pill-caret">▾</span>
+              </button>
+            ` : `
+              <button class="vcs-pill commit-pill" id="tb-commit-toggle"
+                title="Commit: ${escHtml(hash)}">
+                <span class="vcs-pill-text vcs-pill-mono">${escHtml(hash)}</span>
+                <span class="vcs-pill-caret">▾</span>
+              </button>
+            `}
           </div>
-
-          <button class="topbar-btn topbar-btn--icon${this._toolsOpen ? ' active' : ''}"
-            id="tb-tools-toggle" title="Tools">
-            ${iconEllipsis()}
-          </button>
-
-          <button class="topbar-btn topbar-btn--icon" id="tb-settings" title="Settings (Ctrl+Shift+,)">
-            ${iconGear()}
-          </button>
         </div>
       </div>
 
-      <div class="vcs-dropdown tools-dropdown${this._toolsOpen ? ' open' : ''}" id="tb-tools-dd">
-        ${this._renderToolsList()}
+      <div class="vcs-dropdown dsl-menu-dropdown${this._dslMenuOpen ? ' open' : ''}" id="tb-dsl-menu-dd">
+        ${this._renderDslMenuList()}
       </div>
       <div class="vcs-dropdown${this._branchOpen ? ' open' : ''}" id="tb-branch-dd">
         ${this._branchOpen ? this._renderBranchList() : ''}
@@ -140,32 +139,21 @@ export class TopBar {
   }
 
   _updateDirty() {
-    const pill = this.el.querySelector('#tb-commit-toggle');
-    const btn  = this.el.querySelector('#tb-commit');
-
-    if (pill) {
-      pill.classList.toggle('dirty', state.isDirty);
-      const dot = pill.querySelector('.dirty-dot');
-      if (state.isDirty && !dot) {
-        const pillText = pill.querySelector('.vcs-pill-mono');
-        if (pillText) {
-          pillText.insertAdjacentHTML('afterend', '<span class="dirty-dot" title="Uncommitted changes">●</span>');
-        }
-      } else if (!state.isDirty && dot) {
-        dot.remove();
-      }
+    // When dirty state changes, the commit pill structure changes fundamentally
+    // (single button ↔ split button), so we need a full re-render.
+    const hasSplitBtn = !!this.el.querySelector('#tb-commit-action');
+    if (hasSplitBtn !== state.isDirty) {
+      this.render();
     }
-    if (btn) {
-      btn.disabled = !state.isDirty;
-      btn.classList.toggle('dirty', state.isDirty);
-    }
+    // If the structure already matches the dirty state, nothing else to do —
+    // the split/single structure already reflects the state correctly.
   }
 
   // ---------------------------------------------------------------------------
   // Dropdown content
   // ---------------------------------------------------------------------------
 
-  _renderToolsList() {
+  _renderDslMenuList() {
     const hasCommits = (state.vcs?.log()?.length ?? 0) > 0;
     return `
       <ul class="tools-menu-list">
@@ -182,6 +170,11 @@ export class TopBar {
         <li class="tools-menu-item" id="tb-merge" title="Import & merge another unifile (Ctrl+Shift+M)">
           ${iconImport()} Import & merge…
           <kbd>⌃⇧M</kbd>
+        </li>
+        <li class="tools-menu-sep" role="separator"></li>
+        <li class="tools-menu-item" id="tb-settings-item" title="Settings (Ctrl+Shift+,)">
+          ${iconGear()} Settings
+          <kbd>⌃⇧,</kbd>
         </li>
       </ul>
     `;
@@ -271,28 +264,19 @@ export class TopBar {
       playBtn.addEventListener('click', () => state.emit('abc-play'));
     }
 
-    // Commit button
-    const commitBtn = this.el.querySelector('#tb-commit');
-    if (commitBtn) {
-      commitBtn.addEventListener('click', () => state.openPanel(PANELS.COMMIT));
+    // Commit action — primary part of the split pill when dirty
+    const commitActionBtn = this.el.querySelector('#tb-commit-action');
+    if (commitActionBtn) {
+      commitActionBtn.addEventListener('click', () => state.openPanel(PANELS.COMMIT));
     }
 
-    // Settings gear
-    const settingsBtn = this.el.querySelector('#tb-settings');
-    if (settingsBtn) {
-      settingsBtn.addEventListener('click', () => {
-        if (state.activePanel === PANELS.SETTINGS) state.closePanel();
-        else state.openPanel(PANELS.SETTINGS);
-      });
-    }
-
-    // Tools ⋯ toggle
-    const toolsBtn = this.el.querySelector('#tb-tools-toggle');
-    if (toolsBtn) {
-      toolsBtn.addEventListener('click', (e) => {
+    // DSL menu toggle (far-left icon button)
+    const dslMenuBtn = this.el.querySelector('#tb-dsl-menu-toggle');
+    if (dslMenuBtn) {
+      dslMenuBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this._toolsOpen = !this._toolsOpen;
-        if (this._toolsOpen) { this._branchOpen = false; this._commitOpen = false; }
+        this._dslMenuOpen = !this._dslMenuOpen;
+        if (this._dslMenuOpen) { this._branchOpen = false; this._commitOpen = false; }
         this._syncDropdowns();
       });
     }
@@ -303,18 +287,18 @@ export class TopBar {
       branchBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._branchOpen = !this._branchOpen;
-        if (this._branchOpen) { this._commitOpen = false; this._toolsOpen = false; }
+        if (this._branchOpen) { this._commitOpen = false; this._dslMenuOpen = false; }
         this._syncDropdowns();
       });
     }
 
-    // Commit pill toggle
+    // Commit pill toggle (caret / history dropdown)
     const commitPillBtn = this.el.querySelector('#tb-commit-toggle');
     if (commitPillBtn) {
       commitPillBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._commitOpen = !this._commitOpen;
-        if (this._commitOpen) { this._branchOpen = false; this._toolsOpen = false; }
+        if (this._commitOpen) { this._branchOpen = false; this._dslMenuOpen = false; }
         this._syncDropdowns();
       });
     }
@@ -324,7 +308,7 @@ export class TopBar {
       if (!this.el.contains(e.target)) {
         this._branchOpen = false;
         this._commitOpen = false;
-        this._toolsOpen = false;
+        this._dslMenuOpen = false;
         this._syncDropdowns();
       }
     });
@@ -333,11 +317,11 @@ export class TopBar {
   }
 
   _syncDropdowns() {
-    // Tools dropdown
-    const toolsDd = this.el.querySelector('#tb-tools-dd');
-    if (toolsDd) {
-      toolsDd.classList.toggle('open', this._toolsOpen);
-      if (this._toolsOpen) toolsDd.innerHTML = this._renderToolsList();
+    // DSL menu dropdown
+    const dslMenuDd = this.el.querySelector('#tb-dsl-menu-dd');
+    if (dslMenuDd) {
+      dslMenuDd.classList.toggle('open', this._dslMenuOpen);
+      if (this._dslMenuOpen) dslMenuDd.innerHTML = this._renderDslMenuList();
     }
     // Branch dropdown
     const branchDd = this.el.querySelector('#tb-branch-dd');
@@ -351,34 +335,40 @@ export class TopBar {
       commitDd.classList.toggle('open', this._commitOpen);
       if (this._commitOpen) commitDd.innerHTML = this._renderCommitList();
     }
-    // Sync the ⋯ button active state
-    const toolsBtn = this.el.querySelector('#tb-tools-toggle');
-    if (toolsBtn) toolsBtn.classList.toggle('active', this._toolsOpen);
+    // Sync the DSL menu button active state
+    const dslMenuBtn = this.el.querySelector('#tb-dsl-menu-toggle');
+    if (dslMenuBtn) dslMenuBtn.classList.toggle('active', this._dslMenuOpen);
 
     this._bindDropdownEvents();
   }
 
   _bindDropdownEvents() {
-    // Tools menu items
+    // DSL menu items
     this.el.querySelector('#tb-blame')?.addEventListener('click', () => {
       if (!this.el.querySelector('#tb-blame')?.classList.contains('disabled')) {
-        this._toolsOpen = false;
+        this._dslMenuOpen = false;
         this._syncDropdowns();
         if (state.activePanel === PANELS.BLAME) state.closePanel();
         else state.openPanel(PANELS.BLAME);
       }
     });
     this.el.querySelector('#tb-export')?.addEventListener('click', () => {
-      this._toolsOpen = false;
+      this._dslMenuOpen = false;
       this._syncDropdowns();
       if (state.activePanel === PANELS.EXPORT) state.closePanel();
       else state.openPanel(PANELS.EXPORT);
     });
     this.el.querySelector('#tb-merge')?.addEventListener('click', () => {
-      this._toolsOpen = false;
+      this._dslMenuOpen = false;
       this._syncDropdowns();
       if (state.activePanel === PANELS.MERGE) state.closePanel();
       else state.openPanel(PANELS.MERGE);
+    });
+    this.el.querySelector('#tb-settings-item')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      if (state.activePanel === PANELS.SETTINGS) state.closePanel();
+      else state.openPanel(PANELS.SETTINGS);
     });
 
     // Checkout a commit
@@ -538,7 +528,7 @@ function iconStop() {
 
 /**
  * Small muted icon representing the document's DSL type.
- * Shown at the far left of the topbar, before the title.
+ * Shown at the far left of the topbar as a clickable menu button.
  */
 function iconForDsl(dslType) {
   if (dslType === 'mermaid') {
