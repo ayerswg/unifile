@@ -117,6 +117,10 @@ function buildOptions(entryPoint, unifileMode) {
     minify: !DEV,
     sourcemap: DEV ? 'inline' : false,
     logLevel: 'info',
+    // Mark Node.js built-ins as external so they don't cause resolution errors
+    // when bundled for the browser. The `buffer` module is only reached by the
+    // `docx` package in environments without `atob` (i.e. never in a browser).
+    external: ['buffer'],
     define: {
       'process.env.NODE_ENV': DEV ? '"development"' : '"production"',
       'UNIFILE_MODE': `"${unifileMode}"`

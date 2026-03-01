@@ -12,7 +12,7 @@
 
 import { state, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
-import { generateQuine, downloadFile } from '../core/storage.js';
+import { generateQuine, downloadFile, downloadBlob } from '../core/storage.js';
 
 // 3-character abbreviation for each DSL — must match build/build.mjs DSL_META
 const DSL_ABBREV = {
@@ -172,7 +172,13 @@ export class ExportDialog {
       if (result instanceof Blob) {
         // Format exports use title + ext only (no hash/dsl suffix needed)
         const name = slugify(state.title) + exp.ext;
-        downloadFile(await result.text(), name, exp.mime);
+        if (exp.binary) {
+          // Binary export (e.g. DOCX) — download Blob directly to avoid
+          // corrupting binary data through a text() round-trip.
+          downloadBlob(result, name);
+        } else {
+          downloadFile(await result.text(), name, exp.mime);
+        }
       }
       // null → e.g. PDF handled by the print dialog; nothing to do
     } catch (err) {

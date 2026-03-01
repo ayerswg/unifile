@@ -103,6 +103,23 @@ export function downloadFile(content, filename, mime = 'text/html') {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+/**
+ * Trigger a browser download of a Blob directly (binary-safe).
+ * Use this instead of downloadFile() when the content is binary (e.g. DOCX).
+ * @param {Blob} blob
+ * @param {string} filename
+ */
+export function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 // ---------------------------------------------------------------------------
 // PWA IndexedDB storage
 // ---------------------------------------------------------------------------

@@ -891,6 +891,80 @@ html, body {
 .preview-content img { max-width: 100%; border-radius: var(--radius); }
 .preview-content hr { border: none; border-top: 1px solid var(--border); }
 
+/* ==============================================================
+   FRONT MATTER HEADER BLOCK
+   ============================================================== */
+
+/* Rendered above the markdown body when YAML front matter is present */
+.fm-header {
+  text-align: center;
+  margin: 1.5em 0 2.5em;
+  padding-bottom: 1.5em;
+  border-bottom: 1px solid var(--border);
+}
+/* Override the default preview-content h1 border/padding */
+.fm-title {
+  font-size: 2.2em;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0 0 0.25em;
+  border: none !important;
+  padding: 0 !important;
+  color: var(--text);
+}
+.fm-subtitle {
+  font-size: 1.15em;
+  color: var(--text-sub);
+  font-style: italic;
+  margin: 0 0 0.5em;
+}
+.fm-author {
+  font-size: 0.95em;
+  color: var(--text-sub);
+  margin: 0;
+}
+.fm-date {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  margin: 0.25em 0 0;
+}
+
+/* ==============================================================
+   PAGE BREAK MARKER  (--- in markdown)
+   ============================================================== */
+
+/* Screen: labelled dashed separator */
+.preview-content .page-break {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2em 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  user-select: none;
+}
+.preview-content .page-break::before,
+.preview-content .page-break::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--border);
+}
+/* Print / PDF: force a real page break, hide the visual label */
+@media print {
+  .page-break {
+    break-after: page;
+    page-break-after: always;
+    display: block !important;
+    height: 0;
+    margin: 0;
+  }
+  .page-break span,
+  .page-break::before,
+  .page-break::after { display: none; }
+}
+
 /* Code copy button */
 .copy-btn {
   position: absolute;
