@@ -888,7 +888,29 @@ html, body {
   padding: .4em .8em;
 }
 .preview-content th { background: var(--bg-surface); }
-.preview-content img { max-width: 100%; border-radius: var(--radius); }
+.preview-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius);
+  display: block;
+}
+/* Image alignment helpers — used by the {align=…} attribute syntax */
+.preview-content img.img-left {
+  float: left;
+  margin: 0 1.2em 0.8em 0;
+  display: inline-block;
+}
+.preview-content img.img-right {
+  float: right;
+  margin: 0 0 0.8em 1.2em;
+  display: inline-block;
+}
+.preview-content img.img-center {
+  margin-left: auto;
+  margin-right: auto;
+}
+/* Clear floats so subsequent paragraphs flow below floated images */
+.preview-content p::after { content: ''; display: table; clear: both; }
 .preview-content hr { border: none; border-top: 1px solid var(--border); }
 
 /* ==============================================================
@@ -964,6 +986,41 @@ html, body {
   .page-break::before,
   .page-break::after { display: none; }
 }
+
+/* ==============================================================
+   PAGE BREAK RULER  (injected by markdown render())
+   Approximate page boundaries for US Letter / default margins.
+   ============================================================== */
+
+/* Full-width dashed rule positioned at each page boundary */
+.page-ruler-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--text-muted) 35%, transparent);
+  pointer-events: none;
+  z-index: 4;
+}
+/* Small badge on the far-right showing which page follows the line */
+.page-ruler-label {
+  position: absolute;
+  right: 0;
+  top: -10px;          /* vertically centred on the dashed rule */
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: 3px;
+  user-select: none;
+  opacity: 0.75;
+}
+/* Hide the ruler when printing — the real page breaks handle layout */
+@media print { .page-ruler-line { display: none; } }
 
 /* Code copy button */
 .copy-btn {

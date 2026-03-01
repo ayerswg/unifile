@@ -19,7 +19,8 @@ import DOMPurify from 'dompurify';
 import { markdown as cmMarkdown, commonmarkLanguage } from '@codemirror/lang-markdown';
 import { GFM } from '@lezer/markdown';
 import { Language, syntaxHighlighting } from '@codemirror/language';
-import { keymap } from '@codemirror/view';
+import { keymap, EditorView, ViewPlugin, Decoration, WidgetType } from '@codemirror/view';
+import { RangeSetBuilder } from '@codemirror/state';
 import { markdownKeymap } from '@codemirror/lang-markdown';
 
 // GFM-only editor language: CommonMark + GFM extensions (tables, strikethrough,
@@ -38,7 +39,7 @@ import { registerDSL } from './registry.js';
 import {
   Document, Paragraph, TextRun, HeadingLevel,
   AlignmentType, PageBreak, Packer,
-  Table, TableRow, TableCell, WidthType, LevelFormat
+  Table, TableRow, TableCell, WidthType, LevelFormat, ImageRun
 } from 'docx';
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,44 @@ marked.use({
       return false;
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Image extension — ![alt](url){width=40% align=right}
+// ---------------------------------------------------------------------------
+//
+// A custom marked inline extension that handles the `{attrs}` suffix after
+// standard markdown images.  Without the suffix the built-in image tokenizer
+// runs unchanged.  With the suffix this extension captures:
+//   width  – CSS value applied as an inline style, e.g. 40%, 320px
+//   height – CSS value applied as an inline style
+//   align  – left | center | right → floated / block-centred
+//
+// Data URLs (base64-encoded images) are explicitly allowed through DOMPurify
+// so that pasted or dropped images survive the sanitise step.
+
+marked.use({
+  extensions: [{
+    name: 'imageAttrs',
+    level: 'inline',
+    // Signal to marked where this pattern *might* start in the source
+    start(src) { return src.indexOf('!['); },
+    tokenizer(src) {
+      // Require {attrs} suffix — fall through to built-in image for plain ![alt](url)
+      const cap = /^!\[([^\[\]]*)\]\(([^)]*)\)\{([^}]*)\}/.exec(src);
+      if (!cap) return;
+      return {
+        type:  'imageAttrs',
+        raw:   cap[0],
+        alt:   cap[1].trim(),
+        href:  cap[2].trim(),
+        attrs: parseImageAttrs(cap[3]),
+      };
+    },
+    renderer(token) {
+      return renderImageHtml(token.href, token.alt, token.attrs);
+    }
+  }]
 });
 
 // ---------------------------------------------------------------------------
@@ -134,7 +173,9 @@ function renderFrontMatterBlock(meta) {
 // ---------------------------------------------------------------------------
 
 function safeHtml(raw) {
-  return DOMPurify.sanitize(raw);
+  // ADD_DATA_URI_TAGS: allow data: URIs in img src so that base64-encoded
+  // images pasted/dropped by the user survive the sanitiser pass.
+  return DOMPurify.sanitize(raw, { ADD_DATA_URI_TAGS: ['img'] });
 }
 
 async function render(content, el) {
@@ -154,6 +195,9 @@ async function render(content, el) {
     code.parentElement.style.position = 'relative';
     code.parentElement.appendChild(btn);
   });
+
+  // Place page-break ruler markers after the browser has done a layout pass
+  requestAnimationFrame(() => addPageRuler(el));
 }
 
 export async function renderToString(content) {
@@ -175,7 +219,13 @@ const EXPORT_CSS = `
   code { font-family: monospace; background: #f0f0f0; padding: .1em .3em; border-radius: 3px; }
   pre code { background: none; padding: 0; }
   blockquote { border-left: 4px solid #ccc; margin-left: 0; padding-left: 1em; color: #666; }
-  img { max-width: 100%; }
+  img { max-width: 100%; height: auto; display: block; }
+  /* Image alignment helpers */
+  img.img-left   { float: left;  margin: 0 1.2em 0.8em 0; display: inline-block; }
+  img.img-right  { float: right; margin: 0 0 0.8em 1.2em; display: inline-block; }
+  img.img-center { margin-left: auto; margin-right: auto; }
+  /* Clear floats after any block that may contain floated images */
+  p::after { content: ''; display: table; clear: both; }
   table { border-collapse: collapse; width: 100%; }
   th, td { border: 1px solid #ddd; padding: .4em .8em; }
   th { background: #f5f5f5; }
@@ -275,6 +325,14 @@ function inlineToRuns(tokens = [], opts = {}) {
       case 'html':
         // Skip raw inline HTML
         break;
+      case 'image':
+        // Standard markdown image with no {attrs} suffix
+        runs.push(imageRunFromDataUrl(tok.href, tok.text || '', {}));
+        break;
+      case 'imageAttrs':
+        // Extended image with {width= align= height=} attrs
+        runs.push(imageRunFromDataUrl(tok.href, tok.alt || '', tok.attrs || {}));
+        break;
       default:
         if (tok.text) runs.push(new TextRun({ text: tok.text, ...opts }));
         break;
@@ -367,19 +425,66 @@ function cellAlign(align) {
 }
 
 /**
+ * Extract plain text from a marked cell token (used for column-width estimation).
+ * Recursively flattens nested inline tokens.
+ */
+function cellPlainText(cell) {
+  if (!cell) return '';
+  function tokText(t) {
+    if (t.tokens?.length) return t.tokens.map(tokText).join('');
+    return t.text || t.raw || '';
+  }
+  if (cell.tokens?.length) return cell.tokens.map(tokText).join('');
+  return cell.text || '';
+}
+
+/**
  * Convert a marked table token to a docx Table with proper rows and cells.
  * Header row cells are rendered bold; column alignment is respected.
- * Each column receives an equal share of the text-area width (US Letter page
- * with standard margins ≈ 9360 twips wide).
+ *
+ * Column widths are distributed proportionally by the maximum character length
+ * of content in each column (header + all data rows), matching how HTML auto-
+ * layout narrows short columns and widens content-heavy ones.  A minimum of
+ * 720 twips (~0.5") is enforced per column so narrow columns stay readable.
+ *
+ * Total table width = 9360 twips (US Letter minus 1" L+R margins).
  */
 function tableToDocx(token) {
   const numCols = Math.max((token.header || []).length, 1);
-  const colWidth = Math.floor(9360 / numCols); // twips per column
+  const TOTAL_TWIPS = 9360;
+  const MIN_COL    = 720; // ~0.5 inch minimum per column
+
+  // Measure the longest plain-text content in each column
+  const maxLens = Array(numCols).fill(1);
+  (token.header || []).forEach((cell, i) => {
+    maxLens[i] = Math.max(maxLens[i], cellPlainText(cell).length + 2);
+  });
+  (token.rows || []).forEach(row => {
+    row.forEach((cell, i) => {
+      if (i < numCols) maxLens[i] = Math.max(maxLens[i], cellPlainText(cell).length + 2);
+    });
+  });
+
+  // Distribute twips proportionally
+  const totalLen  = maxLens.reduce((a, b) => a + b, 0);
+  let colWidths   = maxLens.map(len =>
+    Math.max(Math.round(len / totalLen * TOTAL_TWIPS), MIN_COL)
+  );
+
+  // If enforcing minimums pushed us over budget, scale everything back down
+  let sum = colWidths.reduce((a, b) => a + b, 0);
+  if (sum > TOTAL_TWIPS) {
+    const scale = TOTAL_TWIPS / sum;
+    colWidths = colWidths.map(w => Math.max(Math.round(w * scale), 500));
+    sum = colWidths.reduce((a, b) => a + b, 0);
+  }
+  // Give any rounding remainder to the last column so widths sum exactly
+  colWidths[colWidths.length - 1] += TOTAL_TWIPS - colWidths.reduce((a, b) => a + b, 0);
 
   // marked stores alignment on each cell object directly (cell.align) and
   // also on the table's top-level align array; prefer the per-cell value.
   const makeCell = (cell, i, bold = false) => new TableCell({
-    width: { size: colWidth, type: WidthType.DXA },
+    width: { size: colWidths[i], type: WidthType.DXA },
     children: [new Paragraph({
       style: "Normal",
       alignment: cellAlign(cell.align ?? token.align?.[i]),
@@ -400,7 +505,7 @@ function tableToDocx(token) {
   }));
 
   return new Table({
-    columnWidths: Array(numCols).fill(colWidth),
+    columnWidths: colWidths,
     rows: [headerRow, ...dataRows]
   });
 }
@@ -619,7 +724,30 @@ function getEditorExtensions() {
     // Continue list items on Enter, smart delete with Backspace
     keymap.of(markdownKeymap),
     // Catppuccin syntax highlighting — **bold**, *italic*, ~~struck~~, etc.
-    syntaxHighlighting(catppuccinHighlight)
+    syntaxHighlighting(catppuccinHighlight),
+    // Collapse base64 image data URLs to a readable widget in the editor
+    imageDataUrlPlugin,
+    // Handle paste/drop of image files → insert as markdown with base64 data URL
+    imageDropPaste,
+    // Style for the collapsed data-URL widget.
+    // verticalAlign: 'text-bottom' keeps the pill flush with the text baseline
+    // so it sits in the monospaced line without pushing the line-height around.
+    EditorView.theme({
+      '.cm-data-url-img': {
+        display: 'inline-block',
+        background: 'rgba(137,180,250,.15)',
+        border: '1px solid rgba(137,180,250,.3)',
+        borderRadius: '3px',
+        padding: '0 6px',
+        fontSize: '11px',
+        lineHeight: '1.6',
+        color: '#89b4fa',
+        cursor: 'default',
+        verticalAlign: 'text-bottom',
+        userSelect: 'none',
+        pointerEvents: 'none'
+      }
+    })
   ];
 }
 
@@ -632,6 +760,307 @@ function escHtml(str) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+// ---------------------------------------------------------------------------
+// Page-break ruler
+// ---------------------------------------------------------------------------
+
+/**
+ * Estimated printable content height in CSS pixels for one page of a US Letter
+ * document with default 1-inch margins (top + bottom), rendered at 96 DPI.
+ *   11" total − 2" margins = 9" × 96 px/in = 864 px
+ *
+ * This is used as the reference height for both PDF (browser print) and DOCX
+ * (Word default margins).  The preview ruler is intentionally approximate —
+ * the preview column is wider than the printed column, so text reflows
+ * differently, but heading / paragraph / image block heights give a good
+ * enough visual approximation of where page boundaries will fall.
+ */
+const PAGE_CONTENT_HEIGHT_PX = 864;
+
+/**
+ * Insert absolutely-positioned ruler lines into the preview element (`el`)
+ * to show where content will paginate in PDF / DOCX export.
+ *
+ * Algorithm
+ * ─────────
+ * 1. Walk from the top of the content accumulating height.
+ * 2. Every PAGE_CONTENT_HEIGHT_PX of content → auto page break.
+ * 3. Whenever a `.page-break` div (from `---` in the source) is reached
+ *    before the next automatic boundary, insert a break there instead and
+ *    reset the page meter from that position.
+ *
+ * Markers are rendered as horizontal dashed lines with a small "p2", "p3"…
+ * badge on the far right so they are unobtrusive but clearly visible.
+ *
+ * `requestAnimationFrame` in the caller ensures layout has settled before
+ * we read offsetTop / scrollHeight values.
+ */
+function addPageRuler(el) {
+  // Make `el` the containing block so absolute children position against it.
+  // `.preview-content` may already be position:relative; setting it again is harmless.
+  el.style.position = 'relative';
+
+  // Clear stale markers from the previous render
+  el.querySelectorAll('.page-ruler-line').forEach(m => m.remove());
+
+  const totalH = el.scrollHeight;
+  if (totalH < 10) return; // nothing rendered yet
+
+  // Collect manual break positions from `---` → `.page-break` divs
+  const manuals = [];
+  el.querySelectorAll('.page-break').forEach(pb => manuals.push(pb.offsetTop));
+  manuals.sort((a, b) => a - b);
+
+  // Walk from the content top, placing auto breaks and honouring manual ones
+  const markers = [];
+  let cursor   = 0; // current "page start" in px
+  let pageNum  = 2; // first break starts page 2
+  let mi       = 0; // index into manuals[]
+
+  while (cursor < totalH) {
+    const nextAuto = cursor + PAGE_CONTENT_HEIGHT_PX;
+
+    // Advance the manual pointer past any break that's at or before cursor
+    while (mi < manuals.length && manuals[mi] <= cursor) mi++;
+
+    if (mi < manuals.length && manuals[mi] < nextAuto) {
+      // A manual break fires before the next automatic boundary
+      cursor = manuals[mi];
+      markers.push({ top: cursor, page: pageNum, manual: true });
+      pageNum++;
+      mi++;
+    } else {
+      // Automatic break at the next page boundary
+      cursor = nextAuto;
+      if (cursor < totalH) {
+        markers.push({ top: cursor, page: pageNum, manual: false });
+        pageNum++;
+      }
+    }
+  }
+
+  // Render each marker
+  for (const { top, page } of markers) {
+    const line = document.createElement('div');
+    line.className = 'page-ruler-line';
+    line.style.top = `${top}px`;
+    line.innerHTML = `<span class="page-ruler-label">p${page}</span>`;
+    el.appendChild(line);
+  }
+}
+
+/**
+ * Parse an image attribute string like `width=40% align=right height=200px`
+ * into a plain object `{ width, height, align }`.
+ */
+function parseImageAttrs(str) {
+  const attrs = {};
+  for (const m of (str || '').matchAll(/([\w-]+)=([^\s}]+)/g)) {
+    attrs[m[1]] = m[2];
+  }
+  return attrs;
+}
+
+/**
+ * Render an <img> element with optional alignment class and inline size styles.
+ * `href` is passed through unchanged so that data: URLs are preserved verbatim
+ * (DOMPurify is configured separately to allow them).
+ */
+function renderImageHtml(href, alt, attrs) {
+  attrs = attrs || {};
+  const styles = [];
+  if (attrs.width)  styles.push(`width:${attrs.width}`);
+  if (attrs.height) styles.push(`height:${attrs.height}`);
+  const cls = { left: 'img-left', right: 'img-right', center: 'img-center' }[attrs.align] || '';
+  return `<img src="${href}" alt="${escHtml(alt || '')}"`
+    + (cls          ? ` class="${cls}"`           : '')
+    + (styles.length ? ` style="${styles.join(';')}"` : '')
+    + '>';
+}
+
+// ---------------------------------------------------------------------------
+// DOCX image helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Content width of a US Letter page with 1" margins (in pixels at 72 DPI).
+ * Used to convert percentage widths to absolute pixel dimensions for ImageRun.
+ *   6.5 inches × 72 dpi = 468 px
+ */
+const DOCX_PAGE_WIDTH_PX = 468;
+
+/**
+ * Convert a data URL to an ImageRun for DOCX export.
+ * If the href is not a data URL, or conversion fails, returns a TextRun with
+ * bracketed alt text as a fallback.
+ *
+ * Width/height attrs support px and % units; when only width is given the
+ * height defaults to a 4:3 ratio so the image is always valid in Word.
+ */
+function imageRunFromDataUrl(href, alt, attrs) {
+  attrs = attrs || {};
+  const dataMatch = href && href.match(/^data:(image\/([^;]+));base64,(.+)$/);
+  if (!dataMatch) {
+    // External URL or unsupported scheme — fall back to italic alt text
+    const label = alt || href || 'image';
+    return new TextRun({ text: `[Image: ${label}]`, italics: true });
+  }
+
+  const [, , subtype, base64] = dataMatch;
+  const docxType = subtype.replace('jpeg', 'jpg'); // 'jpg' | 'png' | 'gif' | 'bmp' | 'svg'
+
+  // Decode base64 → Uint8Array
+  let bytes;
+  try {
+    const binary = atob(base64);
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  } catch {
+    return new TextRun({ text: `[Image: ${alt || ''}]`, italics: true });
+  }
+
+  // Resolve dimensions
+  let w = DOCX_PAGE_WIDTH_PX;
+  let h = Math.round(w * 0.75); // default 4:3
+
+  if (attrs.width) {
+    if (attrs.width.endsWith('%'))   w = Math.round(parseFloat(attrs.width)  / 100 * DOCX_PAGE_WIDTH_PX);
+    else if (attrs.width.endsWith('px')) w = parseInt(attrs.width, 10);
+  }
+  if (attrs.height) {
+    if (attrs.height.endsWith('%'))  h = Math.round(parseFloat(attrs.height) / 100 * DOCX_PAGE_WIDTH_PX);
+    else if (attrs.height.endsWith('px')) h = parseInt(attrs.height, 10);
+  } else if (attrs.width) {
+    // No explicit height — derive from width using 4:3
+    h = Math.round(w * 0.75);
+  }
+
+  try {
+    return new ImageRun({ type: docxType, data: bytes, transformation: { width: w, height: h } });
+  } catch {
+    return new TextRun({ text: `[Image: ${alt || ''}]`, italics: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CodeMirror — image paste / drop  +  data-URL collapse widget
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a File as a base64 data URL (resolves with the data: string).
+ */
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = e => resolve(/** @type {string} */ (e.target.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Convert an image File to a base64 data URL and insert it at `pos` in the
+ * CodeMirror editor as a markdown image with default attrs.
+ */
+async function insertImageFile(view, file, pos) {
+  pos = pos ?? view.state.selection.main.head;
+  const dataUrl = await readFileAsDataUrl(file);
+  const snippet = `![](${dataUrl}){width=100% align=center}`;
+  view.dispatch({
+    changes:   { from: pos, insert: snippet },
+    selection: { anchor: pos + snippet.length }
+  });
+}
+
+/**
+ * Small inline widget shown in the editor instead of a long base64 data URL.
+ * Clicking / selecting it restores the raw text so the user can delete it.
+ */
+class DataUrlWidget extends WidgetType {
+  constructor(mime) { super(); this.mime = mime; }
+  eq(other) { return other.mime === this.mime; }
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-data-url-img';
+    span.textContent = `📷 ${this.mime}`;
+    span.title = 'Embedded image (base64) – backspace or select line to delete';
+    return span;
+  }
+  ignoreEvent() { return true; }
+}
+
+/**
+ * ViewPlugin that collapses embedded base64 image data URLs to a compact
+ * `📷 image/jpeg` pill widget.  The pill is always shown — the base64 data
+ * is never exposed in the editor (use Select-All + Delete on the line, or
+ * position the cursor next to the pill and press Backspace, to remove it).
+ */
+const imageDataUrlPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) { this.decorations = this._build(view); }
+    update(update) {
+      if (update.docChanged) this.decorations = this._build(update.view);
+    }
+    _build(view) {
+      const builder = new RangeSetBuilder();
+      const doc = view.state.doc.toString();
+
+      let search = 0;
+      while (true) {
+        // Find `](data:image/` which marks the start of an embedded image URL
+        const bracket = doc.indexOf('](data:image/', search);
+        if (bracket === -1) break;
+
+        // Verify a `![` precedes it on the same line
+        const imgOpen = doc.lastIndexOf('![', bracket);
+        if (imgOpen === -1 || doc.slice(imgOpen, bracket).includes('\n')) {
+          search = bracket + 1; continue;
+        }
+
+        const urlStart = bracket + 2;               // 'd' in 'data:...'
+        const urlEnd   = doc.indexOf(')', urlStart);
+        if (urlEnd === -1) break;
+
+        // Extract MIME type from 'data:<mime>;<enc>,...'
+        const mimeEnd = doc.indexOf(';', urlStart);
+        if (mimeEnd === -1 || mimeEnd > urlEnd) { search = urlEnd; continue; }
+        const mime = doc.slice(urlStart + 5, mimeEnd); // drop leading 'data:'
+
+        builder.add(urlStart, urlEnd, Decoration.replace({ widget: new DataUrlWidget(mime) }));
+        search = urlEnd + 1;
+      }
+      return builder.finish();
+    }
+  },
+  { decorations: v => v.decorations }
+);
+
+/**
+ * EditorView DOM-event handler that intercepts paste and drop events
+ * carrying image files, converts them to base64 data URLs and inserts them
+ * as markdown image syntax.
+ */
+const imageDropPaste = EditorView.domEventHandlers({
+  paste(event, view) {
+    const items = Array.from(event.clipboardData?.items || []);
+    const imgItem = items.find(i => i.type.startsWith('image/'));
+    if (!imgItem) return false;
+    event.preventDefault();
+    const file = imgItem.getAsFile();
+    if (file) insertImageFile(view, file);
+    return true;
+  },
+  drop(event, view) {
+    const files = Array.from(event.dataTransfer?.files || []);
+    const imgFile = files.find(f => f.type.startsWith('image/'));
+    if (!imgFile) return false;
+    event.preventDefault();
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    insertImageFile(view, imgFile, pos ?? undefined);
+    return true;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Plugin definition

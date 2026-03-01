@@ -36,7 +36,12 @@ const abcLanguage = StreamLanguage.define({
   copyState: s => ({ inHeader: s.inHeader }),
 
   token(stream, state) {
-    // Comments: % to end of line (valid anywhere, resets header context)
+    // %% formatting directives (%%tablature, %%score, %%MIDI, etc.) are
+    // meaningful ABC pseudo-comments — highlight as 'meta', not 'comment'.
+    if (stream.match(/%%[^\s].*$/) || stream.match(/%%\s*$/)) {
+      state.inHeader = false; return 'meta';
+    }
+    // Regular % comments: rest of line
     if (stream.match(/%.*$/)) { state.inHeader = false; return 'comment'; }
 
     // At the start of each line decide whether it is a header line.
@@ -82,6 +87,59 @@ const abcLanguage = StreamLanguage.define({
     return null;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Tablature helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Supported tablature instruments and their human-readable names.
+ * These match the keys registered in abcjs's internal pluginTab table.
+ */
+const TAB_INSTRUMENTS = new Set(['guitar', 'mandolin', 'violin', 'fiddle', 'fiveString']);
+
+/**
+ * Parse `%%tablature` formatting directives from an ABC source string.
+ *
+ * Each `%%tablature` line defines tablature for one staff (in declaration
+ * order).  Recognised key=value pairs on the line:
+ *
+ *   instrument  – required; one of: guitar, mandolin, violin, fiddle, fiveString
+ *   capo        – fret number to capo (integer, default 0)
+ *   label       – label text shown to the left of the tab staff
+ *   firstStaffOnly – if "true", only show the tab label on the first staff
+ *
+ * Lines with an unrecognised or empty instrument create a placeholder so
+ * that per-voice ordering still works (e.g. omit tab on the second voice of
+ * a two-voice tune).
+ *
+ * Returns the `tablature` array to pass to `renderAbc`, or `null` when no
+ * `%%tablature` directives are present.
+ *
+ * Example ABC:
+ *   %%tablature instrument=guitar capo=2 label=Tab
+ */
+function parseTabDirectives(src) {
+  const tabs = [];
+  for (const line of src.split('\n')) {
+    const m = line.match(/^%%tablature\b(.*)/i);
+    if (!m) continue;
+    const args = {};
+    for (const pair of m[1].matchAll(/([\w]+)=([^\s]+)/g)) {
+      args[pair[1]] = pair[2];
+    }
+    // capo must be an integer
+    if (args.capo !== undefined) args.capo = parseInt(args.capo, 10) || 0;
+    // firstStaffOnly is a boolean flag
+    if (args.firstStaffOnly !== undefined) args.firstStaffOnly = args.firstStaffOnly === 'true';
+    // Unknown / empty instrument → placeholder (no tab for this staff slot)
+    if (!args.instrument || !TAB_INSTRUMENTS.has(args.instrument)) {
+      args.instrument = '';
+    }
+    tabs.push(args);
+  }
+  return tabs.length ? tabs : null;
+}
 
 // ---------------------------------------------------------------------------
 // Module-level playback and render state
@@ -132,9 +190,11 @@ async function render(content, el) {
   el.appendChild(container);
 
   try {
+    const tablature = parseTabDirectives(content);
     const tuneObjects = abcjs.renderAbc(container, content, {
       responsive: 'resize',
       add_classes: true,
+      ...(tablature ? { tablature } : {}),
       // abcjs automatically highlights the clicked element by adding the
       // class `abcjs-note_selected` and setting fill="#ff0000" on its paths.
       // We just need to tell the editor which source range to jump to.
@@ -380,7 +440,11 @@ async function renderToString(content) {
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
   try {
-    abcjs.renderAbc(tmp, content, { responsive: 'resize' });
+    const tablature = parseTabDirectives(content);
+    abcjs.renderAbc(tmp, content, {
+      responsive: 'resize',
+      ...(tablature ? { tablature } : {}),
+    });
     return tmp.innerHTML;
   } catch {
     return `<pre>${content}</pre>`;
@@ -396,20 +460,102 @@ async function renderToString(content) {
 async function exportSVG(content) {
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
-  abcjs.renderAbc(tmp, content, {});
+  const tablature = parseTabDirectives(content);
+  abcjs.renderAbc(tmp, content, { ...(tablature ? { tablature } : {}) });
   const svgContent = tmp.innerHTML;
   document.body.removeChild(tmp);
   return new Blob([svgContent], { type: 'image/svg+xml' });
 }
 
 async function exportPDF(content) {
-  const svgBlob = await exportSVG(content);
-  const svgUrl = URL.createObjectURL(svgBlob);
+  // ── 1. Render offscreen with oneSvgPerLine ─────────────────────────────────
+  // oneSvgPerLine splits the single large SVG into one <div><svg></svg></div>
+  // per staff system.  Each SVG carries a viewBox so it can be scaled by CSS
+  // in the print window, and each wrapper div has a fixed height so that
+  // page-break-inside: avoid can be enforced between systems.
+  //
+  // staffwidth 680 is abcjs's own print default ("pixels in 8.5 in minus 1 cm
+  // margin") and gives good note spacing for typical scores.
+  //
+  // The container must be in the live DOM with a real width so that abcjs can
+  // call getBBox() on each staff <g> during the split.  position:fixed +
+  // left:-9999px keeps it off-screen while still being layout-computed.
+  const STAFF_W = 680;
+  const tmp = document.createElement('div');
+  tmp.style.cssText = `position:fixed;left:-9999px;top:0;width:${STAFF_W}px;visibility:hidden;`;
+  document.body.appendChild(tmp);
+
+  const tablature = parseTabDirectives(content);
+  try {
+    abcjs.renderAbc(tmp, content, {
+      oneSvgPerLine: true,
+      staffwidth: STAFF_W,
+      add_classes: true,
+      ...(tablature ? { tablature } : {}),
+    });
+  } catch (e) {
+    document.body.removeChild(tmp);
+    return null;
+  }
+
+  const bodyHtml = tmp.innerHTML;
+  document.body.removeChild(tmp);
+
+  // ── 2. Build a clean, self-contained print page ────────────────────────────
+  //
+  // @page { margin: 0 }  →  removes the browser's own header/footer chrome
+  //                          (URL, date, page number).  Visible margins come
+  //                          from body padding instead so we control them.
+  //
+  // svg { width:100%; height:auto }  →  each system SVG scales to fill the
+  //                          content column; height is derived from the viewBox
+  //                          aspect ratio, keeping notation proportional.
+  //
+  // body > div { height:auto !important; page-break-inside:avoid }
+  //                       →  overrides abcjs's fixed inline height on each
+  //                          wrapper so the scaled SVG sets the div's height,
+  //                          and prevents the browser from splitting a staff
+  //                          system across a page.
+  const printHtml = `<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>Sheet Music</title>
+<style>
+  @page { size: letter; margin: 0; }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: white; color: black; }
+  body { padding: 0.35in 0.5in; font-family: serif; }
+
+  /* Never break a staff system across a page; override abcjs fixed height */
+  body > div {
+    height: auto !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Scale every SVG to the content column width */
+  svg { display: block; width: 100%; height: auto; }
+
+  /* Strip interactive red selection highlights */
+  [fill="#ff0000"] { fill: black !important; }
+  .abcjs-note_selected path,
+  .abcjs-note_selected rect { fill: black !important; }
+</style>
+</head>
+<body>${bodyHtml}</body>
+</html>`;
+
+  // ── 3. Open print window and trigger the dialog ────────────────────────────
   const win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head>
-    <style>body{margin:20px}img{max-width:100%}@media print{body{margin:0}}</style>
-  </head><body><img src="${svgUrl}" onload="window.print()"></body></html>`);
+  if (!win) return null; // pop-up blocked
+
+  win.document.open();
+  win.document.write(printHtml);
   win.document.close();
+
+  // A short timeout lets the browser finish laying out the SVGs before the
+  // print dialog opens; onload is unreliable for SVG-only documents.
+  setTimeout(() => { win.focus(); win.print(); }, 400);
   return null;
 }
 
