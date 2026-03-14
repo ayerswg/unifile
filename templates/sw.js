@@ -5,7 +5,7 @@
  * Uses a cache-first strategy for app shell, network-first for data.
  */
 
-const CACHE_VERSION = 'unifile-v1';
+const CACHE_VERSION = 'UNIFILE_CACHE_VERSION';
 const APP_SHELL = [
   './',
   './index.html',

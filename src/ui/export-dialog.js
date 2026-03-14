@@ -18,7 +18,8 @@ import { generateQuine, downloadFile, downloadBlob } from '../core/storage.js';
 const DSL_ABBREV = {
   markdown: 'md',
   mermaid:  'mer',
-  abcjs:    'abc'
+  abcjs:    'abc',
+  marp:     'mar',
 };
 
 export class ExportDialog {

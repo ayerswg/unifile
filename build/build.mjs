@@ -6,9 +6,10 @@
  *
  * Outputs (quine + optional PWA for each)
  * ----------------------------------------
- *   dist/unifile.md.html    markdown quine  (~290 KB)
- *   dist/unifile.mer.html   mermaid quine   (~1.7 MB)
- *   dist/unifile.abc.html   abc notation    (~490 KB)
+ *   dist/unifile.md.html    markdown quine  (~475 KB)
+ *   dist/unifile.mer.html   mermaid quine   (~1.2 MB)  [elkjs stubbed — no ELK layout]
+ *   dist/unifile.abc.html   abc notation    (~678 KB)
+ *   dist/unifile.mar.html   MARP slides     (~1.7 MB)  [unused hljs languages stubbed]
  *   dist/pwa/               installable PWA (same DSL selection)
  *
  * npm scripts
@@ -16,6 +17,7 @@
  *   npm run build:markdown   markdown quine + PWA
  *   npm run build:mermaid    mermaid quine  + PWA
  *   npm run build:abcjs      abc notation   + PWA
+ *   npm run build:marp       MARP slides    + PWA
  *   npm run build            alias for build:markdown
  *   npm run build:dev        markdown, unminified + inline source maps
  *
@@ -28,12 +30,72 @@ import { readFile, writeFile, mkdir, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { gzipSync } from 'zlib';
+import { createHash } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '..');
 const SRC       = join(ROOT, 'src');
 const TEMPLATES = join(ROOT, 'templates');
 const DIST      = join(ROOT, 'dist');
+
+// ---------------------------------------------------------------------------
+// esbuild plugins for bundle size reduction
+// ---------------------------------------------------------------------------
+
+/**
+ * Stub out the ELK graph layout engine (elkjs) — a 1.4 MB dependency pulled in
+ * by mermaid's flowchart-elk diagram type.  Diagrams that request `elk` layout
+ * will get a clear runtime error; all other Mermaid diagram types are unaffected.
+ */
+const elkjsStubPlugin = {
+  name: 'elkjs-stub',
+  setup(build) {
+    build.onResolve({ filter: /^elkjs\// }, () => ({
+      path: 'elkjs-stub', namespace: 'elkjs-stub',
+    }));
+    build.onLoad({ filter: /.*/, namespace: 'elkjs-stub' }, () => ({
+      contents: `export default class ELK {
+  layout() { return Promise.reject(new Error('ELK layout is not included in this build. Use dagre or other layouts.')); }
+  terminateWorker() {}
+}`,
+      loader: 'js',
+    }));
+  },
+};
+
+/**
+ * marp-core registers all 189+ highlight.js language grammars so that any
+ * language tag in a Marp code fence can be highlighted.  Most of those grammars
+ * are never used in practice and several individual files exceed 100 KB.
+ *
+ * This plugin intercepts `require("highlight.js/lib/languages/<name>")` calls
+ * and returns an empty stub for every language NOT in the keep-list, shrinking
+ * the Marp bundle by ~600–800 KB of raw JS.
+ *
+ * Languages in HLJS_KEEP are passed through to esbuild unchanged so they are
+ * included and work normally.
+ */
+const HLJS_KEEP = new Set([
+  'javascript', 'typescript', 'python', 'bash', 'shell',
+  'html', 'xml', 'css', 'json', 'markdown', 'yaml',
+  'java', 'cpp', 'c', 'csharp', 'go', 'rust', 'ruby', 'php', 'sql',
+  'swift', 'kotlin', 'scala', 'r', 'perl', 'lua',
+]);
+
+const hljsLanguageFilterPlugin = {
+  name: 'hljs-language-filter',
+  setup(build) {
+    build.onResolve({ filter: /highlight\.js\/lib\/languages\// }, args => {
+      const lang = args.path.split('/').pop().replace(/\.js$/, '');
+      if (HLJS_KEEP.has(lang)) return null; // keep — let esbuild resolve normally
+      return { path: args.path, namespace: 'hljs-lang-stub' };
+    });
+    build.onLoad({ filter: /.*/, namespace: 'hljs-lang-stub' }, () => ({
+      contents: 'module.exports = function() { return { name: "stub", contains: [] }; };',
+      loader: 'js',
+    }));
+  },
+};
 
 // ---------------------------------------------------------------------------
 // CLI flags
@@ -50,7 +112,8 @@ const dslArg = (args.find(a => a.startsWith('--dsl='))?.split('=')[1] ?? 'markdo
 export const DSL_META = {
   markdown: { abbrev: 'md',  plugins: ['markdown'],            defaultDslType: 'markdown' },
   mermaid:  { abbrev: 'mer', plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid'  },
-  abcjs:    { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs'    }
+  abcjs:    { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs'    },
+  marp:     { abbrev: 'mar', plugins: ['marp'],                defaultDslType: 'marp'     },
 };
 
 if (!DSL_META[dslArg]) {
@@ -108,7 +171,11 @@ function makeInitialData(meta) {
 // Shared esbuild config
 // ---------------------------------------------------------------------------
 
-function buildOptions(entryPoint, unifileMode) {
+function buildOptions(entryPoint, unifileMode, dsl) {
+  const plugins = [];
+  if (dsl === 'mermaid') plugins.push(elkjsStubPlugin);
+  if (dsl === 'marp')    plugins.push(hljsLanguageFilterPlugin);
+
   return {
     entryPoints: [entryPoint],
     bundle: true,
@@ -125,7 +192,8 @@ function buildOptions(entryPoint, unifileMode) {
       'process.env.NODE_ENV': DEV ? '"development"' : '"production"',
       'UNIFILE_MODE': `"${unifileMode}"`
     },
-    logOverride: { 'indirect-require': 'silent' }
+    logOverride: { 'indirect-require': 'silent' },
+    plugins,
   };
 }
 
@@ -147,7 +215,7 @@ async function buildQuine(dsl, meta) {
   const entryPath = await generateEntry(meta.plugins, 'quine');
 
   const [jsResult, css] = await Promise.all([
-    esbuild.build({ ...buildOptions(entryPath, 'quine'), write: false }),
+    esbuild.build({ ...buildOptions(entryPath, 'quine', dsl), write: false }),
     bundleCSS()
   ]);
   await unlink(entryPath).catch(() => {});
@@ -190,7 +258,7 @@ async function buildPWA(dsl, meta) {
   const entryPath = await generateEntry(meta.plugins, 'pwa');
 
   const [jsResult, css] = await Promise.all([
-    esbuild.build({ ...buildOptions(entryPath, 'pwa'), write: false }),
+    esbuild.build({ ...buildOptions(entryPath, 'pwa', dsl), write: false }),
     bundleCSS()
   ]);
   await unlink(entryPath).catch(() => {});
@@ -201,12 +269,24 @@ async function buildPWA(dsl, meta) {
     readFile(join(TEMPLATES, 'manifest.json'), 'utf8')
   ]);
 
+  // Stamp a content-hash-based cache version so that each new build
+  // automatically invalidates the service worker cache, ensuring users
+  // receive updated assets after re-deployment.
+  const cacheVersion = `unifile-${
+    createHash('sha256')
+      .update(jsResult.outputFiles[0].text)
+      .update(css)
+      .digest('hex')
+      .slice(0, 12)
+  }`;
+  const swStamped = sw.replace('UNIFILE_CACHE_VERSION', cacheVersion);
+
   await Promise.all([
-    writeFile(join(pwaDir, 'app.js'),       jsResult.outputFiles[0].text, 'utf8'),
-    writeFile(join(pwaDir, 'app.css'),      css,                          'utf8'),
-    writeFile(join(pwaDir, 'index.html'),   pwaHtml,                      'utf8'),
-    writeFile(join(pwaDir, 'sw.js'),        sw,                           'utf8'),
-    writeFile(join(pwaDir, 'manifest.json'), manifest,                    'utf8')
+    writeFile(join(pwaDir, 'app.js'),        jsResult.outputFiles[0].text, 'utf8'),
+    writeFile(join(pwaDir, 'app.css'),       css,                          'utf8'),
+    writeFile(join(pwaDir, 'index.html'),    pwaHtml,                      'utf8'),
+    writeFile(join(pwaDir, 'sw.js'),         swStamped,                    'utf8'),
+    writeFile(join(pwaDir, 'manifest.json'), manifest,                     'utf8')
   ]);
 
   const kb = ((jsResult.outputFiles[0].text.length + css.length) / 1024).toFixed(0);

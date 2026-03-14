@@ -14,6 +14,7 @@
 import './dsl/markdown.js';
 import './dsl/abcjs.js';
 import './dsl/mermaid.js';
+import './dsl/marp.js';
 
 import { App } from './ui/app.js';
 
