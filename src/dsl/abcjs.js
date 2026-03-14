@@ -162,9 +162,12 @@ let _playEl = null;
 let _lastEditorSel = { from: 0, to: 0 };
 
 // Active playback handles (null when not playing).
+// _synth is used as a boolean sentinel — truthy while playing.
 let _synth = null;
 let _timingCallbacks = null;
 let _audioContext = null;
+// Web Audio oscillators scheduled for the current playback.
+let _scheduledOscs = [];
 
 // ---------------------------------------------------------------------------
 // Render
@@ -245,6 +248,14 @@ state.on('editor-select', ({ from, to }) => {
   }
 });
 
+// When the user clicks a note in the ABC preview, 'dsl-select' fires and the
+// editor moves its cursor — but tags the transaction as DSL_SELECT_EVENT so
+// 'editor-select' is NOT re-emitted.  Mirror the update here so that
+// play-from-cursor works correctly after a preview click.
+state.on('dsl-select', ({ from, to }) => {
+  _lastEditorSel = { from, to };
+});
+
 // ---------------------------------------------------------------------------
 // Playback
 //
@@ -254,6 +265,8 @@ state.on('editor-select', ({ from, to }) => {
 //   3. Range selection             → play only the notes in that range,
 //                                    letting the last note finish naturally.
 //
+// Audio: Web Audio API oscillators (triangle wave, offline — no CDN fetch).
+//
 // During playback:
 //   • The preview container gets class `abc-playing` (CSS overrides the
 //     note highlight colour to green).
@@ -262,6 +275,54 @@ state.on('editor-select', ({ from, to }) => {
 //   • The static (red) selection in the preview is suppressed while playing
 //     and restored when playback stops.
 // ---------------------------------------------------------------------------
+
+/**
+ * Schedule Web Audio OscillatorNodes for every note — used when Web MIDI is
+ * unavailable.  Triangle waves give a soft, harp-like timbre.
+ */
+function _scheduleOscillators(noteEvents, startSeconds, stopChar) {
+  const scheduleBase = _audioContext.currentTime + 0.05;
+
+  for (let i = 0; i < noteEvents.length; i++) {
+    const event      = noteEvents[i];
+    const offsetSec  = event.milliseconds / 1000 - startSeconds;
+    if (offsetSec < 0) continue;
+
+    if (stopChar !== null) {
+      const chars = event.startCharArray ?? (event.startChar !== undefined ? [event.startChar] : []);
+      if (chars.length > 0 && chars.every(c => c >= stopChar)) continue;
+    }
+
+    const nextEv     = noteEvents[i + 1];
+    const gapSec     = nextEv ? (nextEv.milliseconds - event.milliseconds) / 1000 : 1.0;
+    const noteDurSec = Math.max(0.05, gapSec * 0.92);
+
+    for (const p of (event.midiPitches ?? [])) {
+      if (p?.pitch == null) continue;
+      // MIDI note → Hz, with optional cent offset for microtonal ABC.
+      const freq = 440 * Math.pow(2, (p.pitch - 69 + (p.cents ?? 0) / 100) / 12);
+      const vol  = Math.min(1, ((p.volume ?? 64) / 127) * 0.35);
+
+      const osc  = _audioContext.createOscillator();
+      const gain = _audioContext.createGain();
+      osc.connect(gain);
+      gain.connect(_audioContext.destination);
+
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+
+      const t0 = scheduleBase + offsetSec;
+      gain.gain.setValueAtTime(0,   t0);
+      gain.gain.linearRampToValueAtTime(vol, t0 + 0.010);
+      gain.gain.setValueAtTime(vol, t0 + noteDurSec * 0.6);
+      gain.gain.linearRampToValueAtTime(0,   t0 + noteDurSec);
+
+      osc.start(t0);
+      osc.stop(t0 + noteDurSec + 0.02);
+      _scheduledOscs.push(osc);
+    }
+  }
+}
 
 async function startPlayback() {
   if (!_tuneObjects?.[0]) return;
@@ -275,13 +336,18 @@ async function startPlayback() {
   const tune = _tuneObjects[0];
   const { from: selFrom, to: selTo } = _lastEditorSel;
 
-  // ── 1.  Determine start seconds and optional stop char ────────────────────
+  // ── 1.  Populate midiPitches by running the MIDI flattener ───────────────
+  //
+  // tune.setUpAudio() runs the sequencer + flattener which mutates each note's
+  // abcelem.midiPitches array.  TimingCallbacks reads those when it builds its
+  // noteTimings, so this MUST be called before creating any TimingCallbacks.
+  try { tune.setUpAudio({}); } catch { /* best-effort — midiPitches may stay empty */ }
+
+  // ── 2.  Determine start seconds and optional stop char ───────────────────
 
   let startSeconds = 0;
-  let stopChar     = null; // only set for range play mode
+  let stopChar     = null;
 
-  // Build a temporary TimingCallbacks just to read noteTimings synchronously.
-  // The constructor computes the full timing table without starting any timers.
   let previewTc;
   try {
     previewTc = new abcjs.TimingCallbacks(tune, { eventCallback: () => {} });
@@ -294,8 +360,7 @@ async function startPlayback() {
   const noteEvents = (previewTc.noteTimings ?? []).filter(e => e.type === 'event');
 
   if (selFrom !== selTo && selTo > selFrom) {
-    // ── Range selection: play from first note that starts at/after selFrom
-    //    (searching across all voices via startCharArray).
+    // Range selection: play from first note at/after selFrom.
     const startEv = noteEvents.find(e => {
       const chars = e.startCharArray ?? [e.startChar];
       return chars.some(c => c !== undefined && c >= selFrom);
@@ -303,57 +368,42 @@ async function startPlayback() {
     if (startEv) startSeconds = startEv.milliseconds / 1000;
     stopChar = selTo;
   } else if (selFrom > 0) {
-    // ── Cursor inside the document: find the note whose range contains selFrom,
-    //    or the first note after selFrom if the cursor is between notes.
+    // Cursor inside document: find note containing selFrom, or first note after it.
     const startEv =
       noteEvents.find(e => e.startChar <= selFrom && e.endChar > selFrom) ??
       noteEvents.find(e => e.startChar >= selFrom);
     if (startEv) startSeconds = startEv.milliseconds / 1000;
   }
-  // else: cursor at 0 / no meaningful selection → play from beginning (startSeconds stays 0)
+  // else: cursor at 0 / no selection → play from beginning
 
-  // ── 2.  Initialise audio ──────────────────────────────────────────────────
+  // ── 3.  Schedule audio (Web Audio oscillators) ───────────────────────────
+  //
+  // AudioContext must be created synchronously inside the user-gesture handler
+  // so the browser's autoplay policy allows it to start immediately.
+
+  _scheduledOscs = [];
 
   try {
     _audioContext = new AudioContext();
-    await _audioContext.resume(); // unblock suspended context (browser policy)
+    await _audioContext.resume();
   } catch {
     _audioContext = null;
     return;
   }
+  _scheduleOscillators(noteEvents, startSeconds, stopChar);
 
-  _synth = new abcjs.synth.CreateSynth();
+  _synth = { stop: () => {} };
 
-  try {
-    await _synth.init({ visualObj: tune, audioContext: _audioContext });
-    await _synth.prime();
-  } catch (e) {
-    console.warn('ABC synth init failed:', e);
-    _synth = null;
-    _audioContext?.close();
-    _audioContext = null;
-    return;
-  }
-
-  // Seek the audio buffer to the desired start position.
-  if (startSeconds > 0) {
-    _synth.pausedTimeSec = startSeconds;
-  }
-
-  // ── 3.  Initialise timing callbacks ───────────────────────────────────────
+  // ── 4.  Timing callbacks (visual feedback only) ──────────────────────────
 
   _timingCallbacks = new abcjs.TimingCallbacks(tune, {
     eventCallback: (event) => {
       if (!event) {
-        // Reached the natural end of the tune.
         stopPlayback();
         return;
       }
 
-      // ── Range mode stop check ──────────────────────────────────────────────
-      // For multi-voice scores, startCharArray contains one char per voice.
-      // We stop when ALL voices have moved past the selection end so that no
-      // voice is prematurely cut off.
+      // Range mode: stop when all voices have passed the selection end.
       if (stopChar !== null) {
         const chars = event.startCharArray ?? (event.startChar !== undefined ? [event.startChar] : []);
         if (chars.length > 0 && chars.every(c => c >= stopChar)) {
@@ -362,22 +412,17 @@ async function startPlayback() {
         }
       }
 
-      // ── SVG: highlight all simultaneously-playing note elements ────────────
-      // We use event.elements (array-of-arrays, one sub-array per voice) to
-      // directly add/remove our own CSS class rather than calling rangeHighlight,
-      // which only supports a single range and clears all other highlights.
+      // SVG: highlight all simultaneously-playing note elements.
       if (_playEl) {
-        _playEl.querySelectorAll('.abcjs-note_playing').forEach(el => {
-          el.classList.remove('abcjs-note_playing');
-        });
+        _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
+          el.classList.remove('abcjs-note_playing')
+        );
         if (event.elements) {
-          event.elements.flat().forEach(svgEl => {
-            svgEl?.classList.add('abcjs-note_playing');
-          });
+          event.elements.flat().forEach(svgEl => svgEl?.classList.add('abcjs-note_playing'));
         }
       }
 
-      // ── Editor: emit all voice char ranges for text-colour highlighting ────
+      // Editor: emit all voice char ranges for green text-colour highlighting.
       const starts = event.startCharArray ?? [event.startChar];
       const ends   = event.endCharArray   ?? [event.endChar];
       const ranges = starts
@@ -387,40 +432,38 @@ async function startPlayback() {
     }
   });
 
-  // ── 4.  Start ─────────────────────────────────────────────────────────────
+  // ── 5.  Start ────────────────────────────────────────────────────────────
 
   _playEl?.classList.add('abc-playing');
   state.abcPlaying = true;
   state.emit('abc-play-state', { playing: true });
-
-  _synth.start();
   _timingCallbacks.start(startSeconds, 'seconds');
 }
 
 function stopPlayback() {
-  // Timing callbacks first (they reference _synth indirectly via closure).
-  try { _timingCallbacks?.stop(); }  catch { /* ignore */ }
+  try { _timingCallbacks?.stop(); } catch { /* ignore */ }
   _timingCallbacks = null;
 
-  try { _synth?.stop(); }            catch { /* ignore */ }
+  // Stop all pre-scheduled oscillators immediately.
+  for (const osc of _scheduledOscs) {
+    try { osc.stop(); } catch { /* already stopped — ignore */ }
+  }
+  _scheduledOscs = [];
+
   _synth = null;
 
-  try { _audioContext?.close(); }    catch { /* ignore */ }
+  try { _audioContext?.close(); } catch { /* ignore */ }
   _audioContext = null;
 
-  // Remove the direct per-note SVG play highlights.
   if (_playEl) {
-    _playEl.querySelectorAll('.abcjs-note_playing').forEach(el => {
-      el.classList.remove('abcjs-note_playing');
-    });
+    _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
+      el.classList.remove('abcjs-note_playing')
+    );
   }
-
   _playEl?.classList.remove('abc-playing');
 
   state.abcPlaying = false;
   state.emit('abc-play-state', { playing: false });
-
-  // Clear the green play cursor in the editor.
   state.emit('abc-play-cursor', null);
 
   // Restore the static (red) preview selection, if any.
