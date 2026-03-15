@@ -2,9 +2,9 @@
  * Export dialog
  *
  * Two categories of export:
- *   1. Quine export  – downloads a new standalone .html quine file.
+ *   1. Quine export  – downloads a new standalone .htm quine file.
  *                      Only available when the document is clean (committed).
- *                      Filename: <title>.<7-char-hash>.<dsl-abbrev>.html
+ *                      Filename: <title>.<7-char-hash>.htm
  *   2. Format export – converts the current content to the DSL's native
  *                      formats (HTML, PDF, SVG, MIDI, PNG, …).
  *                      Available regardless of dirty state.
@@ -13,14 +13,6 @@
 import { state, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
 import { generateQuine, downloadFile, downloadBlob } from '../core/storage.js';
-
-// 3-character abbreviation for each DSL — must match build/build.mjs DSL_META
-const DSL_ABBREV = {
-  markdown: 'md',
-  mermaid:  'mer',
-  abcjs:    'abc',
-  marp:     'mar',
-};
 
 export class ExportDialog {
   constructor(container, handlers = {}) {
@@ -40,11 +32,10 @@ export class ExportDialog {
 
   show() {
     const dslId    = state.data?.dslType ?? 'markdown';
-    const abbrev   = DSL_ABBREV[dslId] ?? dslId.slice(0, 3);
     const isDirty  = state.isDirty;
     const hash     = state.headHash;
     const shortH   = hash ? hash.slice(0, 7) : null;
-    const filename = shortH ? quineFilename(state.title, shortH, abbrev) : null;
+    const filename = shortH ? quineFilename(state.title, shortH) : null;
 
     let exporters = {};
     try { exporters = getDSL(dslId).exporters ?? {}; } catch {}
@@ -197,11 +188,11 @@ export class ExportDialog {
 
 /**
  * Build the canonical quine filename.
- * Pattern: <slug>.<7-char-hash>.<dsl-abbrev>.html
- * Example: my-song.a1b2c3d.abc.html
+ * Pattern: <slug>.<7-char-hash>.htm
+ * Example: my-song.a1b2c3d.htm
  */
-function quineFilename(title, shortHash, abbrev) {
-  return `${slugify(title)}.${shortHash}.${abbrev}.html`;
+function quineFilename(title, shortHash) {
+  return `${slugify(title)}.${shortHash}.htm`;
 }
 
 /** Convert a document title to a safe, lowercase filename slug. */

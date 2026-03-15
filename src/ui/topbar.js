@@ -36,22 +36,6 @@ export class TopBar {
     this._unsub.push(state.on('change', () => this.render()));
     this._unsub.push(state.on('content-change', () => this._updateDirty()));
 
-    // Play-state changes just update the play button icon/class without full re-render.
-    this._unsub.push(state.on('abc-play-state', ({ playing }) => {
-      const btn = this.el.querySelector('#tb-play');
-      if (!btn) return;
-      btn.classList.toggle('playing', playing);
-      btn.title = playing ? 'Stop (Space)' : 'Play (Space)';
-      btn.innerHTML = playing ? iconStop() : iconPlay();
-    }));
-
-    // Tune-ready state: toggle has-tune class on the play button.
-    this._unsub.push(state.on('abc-tune-state', ({ hasTune }) => {
-      const btn = this.el.querySelector('#tb-play');
-      if (!btn) return;
-      btn.classList.toggle('has-tune', hasTune);
-    }));
-
     this.render();
   }
 
@@ -83,17 +67,6 @@ export class TopBar {
           data-placeholder="Untitled"
           title="Click to edit title"
         >${escHtml(state.title)}</span>
-
-        <!-- Centre section — format-specific actions (e.g. ABC play button) -->
-        <div class="topbar-center">
-          ${dslType === 'abcjs' ? `
-            <button class="topbar-btn play-btn${state.abcPlaying ? ' playing' : ''}${state.abcHasTune ? ' has-tune' : ''}"
-              id="tb-play"
-              title="${state.abcPlaying ? 'Stop (Space)' : 'Play (Space)'}">
-              ${state.abcPlaying ? iconStop() : iconPlay()}
-            </button>
-          ` : ''}
-        </div>
 
         <div class="topbar-right">
           <div class="vcs-pill-group">
@@ -262,12 +235,6 @@ export class TopBar {
       titleEl.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
       });
-    }
-
-    // ABC play/stop button
-    const playBtn = this.el.querySelector('#tb-play');
-    if (playBtn) {
-      playBtn.addEventListener('click', () => state.emit('abc-play'));
     }
 
     // Commit action — primary part of the split pill when dirty
@@ -525,18 +492,6 @@ function iconImport() {
   return `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
     <path d="M8 1v9M4 6l4 4 4-4M2 13h12" stroke="currentColor" stroke-width="2"
       fill="none" stroke-linecap="round" transform="scale(1,-1) translate(0,-16)"/>
-  </svg>`;
-}
-
-function iconPlay() {
-  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-    <polygon points="3,1 14,8 3,15"/>
-  </svg>`;
-}
-
-function iconStop() {
-  return `<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
-    <rect x="2" y="2" width="12" height="12" rx="2"/>
   </svg>`;
 }
 

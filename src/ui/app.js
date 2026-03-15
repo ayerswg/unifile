@@ -22,6 +22,7 @@ import { initTheme } from './theme.js';
 import { TopBar } from './topbar.js';
 import { Editor } from './editor.js';
 import { Preview } from './preview.js';
+import { DslFooter } from './dsl-footer.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { MergeDialog } from './merge-dialog.js';
@@ -67,13 +68,16 @@ export class App {
     const vcs = new VCS(data);
     const currentContent = vcs.headContent;
 
-    // 5. Update state
+    // 5. Update state — on small screens split view is impractical; default to preview
+    let viewMode = prefs.viewMode ?? VIEW_MODES.SPLIT;
+    if (_isMobile() && viewMode === VIEW_MODES.SPLIT) viewMode = VIEW_MODES.PREVIEW;
+
     state.update({
       data,
       vcs,
       currentContent,
       isDirty: false,
-      viewMode: prefs.viewMode ?? VIEW_MODES.SPLIT,
+      viewMode,
       dsl: this._getDsl(data.dslType)
     });
 
@@ -102,8 +106,19 @@ export class App {
       <div id="uf-topbar"></div>
       <div id="uf-main">
         <div id="uf-editor-wrap"></div>
-        <div id="uf-divider" class="pane-divider" title="Click to cycle layout · drag to resize">
-          <span class="pane-divider-handle" aria-hidden="true"></span>
+        <div id="uf-divider" class="pane-divider">
+          <button class="divider-btn divider-to-preview" title="Preview only" aria-label="Preview only">
+            ${_chevronRight2()}
+          </button>
+          <div class="divider-grip" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <button class="divider-btn divider-to-editor" title="Editor only" aria-label="Editor only">
+            ${_chevronRight2()}
+          </button>
+          <button class="divider-btn divider-to-split" title="Split view" aria-label="Split view">
+            ${_chevronRight()}
+          </button>
         </div>
         <div id="uf-preview-wrap"></div>
       </div>
@@ -139,6 +154,20 @@ export class App {
     this._components.preview = new Preview(
       document.getElementById('uf-preview-wrap')
     );
+
+    // Append footer bars after editor/preview have mounted their content.
+    // Editor uses EditorView({ parent }) which appends the CM DOM, so footer
+    // ends up below it in the flex column. Preview uses innerHTML which runs
+    // during Preview._build(), so appending afterwards is safe too.
+    const editorFooterEl = document.createElement('div');
+    editorFooterEl.id = 'uf-editor-footer';
+    document.getElementById('uf-editor-wrap').appendChild(editorFooterEl);
+
+    const previewFooterEl = document.createElement('div');
+    previewFooterEl.id = 'uf-preview-footer';
+    document.getElementById('uf-preview-wrap').appendChild(previewFooterEl);
+
+    this._components.dslFooter = new DslFooter(previewFooterEl);
 
     this._components.commit = new CommitDialog(
       document.getElementById('uf-commit-panel'),
@@ -246,19 +275,14 @@ export class App {
   // ---------------------------------------------------------------------------
 
   _setupLayoutListeners() {
-    const updateDivider = (mode) => {
+    const syncDivider = (mode) => {
       const divider = document.getElementById('uf-divider');
       if (!divider) return;
-      // Divider is always visible — it doubles as the layout toggle.
       divider.dataset.mode = mode;
-      const next = mode === VIEW_MODES.EDITOR ? 'split'
-                 : mode === VIEW_MODES.SPLIT   ? 'preview'
-                 : 'editor';
-      divider.title = `Click to switch to ${next} view  ·  drag to resize in split`;
     };
 
-    state.on('view-mode-change', updateDivider);
-    updateDivider(state.viewMode);
+    state.on('view-mode-change', syncDivider);
+    syncDivider(state.viewMode);
   }
 
   // ---------------------------------------------------------------------------
@@ -332,63 +356,93 @@ export class App {
 
   _initDivider() {
     const divider = document.getElementById('uf-divider');
-    const main = document.getElementById('uf-main');
+    const main    = document.getElementById('uf-main');
     if (!divider || !main) return;
 
     let dragging = false, didDrag = false, startX = 0, startFlex = [50, 50];
 
-    divider.addEventListener('mousedown', (e) => {
-      // Ignore right-clicks
-      if (e.button !== 0) return;
-      dragging = true;
-      didDrag = false;
-      startX = e.clientX;
-      const editorWrap = document.getElementById('uf-editor-wrap');
-      const previewWrap = document.getElementById('uf-preview-wrap');
-      if (editorWrap && previewWrap) {
-        const total = main.clientWidth;
-        startFlex = [
-          (editorWrap.clientWidth / total) * 100,
-          (previewWrap.clientWidth / total) * 100
-        ];
+    // On mobile, "go to split" instead toggles between the two single-pane modes.
+    const _mobilePaneToggle = () => state.setViewMode(
+      state.viewMode === VIEW_MODES.PREVIEW ? VIEW_MODES.EDITOR : VIEW_MODES.PREVIEW
+    );
+
+    // ── Button clicks (to-preview / to-editor / to-split) ────────────────────
+    divider.addEventListener('click', (e) => {
+      const btn = e.target.closest('.divider-btn');
+      if (!btn) return;
+
+      if (btn.classList.contains('divider-to-preview')) {
+        state.setViewMode(VIEW_MODES.PREVIEW);
+      } else if (btn.classList.contains('divider-to-editor')) {
+        state.setViewMode(VIEW_MODES.EDITOR);
+      } else if (btn.classList.contains('divider-to-split')) {
+        // On mobile, never enter SPLIT — toggle between EDITOR ↔ PREVIEW instead
+        if (_isMobile()) _mobilePaneToggle(); else state.setViewMode(VIEW_MODES.SPLIT);
       }
-      document.body.style.userSelect = 'none';
+    });
+
+    // ── Drag-to-resize (SPLIT + desktop only) / background-click ────────────
+    divider.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('.divider-btn')) return; // buttons use click handler
+
+      dragging = true;
+      didDrag  = false;
+      startX   = e.clientX;
+
+      // Pre-capture current flex percentages for drag calculation
+      if (state.viewMode === VIEW_MODES.SPLIT && !_isMobile()) {
+        const editorWrap  = document.getElementById('uf-editor-wrap');
+        const previewWrap = document.getElementById('uf-preview-wrap');
+        if (editorWrap && previewWrap) {
+          const total = main.clientWidth;
+          startFlex = [
+            (editorWrap.clientWidth  / total) * 100,
+            (previewWrap.clientWidth / total) * 100
+          ];
+        }
+        document.body.style.userSelect = 'none';
+      }
       e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
       const dx = e.clientX - startX;
-      // Only begin actual drag after moving at least 4px (prevents accidental drag on click)
       if (Math.abs(dx) > 4) didDrag = true;
       if (!didDrag) return;
 
-      // Resize only works in SPLIT mode
-      if (state.viewMode !== VIEW_MODES.SPLIT) return;
+      // Drag-to-resize only in SPLIT mode on non-mobile
+      if (state.viewMode !== VIEW_MODES.SPLIT || _isMobile()) return;
 
       document.body.style.cursor = 'col-resize';
-      const total = main.clientWidth;
-      const pct = (dx / total) * 100;
+      const total  = main.clientWidth;
+      const pct    = (dx / total) * 100;
       const newLeft = Math.max(15, Math.min(85, startFlex[0] + pct));
 
-      const editorWrap = document.getElementById('uf-editor-wrap');
+      const editorWrap  = document.getElementById('uf-editor-wrap');
       const previewWrap = document.getElementById('uf-preview-wrap');
-      if (editorWrap) editorWrap.style.flex = `0 0 ${newLeft}%`;
+      if (editorWrap)  editorWrap.style.flex  = `0 0 ${newLeft}%`;
       if (previewWrap) previewWrap.style.flex = `0 0 ${100 - newLeft}%`;
     });
 
     document.addEventListener('mouseup', () => {
       if (!dragging) return;
       dragging = false;
-      document.body.style.cursor = '';
+      document.body.style.cursor     = '';
       document.body.style.userSelect = '';
 
       if (!didDrag) {
-        // It was a click — cycle through view modes
-        const modes = [VIEW_MODES.EDITOR, VIEW_MODES.SPLIT, VIEW_MODES.PREVIEW];
-        const idx = modes.indexOf(state.viewMode);
-        state.setViewMode(modes[(idx + 1) % modes.length]);
+        // Background click (not on a named button).
+        // In non-split modes, clicking the bar background is also a trigger:
+        //   • desktop → go to SPLIT
+        //   • mobile  → toggle EDITOR ↔ PREVIEW
+        if (state.viewMode !== VIEW_MODES.SPLIT) {
+          if (_isMobile()) _mobilePaneToggle(); else state.setViewMode(VIEW_MODES.SPLIT);
+        }
+        // In SPLIT mode, clicking the background (grip area) does nothing.
       }
+      didDrag = false;
     });
   }
 
@@ -460,3 +514,37 @@ export class App {
 function escHtml(str) {
   return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// ---------------------------------------------------------------------------
+// Mobile breakpoint helper
+// The MediaQueryList is created once; .matches is read on demand.
+// ---------------------------------------------------------------------------
+
+const _mql = window.matchMedia('(max-width: 640px)');
+/** Returns true when the viewport is in phone/narrow mode (<= 640px). */
+const _isMobile = () => _mql.matches;
+
+// ---------------------------------------------------------------------------
+// Divider icon helpers
+// ---------------------------------------------------------------------------
+
+/** Single right-pointing chevron — used for divider-to-split in PREVIEW mode.
+ *  CSS flips it (scaleX(-1)) when data-mode="editor". */
+function _chevronRight() {
+  return `<svg width="8" height="12" viewBox="0 0 8 12" fill="none"
+      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+      aria-hidden="true">
+    <polyline points="1,1 7,6 1,11"/>
+  </svg>`;
+}
+
+/** Double right-pointing chevrons — used for divider-to-editor (go to editor-only). */
+function _chevronRight2() {
+  return `<svg width="10" height="12" viewBox="0 0 10 12" fill="none"
+      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+      aria-hidden="true">
+    <polyline points="1,1 5,6 1,11"/>
+    <polyline points="5,1 9,6 5,11"/>
+  </svg>`;
+}
+

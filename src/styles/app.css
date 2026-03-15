@@ -321,56 +321,6 @@ html, body {
   flex-shrink: 0;
 }
 
-/* Centre section — DSL-specific actions (absolutely centred in the topbar) */
-.topbar-center {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  /* Prevent the centre section from blocking click-through to underlying elements */
-  pointer-events: none;
-}
-.topbar-center > * { pointer-events: auto; }
-
-/* ABC play / stop button — three states mirroring the commit button design:
- *   default   → faded/invisible (no tune loaded), like .commit-btn at rest
- *   .has-tune → lit up like .commit-btn.dirty (tune loaded, ready to play)
- *   .playing  → accent filled, inverted like .branch-pill (actively playing)
- */
-.topbar-btn.play-btn {
-  padding: 4px 6px;
-  background: none;
-  border-color: transparent;
-  color: var(--text-muted);
-  opacity: 0.25;
-  transition: opacity .15s, color .15s, border-color .15s, background .15s, filter .15s;
-}
-/* Tune loaded — mirrors .commit-btn.dirty */
-.topbar-btn.play-btn.has-tune {
-  opacity: 1;
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.topbar-btn.play-btn.has-tune:hover {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  filter: brightness(1.05);
-}
-/* Playing state — accent filled, inverted (matches .branch-pill) */
-.topbar-btn.play-btn.playing {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--bg);
-  opacity: 1;
-}
-.topbar-btn.play-btn.playing:hover {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--bg);
-  filter: brightness(1.1);
-}
-
 /* Right section */
 .topbar-right {
   display: flex;
@@ -686,61 +636,151 @@ html, body {
   min-width: 0;
 }
 
-/* Divider — always visible; click cycles layout modes, drag resizes in split */
+/* ==============================================================
+   PANE DIVIDER
+   Always-visible vertical bar between editor and preview.
+   Slightly thicker visual bar on hover (via ::before overlay).
+   In SPLIT mode: top button → preview-only, grip, bottom button → editor-only.
+   In EDITOR/PREVIEW modes: centred button → back to split.
+   ============================================================== */
+
 .pane-divider {
   flex-shrink: 0;
-  width: 8px;
-  background: var(--border);
-  cursor: pointer;
-  transition: background .15s;
+  width: 8px;          /* flex layout width — stays fixed */
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1;
+  z-index: 10;
+  cursor: default;
+  overflow: visible;   /* allow buttons to extend beyond 8px */
 }
-/* Expand click hit-area slightly beyond the visible bar */
+
+/* Visual bar — grows on hover without shifting adjacent panes */
+.pane-divider::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 6px;
+  background: var(--border);
+  transition: width .15s ease, background .15s ease;
+  pointer-events: none;
+}
+.pane-divider:hover::before {
+  width: 18px;
+  background: var(--bg-surface);
+}
+
+/* Wider invisible hit-area so tiny divider is easy to grab */
 .pane-divider::after {
   content: '';
   position: absolute;
-  inset: 0 -3px;
+  inset: 0 -4px;
 }
-.pane-divider:hover, .pane-divider:active { background: var(--accent); }
 
-/* Drag-cursor when in split mode (JS adds data-mode="split") */
-.pane-divider[data-mode="split"] { cursor: col-resize; }
+/* Cursor overrides based on mode */
+.pane-divider[data-mode="split"]   { cursor: col-resize; }
+.pane-divider[data-mode="editor"],
+.pane-divider[data-mode="preview"] { cursor: pointer; }
 
-/* Central handle dot — appears on hover */
-.pane-divider-handle {
-  display: block;
-  width: 3px;
-  height: 28px;
-  background: var(--bg-overlay);
-  border-radius: 2px;
+/* ── Buttons inside the divider ──────────────────────────────── */
+.divider-btn {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-sub);
+  padding: 0;
+  cursor: pointer;
   opacity: 0;
-  transition: opacity .15s, background .15s;
+  transition: opacity .15s, color .12s, background .12s, border-color .12s;
   pointer-events: none;
-  position: relative;
   z-index: 1;
 }
-.pane-divider:hover .pane-divider-handle {
+.divider-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface));
+}
+.pane-divider:hover .divider-btn {
   opacity: 1;
-  background: var(--bg);
+  pointer-events: auto;
+}
+
+/* Vertical placement: top arrow near top, grip centred, bottom arrow near bottom */
+.divider-to-preview { top: 10px; }
+.divider-grip       { top: 50%; transform: translateX(-50%) translateY(-50%); }
+.divider-to-editor  { bottom: 10px; }
+.divider-to-split   { top: 50%; transform: translateX(-50%) translateY(-50%); }
+
+/* ── Grip dots (not a button — visual affordance only) ──────── */
+.divider-grip {
+  position: absolute;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.pane-divider:hover .divider-grip { opacity: 1; }
+.divider-grip span {
+  display: block;
+  width: 3px;
+  height: 3px;
+  background: var(--text-muted);
+  border-radius: 50%;
+}
+
+/* ── Mode-based visibility ───────────────────────────────────── */
+/* Split mode: show top/grip/bottom; hide the split-return button */
+.pane-divider[data-mode="split"] .divider-to-split { display: none; }
+
+/* Non-split modes: hide top/grip/bottom, show the split-return button */
+.pane-divider:not([data-mode="split"]) .divider-to-preview,
+.pane-divider:not([data-mode="split"]) .divider-grip,
+.pane-divider:not([data-mode="split"]) .divider-to-editor { display: none; }
+
+/* Arrow directions via CSS flip (single SVG asset, two orientations):
+   divider-to-preview uses _chevronRight2 flipped left (→ preview-only)
+   divider-to-split in EDITOR mode flipped left (← back to split from right edge) */
+.divider-to-preview svg { transform: scaleX(-1); }
+.pane-divider[data-mode="editor"] .divider-to-split svg { transform: scaleX(-1); }
+
+/* ── Small-screen overrides (no SPLIT mode) ──────────────────── */
+@media (max-width: 640px) {
+  /* In the unlikely event split mode is active on mobile, force-show only the toggle */
+  .pane-divider[data-mode="split"] .divider-to-preview,
+  .pane-divider[data-mode="split"] .divider-grip,
+  .pane-divider[data-mode="split"] .divider-to-editor { display: none; }
+  .pane-divider[data-mode="split"] .divider-to-split  { display: flex !important; }
+  /* Always pointer cursor on mobile */
+  .pane-divider[data-mode="split"] { cursor: pointer; }
 }
 
 /* ==============================================================
    EDITOR  (CodeMirror 6)
    ============================================================== */
 
-/* The wrapper fills its flex slot; CM's own DOM fills the wrapper */
+/* The editor-wrap is a flex column; CM fills remaining space above the footer */
 #uf-editor-wrap .cm-editor {
-  height: 100%;
+  flex: 1;
+  min-height: 0;   /* required for flex children to shrink below content height */
+  overflow: hidden;
   outline: none;
 }
 
 #uf-editor-wrap .cm-scroller {
   /* Allow CM to scroll internally */
   overflow: auto;
+  height: 100%;
   font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
 }
 
@@ -769,6 +809,7 @@ html, body {
 
 .preview-pane {
   flex: 1;
+  min-height: 0;       /* allow flex shrink past content height */
   overflow-y: auto;
   background: var(--bg);
   border-left: 1px solid var(--border);
@@ -849,6 +890,63 @@ html, body {
   margin: 3rem auto;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ==============================================================
+   PANE FOOTER BARS
+   Editor footer (#uf-editor-footer) — future DSL entry tools.
+   Preview footer (#uf-preview-footer) — DSL playback controls etc.
+   Both are flex-column children of their wrap; hidden when empty.
+   ============================================================== */
+
+#uf-editor-footer,
+#uf-preview-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 36px;
+  background: var(--bg-alt);
+  border-top: 1px solid var(--border);
+}
+/* Hide footer automatically when the component puts nothing in it */
+#uf-editor-footer:empty,
+#uf-preview-footer:empty { display: none; }
+
+/* ── Preview footer buttons (.pf-btn) ────────────────────────── */
+.pf-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  opacity: 0.35;
+  transition: opacity .15s, color .15s, border-color .15s, background .15s, filter .15s;
+}
+/* Tune loaded — accent border + text */
+.pf-btn.play-btn.has-tune {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.pf-btn.play-btn.has-tune:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  filter: brightness(1.05);
+}
+/* Playing — filled accent background */
+.pf-btn.play-btn.playing {
+  opacity: 1;
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--bg);
+}
+.pf-btn.play-btn.playing:hover { filter: brightness(1.1); }
 
 /* Markdown preview typography */
 .preview-content h1, .preview-content h2,
@@ -1757,7 +1855,6 @@ noscript .noscript-wrap {
 @media (max-width: 640px) {
   .topbar { gap: 4px; padding: 0 8px; }
   .topbar-title { max-width: 120px; }
-  .topbar-center { display: none; }  /* hide DSL label on small screens */
   .vcs-pill .vcs-pill-text { display: none; }
   .dialog { width: 95vw; }
   .dialog-wide { width: 95vw; }
