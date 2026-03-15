@@ -170,8 +170,11 @@
 [data-theme="light"] .cm-cursor         { border-left-color: #1e66f5 !important; }
 [data-theme="light"] .cm-tooltip        { background: #dce0e8 !important; border-color: #ccd0da !important; color: #4c4f69 !important; }
 [data-theme="light"] .cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments { background: rgba(223,142,29,.18) !important; color: #df8e1d !important; }
-[data-theme="light"] .cm-comment-focus-line { background: rgba(223,142,29,.07) !important; border-left-color: rgba(223,142,29,.4) !important; }
-[data-theme="dark"]  .cm-comment-focus-line { background: rgba(251,191,36,.09) !important; border-left-color: rgba(251,191,36,.45) !important; }
+/* Comment range mark — visible while accordion is open */
+[data-theme="light"] .cm-comment-range        { background: rgba(223,142,29,.12) !important; border-bottom: 1px solid rgba(223,142,29,.45) !important; }
+[data-theme="light"] .cm-comment-range-active { background: rgba(223,142,29,.22) !important; border-bottom: 1px solid rgba(223,142,29,.8)  !important; }
+[data-theme="dark"]  .cm-comment-range        { background: rgba(251,191,36,.1)  !important; border-bottom: 1px solid rgba(251,191,36,.4)  !important; }
+[data-theme="dark"]  .cm-comment-range-active { background: rgba(251,191,36,.2)  !important; border-bottom: 1px solid rgba(251,191,36,.75) !important; }
 
 /* DSL element range highlight — shown when clicking a note/element in the preview */
 .cm-dsl-highlight { background: rgba(137,180,250,.22); border-radius: 2px; outline: 1px solid rgba(137,180,250,.5); }
@@ -800,8 +803,8 @@ html, body {
   #uf-editor-wrap .cm-cursor { border-left-color: #1e66f5; }
   #uf-editor-wrap .cm-selectionBackground              { background: rgba(30,102,245,.18); }
   #uf-editor-wrap.cm-focused .cm-selectionBackground  { background: rgba(30,102,245,.26); }
-  #uf-editor-wrap .cm-comment-focus-line { background: rgba(223,142,29,.07); border-left-color: rgba(223,142,29,.4); }
 }
+
 
 /* ==============================================================
    PREVIEW
@@ -1554,105 +1557,137 @@ html, body {
 .blame-detail-actions { margin-top: 10px; }
 
 /* ==============================================================
-   COMMENTS PANEL (sidebar)
+   COMMENT ACCORDION (inline CM6 block widget)
    ============================================================== */
 
-.comments-panel {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: var(--panel-w);
-  display: flex;
-  flex-direction: column;
+.cm-accordion {
   background: var(--bg-alt);
-  border-left: 1px solid var(--border);
-  box-shadow: -4px 0 20px rgba(0,0,0,.3);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text);
 }
 
-.panel-header {
+.cm-accordion-body {
+  padding: 7px 12px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* Compact inline messages: author · date  body */
+.ct-messages { display: flex; flex-direction: column; gap: 3px; }
+.ct-message  { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 5px; line-height: 1.5; }
+.ct-msg-who  { display: contents; }
+.ct-msg-author { font-weight: 600; font-size: 11px; color: var(--accent); flex-shrink: 0; }
+.ct-msg-date   { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.ct-msg-body   { font-size: 12px; white-space: pre-wrap; color: var(--text); flex-basis: 100%; margin: 0; }
+
+/* Horizontal reply form */
+.ct-reply-form    { display: flex; gap: 6px; align-items: flex-start; margin-top: 2px; }
+.ct-reply-body    { flex: 1; resize: none; font-size: 12px !important; overflow: hidden; }
+.ct-reply-actions { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
+.ct-reply-submit {
+  background: var(--bg-overlay); border: 1px solid var(--border);
+  color: var(--text-sub); font-size: 11px; padding: 2px 8px;
+  border-radius: var(--radius); cursor: pointer; white-space: nowrap;
+}
+.ct-reply-submit:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Archive button */
+.ct-archive-btn {
+  background: none; border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text-muted); font-size: 10px; padding: 2px 7px; cursor: pointer;
+  transition: border-color .15s, color .15s; white-space: nowrap;
+}
+.ct-archive-btn:hover { border-color: var(--warning, #df8e1d); color: var(--warning, #df8e1d); }
+
+/* New thread form */
+.ct-acc-body   { resize: none; font-size: 12px !important; width: 100%; overflow: hidden; }
+.ct-actions    { display: flex; justify-content: flex-end; gap: 6px; margin-top: 3px; }
+.ct-acc-error  { font-size: 11px; color: var(--error, #f38ba8); margin: 2px 0 0; }
+
+/* ==============================================================
+   COMMENT CONTEXT MENU  (floating "Add comment" popup)
+   ============================================================== */
+
+.cm-comment-context-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgba(0,0,0,.35);
+  padding: 3px 0;
+  min-width: 140px;
+}
+.cm-ccm-add {
+  display: block;
+  width: 100%;
+  padding: 7px 14px;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+}
+.cm-ccm-add:hover { background: var(--bg-overlay); }
+
+/* ==============================================================
+   ARCHIVED COMMENTS MODAL
+   ============================================================== */
+
+.ath-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center;
+}
+.ath-modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 2);
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  width: min(520px, 90vw);
+  max-height: 70vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.ath-header {
+  display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.panel-title { margin: 0; font-size: 14px; font-weight: 600; flex: 1; }
-
-.comments-line-badge {
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 10px;
-  margin-left: 6px;
-  font-weight: 600;
+.ath-title  { font-size: 14px; font-weight: 600; margin: 0; }
+.ath-close  {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 18px; line-height: 1; padding: 2px 6px;
+  border-radius: var(--radius);
 }
-
-.comments-empty {
-  color: var(--text-muted); font-style: italic; font-size: 13px; padding: 16px;
-}
-
-/* Thread list (scrollable) */
-.ct-threads-list {
-  flex: 1; overflow-y: auto;
-}
-
-/* Individual thread */
-.ct-thread {
-  border-bottom: 1px solid var(--border);
-  padding: 10px 16px 4px;
-}
-.ct-thread-header {
-  display: flex; align-items: center; justify-content: space-between;
+.ath-close:hover { background: var(--bg-overlay); color: var(--text); }
+.ath-body   { overflow-y: auto; padding: 12px 16px; flex: 1; }
+.ath-empty  { color: var(--text-muted); font-size: 13px; text-align: center; padding: 24px 0; }
+.ath-thread {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   margin-bottom: 8px;
+  display: flex; align-items: flex-start; gap: 10px;
 }
-.ct-thread-meta {
-  display: flex; align-items: center; gap: 8px; font-size: 11px;
+.ath-thread-info { flex: 1; min-width: 0; }
+.ath-thread-meta { font-size: 10px; color: var(--text-muted); margin-bottom: 3px; }
+.ath-thread-preview {
+  font-size: 12px; color: var(--text-sub);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.ct-thread-hash { font-family: var(--font-mono); color: var(--accent); }
-.ct-msg-count { color: var(--text-muted); }
-.ct-archive-btn {
-  background: none; border: 1px solid var(--border); border-radius: var(--radius);
-  color: var(--text-muted); font-size: 10px; padding: 2px 7px; cursor: pointer;
-  transition: border-color .15s, color .15s;
-}
-.ct-archive-btn:hover { border-color: var(--warning); color: var(--warning); }
-
-/* Messages inside a thread */
-.ct-messages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
-.ct-message { padding: 8px 10px; background: var(--bg-surface); border-radius: var(--radius); }
-.ct-msg-header {
-  display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;
-}
-.ct-msg-author { font-weight: 600; font-size: 12px; }
-.ct-msg-date { font-size: 11px; color: var(--text-muted); margin-left: auto; }
-.ct-msg-body { font-size: 13px; white-space: pre-wrap; color: var(--text); }
-
-/* Reply form */
-.ct-reply-form { margin-bottom: 8px; }
-.ct-reply-body { resize: vertical; font-size: 12px !important; }
-.ct-reply-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
-.ct-reply-submit {
+.ath-restore {
   background: var(--bg-overlay); border: 1px solid var(--border);
   color: var(--text-sub); font-size: 11px; padding: 3px 10px;
-  border-radius: var(--radius); cursor: pointer;
+  border-radius: var(--radius); cursor: pointer; flex-shrink: 0;
+  transition: border-color .15s, color .15s;
 }
-.ct-reply-submit:hover { border-color: var(--accent); color: var(--accent); }
-
-/* New thread form */
-.ct-new-thread-section {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 6px;
-  flex-shrink: 0; background: var(--bg-alt);
-}
-.ct-new-thread-label {
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .08em; color: var(--text-muted);
-}
-.ct-author-input { font-size: 12px !important; padding: 4px 8px !important; }
-.ct-actions { display: flex; justify-content: flex-end; }
+.ath-restore:hover { border-color: var(--accent); color: var(--accent); }
 
 /* DSL menu dropdown — opens below the far-left DSL icon button */
 .dsl-menu-dropdown {

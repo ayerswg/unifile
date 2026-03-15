@@ -84,9 +84,6 @@ class AppState extends EventBus {
     /** @type {{ name: string, email: string }} Cached user identity */
     this.user = { name: '', email: '' };
 
-    /** @type {string|null} Currently focused line (for blame/comments) */
-    this.focusedLine = null;
-
     /** @type {{ content: string, fromHash: string }|null} Single-slot auto-stash */
     this.stash = null;
 

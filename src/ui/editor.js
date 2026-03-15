@@ -6,9 +6,10 @@
  *   - DSL-aware syntax highlighting
  *   - Line numbers with comment-thread highlighting:
  *       · Lines with active comment threads get an amber background on the
- *         line number.  Click any line number to open the CommentsPanel.
- *       · While the panel is open, that line gets a subtle amber highlight.
- *       · Clicking in the editor content area (not a line number) closes the panel.
+ *         line number.  Click any line number to open the inline accordion.
+ *       · Range-anchored selections are highlighted while the accordion is open.
+ *       · Right-click on selected text → "Add comment" context menu.
+ *       · Clicking a cm-comment-range re-opens the accordion for that thread.
  *   - Active-line highlight, bracket matching
  *   - Autocomplete, selection highlighting
  *   - Tab / Shift+Tab indent · Ctrl+S → commit · Alt+1/2/3 → view modes
@@ -27,7 +28,14 @@ import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { catppuccinTheme, catppuccinHighlight } from './editor-theme.js';
 import { state, VIEW_MODES, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
-import { getActiveThreadForLine } from './comments.js';
+import {
+  accordionField,
+  openAccordionEffect,
+  closeAccordionEffect,
+  getThreadsForLine,
+  getThreadsForPos,
+  bumpThreadVersion
+} from './comments.js';
 
 // ---------------------------------------------------------------------------
 // DSL-source range highlight
@@ -118,58 +126,24 @@ const playHighlightField = StateField.define({
 });
 
 // ---------------------------------------------------------------------------
-// Comment-focus line decoration
-//
-// When the CommentsPanel is open for a specific line, that line gets a subtle
-// amber background + left border accent in the editor.
-// ---------------------------------------------------------------------------
-
-const setCommentFocusLine = StateEffect.define();
-
-const commentFocusField = StateField.define({
-  create: () => Decoration.none,
-
-  update(deco, tr) {
-    // Map existing ranges through document changes
-    deco = deco.map(tr.changes);
-    // Apply new focus line if an effect arrived
-    for (const e of tr.effects) {
-      if (e.is(setCommentFocusLine)) {
-        if (e.value === null || e.value > tr.state.doc.lines) {
-          deco = Decoration.none;
-        } else {
-          try {
-            const line = tr.state.doc.line(e.value);
-            deco = Decoration.set([
-              Decoration.line({ class: 'cm-comment-focus-line' }).range(line.from)
-            ]);
-          } catch {
-            deco = Decoration.none;
-          }
-        }
-      }
-    }
-    return deco;
-  },
-
-  provide: f => EditorView.decorations.from(f)
-});
-
-// ---------------------------------------------------------------------------
 // Custom line-number gutter with comment-thread highlighting
 //
 // Replaces the standard lineNumbers() extension so we can:
 //   • Show the line number (same look as default, but narrower)
 //   • Add `.cm-has-comments` class to lines with active threads → amber bg
-//   • Handle clicks to open the CommentsPanel for that line
+//   • Handle clicks to open the inline accordion for that line
 // ---------------------------------------------------------------------------
 
 class LineNumMarker extends GutterMarker {
-  constructor(lineNum, hasThread) {
+  constructor(lineNum, hasThread, isActive) {
     super();
     this.lineNum   = lineNum;
     this.hasThread = hasThread;
-    this.elementClass = hasThread ? 'cm-has-comments' : '';
+    this.isActive  = isActive;
+    // elementClass is applied to the wrapper gutter cell element by CM6
+    this.elementClass = isActive
+      ? 'cm-has-comments cm-accordion-active'
+      : (hasThread ? 'cm-has-comments' : '');
   }
 
   toDOM() {
@@ -181,7 +155,11 @@ class LineNumMarker extends GutterMarker {
   }
 
   eq(other) {
-    return this.lineNum === other.lineNum && this.hasThread === other.hasThread;
+    return (
+      this.lineNum   === other.lineNum   &&
+      this.hasThread === other.hasThread &&
+      this.isActive  === other.isActive
+    );
   }
 }
 
@@ -199,9 +177,13 @@ const commentLineNumbersExt = gutter({
   class: 'cm-lineNumbers cm-comment-ln',
 
   lineMarker(view, line) {
-    const lineNum   = view.state.doc.lineAt(line.from).number;
-    const hasThread = getActiveThreadForLine(lineNum) !== null;
-    return new LineNumMarker(lineNum, hasThread);
+    const lineInfo   = view.state.doc.lineAt(line.from);
+    const threads    = getThreadsForLine(line.from, view.state.doc);
+    // Check whether the accordion is currently anchored to this line
+    const acc        = view.state.field(accordionField);
+    const isActive   = acc.anchorPos !== null &&
+      view.state.doc.lineAt(acc.anchorPos).from === lineInfo.from;
+    return new LineNumMarker(lineInfo.number, threads.length > 0, isActive);
   },
 
   lineMarkerChange: () => true,
@@ -209,9 +191,25 @@ const commentLineNumbersExt = gutter({
 
   domEventHandlers: {
     click(view, line) {
-      const lineNum = view.state.doc.lineAt(line.from).number;
-      state.focusedLine = lineNum;
-      state.openPanel(PANELS.COMMENTS);
+      const threads = getThreadsForLine(line.from, view.state.doc);
+      if (threads.length === 0) return false; // no threads; nothing to open
+
+      // Priority: whole-line (point) threads first, then range threads
+      // sorted by their start position (leftmost / earliest on the line).
+      const sorted = [...threads].sort((a, b) => {
+        const aPoint = a.from === a.to ? 0 : 1;
+        const bPoint = b.from === b.to ? 0 : 1;
+        if (aPoint !== bPoint) return aPoint - bPoint; // point before range
+        return a.from - b.from;                        // leftmost range first
+      });
+
+      const lineDoc = view.state.doc.lineAt(line.from);
+      view.dispatch({
+        effects: openAccordionEffect.of({
+          anchorPos: lineDoc.to,
+          threadId:  sorted[0].id
+        })
+      });
       return true;
     }
   }
@@ -223,7 +221,7 @@ const commentLineNumbersExt = gutter({
 
 const baseExtensions = [
   commentLineNumbersExt,        // replaces lineNumbers(); also handles comment highlighting
-  commentFocusField,            // amber line highlight when comments panel is open
+  accordionField,               // inline accordion widget + range marks
   highlightActiveLineGutter(),
   highlightActiveLine(),
   highlightSpecialChars(),
@@ -271,6 +269,92 @@ function makeUnifileKeymap() {
 }
 
 // ---------------------------------------------------------------------------
+// Context-menu state (floating "Add comment" popup on right-click + selection)
+// ---------------------------------------------------------------------------
+
+let _ctxMenuEl = null;
+
+/**
+ * Show the "Add comment" floating context menu.
+ * @param {EditorView} view
+ * @param {number} x  clientX from the contextmenu event
+ * @param {number} y  clientY
+ * @param {number} anchorPos  line.to where the block widget will be placed
+ * @param {number|null} selFrom  selection start (null for whole-line comments)
+ * @param {number|null} selTo   selection end   (null for whole-line comments)
+ */
+function _showContextMenu(view, x, y, anchorPos, selFrom, selTo) {
+  _hideContextMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'cm-comment-context-menu';
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+  menu.innerHTML  = `<button class="cm-ccm-add">Add comment</button>`;
+
+  menu.querySelector('.cm-ccm-add').addEventListener('click', () => {
+    _hideContextMenu();
+    view.dispatch({
+      effects: openAccordionEffect.of({
+        anchorPos,
+        threadId: null,
+        newRange: (selFrom !== null && selTo !== null) ? { from: selFrom, to: selTo } : null
+      })
+    });
+  });
+
+  document.body.appendChild(menu);
+  _ctxMenuEl = menu;
+
+  const dismiss = (e) => {
+    if (!menu.contains(e.target)) {
+      _hideContextMenu();
+      document.removeEventListener('mousedown', dismiss, true);
+    }
+  };
+  document.addEventListener('mousedown', dismiss, true);
+}
+
+function _hideContextMenu() {
+  _ctxMenuEl?.remove();
+  _ctxMenuEl = null;
+}
+
+// ---------------------------------------------------------------------------
+// Thread position mapping (called from updateListener on docChanged)
+// ---------------------------------------------------------------------------
+
+export function mapThreadPositions(changes) {
+  const threads = state.data?.commentThreads;
+  if (!threads) return;
+
+  let bumped = false;
+  for (const t of Object.values(threads)) {
+    if (t.from === undefined || t.archived) continue;
+    const newFrom = changes.mapPos(t.from, 1);
+    const newTo   = Math.max(newFrom, changes.mapPos(t.to, -1));
+
+    if (t.from < t.to && newFrom >= newTo) {
+      // The range was meaningful but the text was completely deleted.
+      // Auto-archive so the dead thread doesn't linger on the gutter.
+      t.archived = true;
+      t.from = newFrom;
+      t.to   = newFrom;
+      bumped = true;
+    } else if (newFrom !== t.from || newTo !== t.to) {
+      t.from = newFrom;
+      t.to   = newTo;
+    }
+  }
+  if (bumped) {
+    bumpThreadVersion();
+    // Mark document dirty so the auto-archive is persisted on next commit
+    state.update({ data: state.data, isDirty: true });
+  }
+  // Gutter redraws automatically (lineMarkerChange: () => true)
+}
+
+// ---------------------------------------------------------------------------
 // Editor component
 // ---------------------------------------------------------------------------
 
@@ -288,16 +372,12 @@ export class Editor {
     this._unsub.push(state.on('branch-switch',({ content }) => this.setValue(content)));
     this._unsub.push(state.on('view-mode-change', () => this._updateVisibility()));
 
-    // Panel changes → update visibility + update comment-focus decoration
-    this._unsub.push(state.on('panel-change', (panel) => {
+    // Panel changes → update visibility only (accordion is now in CM6 state)
+    this._unsub.push(state.on('panel-change', () => {
       this._updateVisibility();
-      const lineNum = panel === PANELS.COMMENTS ? state.focusedLine : null;
-      if (this._view) {
-        this._view.dispatch({ effects: setCommentFocusLine.of(lineNum) });
-      }
     }));
 
-    // Comment mutations → re-render gutter markers
+    // Thread data mutations (archive/restore) → force gutter re-render
     this._unsub.push(state.on('comments-change', () => {
       if (this._view) this._view.dispatch({});
     }));
@@ -359,6 +439,17 @@ export class Editor {
     const langExts = this._getDslExtensions(dslId);
 
     const updateListener = EditorView.updateListener.of((update) => {
+      // Map thread char-offset positions through any document change BEFORE
+      // broadcasting the new content so subscribers see fresh positions.
+      if (update.docChanged) {
+        mapThreadPositions(update.changes);
+        // The gutter reads thread positions from state.data (mutated above),
+        // but it already rendered once against the new doc during this same
+        // transaction.  Queue a micro-task dispatch so the gutter re-evaluates
+        // with the corrected positions before the browser paints.
+        Promise.resolve().then(() => { if (this._view) this._view.dispatch({}); });
+      }
+
       if (update.docChanged) state.setContent(update.state.doc.toString());
 
       // When the user changes the selection (without also editing the document),
@@ -399,14 +490,67 @@ export class Editor {
     this._view = new EditorView({ state: editorState, parent: this.el });
     this._updateVisibility();
 
-    // Close the comments panel when clicking in the editor content area
-    // (not on a line number). Uses bubble phase so it fires AFTER CM6's
-    // gutter handler has already opened/switched the panel for that line.
-    this.el.addEventListener('click', (e) => {
-      if (state.activePanel !== PANELS.COMMENTS) return;
-      // Don't close if the click was on a gutter element (line numbers)
+    // ── mousedown: close accordion when clicking editor content (not on an
+    //   accordion widget, not on a cm-comment-range, not on the gutter).
+    //   Also handle clicks on comment ranges to re-open the accordion.
+    this.el.addEventListener('mousedown', (e) => {
+      const view = this._view;
+      if (!view) return;
+
+      // Always hide the floating context menu on any mousedown in the editor
+      _hideContextMenu();
+
+      // Never close when clicking inside the accordion itself
+      // (its children call e.stopPropagation())
+
+      // Gutter clicks are handled by the gutter extension — ignore here
       if (e.target.closest('.cm-gutters')) return;
-      state.closePanel();
+
+      // If click is on a comment-range highlight, open/switch to that thread
+      if (e.target.closest('.cm-comment-range')) {
+        const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+        if (pos !== null) {
+          const threads = getThreadsForPos(pos);
+          if (threads.length > 0) {
+            const t       = threads[0];
+            const lineEnd = view.state.doc.lineAt(t.from).to;
+            e.preventDefault(); // prevent text-selection change
+            view.dispatch({
+              effects: openAccordionEffect.of({ anchorPos: lineEnd, threadId: t.id })
+            });
+            return;
+          }
+        }
+      }
+
+      // Clicking anywhere else in the editor content → close the accordion
+      view.dispatch({ effects: closeAccordionEffect.of(null) });
+    });
+
+    // ── contextmenu: right-click on line-number gutter OR on a text selection
+    this.el.addEventListener('contextmenu', (e) => {
+      const view = this._view;
+      if (!view) return;
+
+      // Right-click on the line-number gutter → "Add comment" for that line
+      if (e.target.closest('.cm-lineNumbers')) {
+        const rawPos  = view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? 0;
+        const safePos = Math.max(0, Math.min(rawPos, view.state.doc.length));
+        const line    = view.state.doc.lineAt(safePos);
+        e.preventDefault();
+        _showContextMenu(view, e.clientX, e.clientY, line.to, null, null);
+        return;
+      }
+
+      // Right-click in editor content with a non-empty selection → "Add comment"
+      const sel = view.state.selection.main;
+      if (sel.empty) return;
+
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos === null || pos < sel.from || pos > sel.to) return;
+
+      e.preventDefault();
+      _showContextMenu(view, e.clientX, e.clientY, view.state.doc.lineAt(sel.from).to, sel.from, sel.to);
     });
   }
 
@@ -442,6 +586,12 @@ export class Editor {
   }
 
   focus() { this._view?.focus(); }
+
+  /**
+   * Expose the underlying CM6 EditorView document for migration etc.
+   * @returns {import('@codemirror/state').Text}
+   */
+  getDoc() { return this._view?.state.doc ?? null; }
 
   // ---------------------------------------------------------------------------
   // Visibility

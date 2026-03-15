@@ -19,6 +19,7 @@
 
 import { state, PANELS } from './state.js';
 import { shortHash } from '../core/hash.js';
+import { showArchivedCommentsModal } from './comments.js';
 
 export class TopBar {
   /**
@@ -149,6 +150,10 @@ export class TopBar {
         <li class="tools-menu-item" id="tb-merge" title="Import & merge another unifile (Ctrl+Shift+M)">
           ${iconImport()} Import & merge…
           <kbd>⌃⇧M</kbd>
+        </li>
+        <li class="tools-menu-sep" role="separator"></li>
+        <li class="tools-menu-item" id="tb-archived-comments" title="Browse archived comment threads">
+          ${iconComment()} Archived comments…
         </li>
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-settings-item" title="Settings (Ctrl+Shift+,)">
@@ -344,6 +349,12 @@ export class TopBar {
       if (state.activePanel === PANELS.MERGE) state.closePanel();
       else state.openPanel(PANELS.MERGE);
     });
+    this.el.querySelector('#tb-archived-comments')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      showArchivedCommentsModal();
+    });
+
     this.el.querySelector('#tb-settings-item')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
@@ -492,6 +503,12 @@ function iconImport() {
   return `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
     <path d="M8 1v9M4 6l4 4 4-4M2 13h12" stroke="currentColor" stroke-width="2"
       fill="none" stroke-linecap="round" transform="scale(1,-1) translate(0,-16)"/>
+  </svg>`;
+}
+
+function iconComment() {
+  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M14 1a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4.414A2 2 0 0 0 3 11.586l-2 2V2a1 1 0 0 1 1-1h12zm-2 2H4a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0 2H4a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0 2H4a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1H4z"/>
   </svg>`;
 }
 

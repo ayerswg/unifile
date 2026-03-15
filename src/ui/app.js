@@ -26,7 +26,7 @@ import { DslFooter } from './dsl-footer.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { MergeDialog } from './merge-dialog.js';
-import { CommentsPanel } from './comments.js';
+import { migrateCommentThreads } from './comments.js';
 import { ExportDialog } from './export-dialog.js';
 import { SettingsPanel } from './settings-panel.js';
 
@@ -126,7 +126,6 @@ export class App {
         <div id="uf-commit-panel"   style="display:none"></div>
         <div id="uf-blame-panel"    style="display:none"></div>
         <div id="uf-merge-panel"    style="display:none"></div>
-        <div id="uf-comments-panel" style="display:none"></div>
         <div id="uf-export-panel"   style="display:none"></div>
         <div id="uf-settings-panel" style="display:none"></div>
       </div>
@@ -150,6 +149,11 @@ export class App {
     this._components.editor = new Editor(
       document.getElementById('uf-editor-wrap')
     );
+
+    // Migrate any comment threads that still use the old lineNum format.
+    // Must run after the editor is built so we have a CM6 doc reference.
+    const editorDoc = this._components.editor.getDoc();
+    if (editorDoc) migrateCommentThreads(editorDoc);
 
     this._components.preview = new Preview(
       document.getElementById('uf-preview-wrap')
@@ -181,10 +185,6 @@ export class App {
     this._components.merge = new MergeDialog(
       document.getElementById('uf-merge-panel'),
       { onMerge: handlers.onMerge }
-    );
-
-    this._components.comments = new CommentsPanel(
-      document.getElementById('uf-comments-panel')
     );
 
     this._components.export = new ExportDialog(

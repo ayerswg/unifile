@@ -87,7 +87,7 @@ export const catppuccinTheme = EditorView.theme(
     '.cm-placeholder': { color: '#6c7086' },
     // Line-number gutter with comment-thread highlighting
     // Lines with an active comment thread get an amber background.
-    // Clicking any line number opens the CommentsPanel for that line.
+    // Clicking a highlighted line number opens the inline accordion widget.
     '.cm-lineNumbers.cm-comment-ln': { cursor: 'pointer' },
     '.cm-lineNumbers.cm-comment-ln .cm-gutterElement': {
       padding: '0 6px 0 4px',
@@ -107,15 +107,26 @@ export const catppuccinTheme = EditorView.theme(
     '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments:hover': {
       background: 'rgba(251,191,36,.38)'
     },
+    '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-accordion-active': {
+      background: 'rgba(251,191,36,.55)',
+      color: '#f9e2af'
+    },
+    '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-accordion-active:hover': {
+      background: 'rgba(251,191,36,.65)'
+    },
     '.cm-ln-text': {
       display: 'block',
       width: '100%',
       textAlign: 'right'
     },
-    // Line highlighted when its comment thread is open in the sidebar
-    '.cm-comment-focus-line': {
-      background: 'rgba(251,191,36,.09)',
-      borderLeft: '2px solid rgba(251,191,36,.45)'
+    // Comment range marks — visible while accordion is open (dark theme)
+    '.cm-comment-range': {
+      background: 'rgba(251,191,36,.1)',
+      borderBottom: '1px solid rgba(251,191,36,.4)'
+    },
+    '.cm-comment-range-active': {
+      background: 'rgba(251,191,36,.2)',
+      borderBottom: '1px solid rgba(251,191,36,.75)'
     }
   },
   { dark: true }
@@ -147,6 +158,12 @@ export const catppuccinThemeLight = EditorView.theme(
       },
       '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments:hover': {
         background: 'rgba(223,142,29,.32)'
+      },
+      '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-accordion-active': {
+        background: 'rgba(223,142,29,.45)', color: '#df8e1d'
+      },
+      '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-accordion-active:hover': {
+        background: 'rgba(223,142,29,.58)'
       }
     }
   }
