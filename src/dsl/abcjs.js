@@ -252,8 +252,12 @@ state.on('editor-select', ({ from, to }) => {
 // editor moves its cursor — but tags the transaction as DSL_SELECT_EVENT so
 // 'editor-select' is NOT re-emitted.  Mirror the update here so that
 // play-from-cursor works correctly after a preview click.
-state.on('dsl-select', ({ from, to }) => {
-  _lastEditorSel = { from, to };
+//
+// Use a collapsed cursor (to: from) rather than the full note span so that
+// play-from-note means "play from here to the end" rather than "play only
+// this one note".  Range-play is driven solely by editor text selections.
+state.on('dsl-select', ({ from }) => {
+  _lastEditorSel = { from, to: from };
 });
 
 // ---------------------------------------------------------------------------
@@ -276,9 +280,63 @@ state.on('dsl-select', ({ from, to }) => {
 //     and restored when playback stops.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// GM program → oscillator timbre
+//
+// Maps the 128 General MIDI program numbers (organised as 16 families of 8)
+// to an oscillator type + envelope shape.  This lets %%MIDI program directives
+// in ABC notation produce meaningfully different timbres offline.
+//
+//  family  0– 1  Piano           sine,    punchy decay
+//  family  2– 3  Chromatic perc  triangle, short decay
+//  family  4– 5  Organ           sine,    full sustain
+//  family  6– 7  Guitar          triangle, plucked decay
+//  family  8– 9  Bass            sawtooth, deep (vol ×0.6)
+//  family 10–11  Strings         sawtooth, slow attack
+//  family 12–13  Ensemble/choir  sine,    slow attack
+//  family 14–15  Brass           sawtooth, sharp attack
+//  family 16–17  Reed            sawtooth, medium
+//  family 18–19  Pipe/flute      sine,    gentle
+//  family 20–21  Synth lead      square,  medium
+//  family 22–23  Synth pad       sine,    slow attack + release
+//  family 24–31  FX/ethnic/perc  triangle, medium
+// ---------------------------------------------------------------------------
+
 /**
- * Schedule Web Audio OscillatorNodes for every note — used when Web MIDI is
- * unavailable.  Triangle waves give a soft, harp-like timbre.
+ * Return oscillator config for a GM program number.
+ * @param {number} prog  0–127
+ * @returns {{ type: OscillatorType, attack: number, decay: number, sustain: number, volScale: number }}
+ */
+function _gmConfig(prog) {
+  const fam = Math.floor((prog ?? 0) / 8); // 0–15
+  // [type, attack(s), decay(s), sustain(0–1), volScale]
+  const T = [
+    ['sine',     0.005, 0.30, 0.0, 1.0],  //  0–7   Piano
+    ['triangle', 0.003, 0.15, 0.0, 1.0],  //  8–15  Chromatic percussion
+    ['sine',     0.010, 0.80, 0.8, 0.9],  // 16–23  Organ
+    ['triangle', 0.003, 0.20, 0.0, 0.9],  // 24–31  Guitar / plucked
+    ['sawtooth', 0.005, 0.40, 0.3, 0.6],  // 32–39  Bass
+    ['sawtooth', 0.060, 0.70, 0.7, 0.8],  // 40–47  Strings
+    ['sine',     0.080, 0.60, 0.6, 0.8],  // 48–55  Ensemble / choir
+    ['sawtooth', 0.008, 0.50, 0.6, 0.9],  // 56–63  Brass
+    ['sawtooth', 0.015, 0.55, 0.6, 0.85], // 64–71  Reed
+    ['sine',     0.010, 0.55, 0.5, 0.85], // 72–79  Pipe / flute
+    ['square',   0.008, 0.45, 0.5, 0.75], // 80–87  Synth lead
+    ['sine',     0.100, 0.80, 0.7, 0.75], // 88–95  Synth pad
+    ['triangle', 0.010, 0.40, 0.3, 0.85], // 96–103 Synth FX
+    ['triangle', 0.005, 0.35, 0.2, 0.9],  // 104–111 Ethnic
+    ['triangle', 0.003, 0.20, 0.0, 0.9],  // 112–119 Percussive
+    ['triangle', 0.005, 0.30, 0.1, 0.8],  // 120–127 Sound effects
+  ];
+  const [type, attack, decay, sustain, volScale] = T[Math.min(fam, 15)];
+  return { type, attack, decay, sustain, volScale };
+}
+
+/**
+ * Schedule Web Audio OscillatorNodes for every note.
+ * Oscillator type and envelope are chosen from the GM program number stored
+ * in each note's midiPitches entry, so %%MIDI program directives in ABC
+ * notation produce meaningfully different timbres.
  */
 function _scheduleOscillators(noteEvents, startSeconds, stopChar) {
   const scheduleBase = _audioContext.currentTime + 0.05;
@@ -299,26 +357,35 @@ function _scheduleOscillators(noteEvents, startSeconds, stopChar) {
 
     for (const p of (event.midiPitches ?? [])) {
       if (p?.pitch == null) continue;
+
+      const { type, attack, decay, sustain, volScale } = _gmConfig(p.instrument);
+
       // MIDI note → Hz, with optional cent offset for microtonal ABC.
-      const freq = 440 * Math.pow(2, (p.pitch - 69 + (p.cents ?? 0) / 100) / 12);
-      const vol  = Math.min(1, ((p.volume ?? 64) / 127) * 0.35);
+      const freq   = 440 * Math.pow(2, (p.pitch - 69 + (p.cents ?? 0) / 100) / 12);
+      const peakVol = Math.min(1, ((p.volume ?? 64) / 127) * 0.35 * volScale);
+      const susVol  = peakVol * sustain;
 
       const osc  = _audioContext.createOscillator();
       const gain = _audioContext.createGain();
       osc.connect(gain);
       gain.connect(_audioContext.destination);
 
-      osc.type = 'triangle';
+      osc.type = type;
       osc.frequency.value = freq;
 
-      const t0 = scheduleBase + offsetSec;
-      gain.gain.setValueAtTime(0,   t0);
-      gain.gain.linearRampToValueAtTime(vol, t0 + 0.010);
-      gain.gain.setValueAtTime(vol, t0 + noteDurSec * 0.6);
-      gain.gain.linearRampToValueAtTime(0,   t0 + noteDurSec);
+      const t0      = scheduleBase + offsetSec;
+      const tPeak   = t0 + Math.min(attack, noteDurSec * 0.3);
+      const tDecay  = tPeak + Math.min(decay, noteDurSec * 0.5);
+      const tRelease = t0 + noteDurSec;
+
+      gain.gain.setValueAtTime(0,        t0);
+      gain.gain.linearRampToValueAtTime(peakVol, tPeak);
+      gain.gain.linearRampToValueAtTime(susVol,  tDecay);
+      gain.gain.setValueAtTime(susVol,   tRelease - 0.01);
+      gain.gain.linearRampToValueAtTime(0,       tRelease);
 
       osc.start(t0);
-      osc.stop(t0 + noteDurSec + 0.02);
+      osc.stop(tRelease + 0.01);
       _scheduledOscs.push(osc);
     }
   }
