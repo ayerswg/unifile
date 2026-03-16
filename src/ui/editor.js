@@ -18,7 +18,7 @@
 import { EditorView, keymap, highlightActiveLine, Decoration,
          highlightActiveLineGutter, drawSelection,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
-import { EditorState, Compartment, StateField, StateEffect, Transaction } from '@codemirror/state';
+import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { indentOnInput, bracketMatching, syntaxHighlighting } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
@@ -28,6 +28,7 @@ import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { catppuccinTheme, catppuccinHighlight } from './editor-theme.js';
 import { state, VIEW_MODES, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
+import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
 import {
   accordionField,
   openAccordionEffect,
@@ -122,6 +123,33 @@ const playHighlightField = StateField.define({
     return deco;
   },
 
+  provide: f => EditorView.decorations.from(f)
+});
+
+// ---------------------------------------------------------------------------
+// Shebang line decoration
+//
+// Lines that start with #! (section declarations like "#!mermaid@1.0.0")
+// are given a distinct muted/italic appearance via the .cm-shebang-line class
+// so the user can visually distinguish them from content.
+// ---------------------------------------------------------------------------
+
+function _buildShebangDecos(editorState) {
+  const doc      = editorState.doc;
+  const sections = parseDocSections(doc.toString());
+  if (sections.length === 0) return Decoration.none;
+
+  const builder = new RangeSetBuilder();
+  for (const sect of sections) {
+    const line = doc.lineAt(sect.from);
+    builder.add(line.from, line.from, Decoration.line({ class: 'cm-shebang-line' }));
+  }
+  return builder.finish();
+}
+
+const shebangDecoField = StateField.define({
+  create(editorState) { return _buildShebangDecos(editorState); },
+  update(deco, tr)    { return tr.docChanged ? _buildShebangDecos(tr.state) : deco; },
   provide: f => EditorView.decorations.from(f)
 });
 
@@ -242,6 +270,9 @@ const baseExtensions = [
 
   // Playback cursor highlight (green, tracks currently playing note)
   playHighlightField,
+
+  // Shebang line decoration (#! section headers appear muted/italic)
+  shebangDecoField,
 
   // Theme
   catppuccinTheme,
@@ -416,7 +447,9 @@ export class Editor {
     }));
 
     // DSL change → swap language extension
+    // Skip when section-based tracking already manages the language compartment.
     this._unsub.push(state.on('change', () => {
+      if (state.activeDslId !== null) return; // section override in effect
       const dsl = state.data?.dslType ?? 'markdown';
       if (dsl !== this._currentDsl) {
         this._currentDsl = dsl;
@@ -464,6 +497,39 @@ export class Editor {
         if (!isDslSelect) {
           const sel = update.state.selection.main;
           state.emit('editor-select', { from: sel.from, to: sel.to });
+        }
+      }
+
+      // Active section tracking — update state.activeDslId / activeSectionRange
+      // whenever the cursor moves or the document changes.
+      if (update.selectionSet || update.docChanged) {
+        const pos   = update.state.selection.main.head;
+        const text  = update.state.doc.toString();
+        const sects = parseDocSections(text);
+        const sect  = activeSectionAt(sects, pos);
+
+        const newDslId = sect ? sect.dslId : null;
+        const newRange = sect ? { from: sect.contentFrom, to: sect.to } : null;
+
+        const changed =
+          newDslId !== state.activeDslId ||
+          newRange?.from !== state.activeSectionRange?.from ||
+          newRange?.to   !== state.activeSectionRange?.to;
+
+        if (changed) {
+          state.activeDslId        = newDslId;
+          state.activeSectionRange = newRange;
+          // Effective DSL: section DSL or document default
+          const effectiveDsl = newDslId ?? state.data?.dslType ?? 'markdown';
+          if (effectiveDsl !== this._currentDsl) {
+            this._currentDsl = effectiveDsl;
+            this._swapLanguage(effectiveDsl);
+          }
+          state.emit('active-section-change', {
+            dslId:   effectiveDsl,
+            range:   newRange,
+            version: sect?.version ?? null
+          });
         }
       }
     });

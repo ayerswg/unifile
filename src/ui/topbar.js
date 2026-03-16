@@ -20,6 +20,7 @@
 import { state, PANELS } from './state.js';
 import { shortHash } from '../core/hash.js';
 import { showArchivedCommentsModal } from './comments.js';
+import { listDSLs } from '../dsl/registry.js';
 
 export class TopBar {
   /**
@@ -36,6 +37,10 @@ export class TopBar {
 
     this._unsub.push(state.on('change', () => this.render()));
     this._unsub.push(state.on('content-change', () => this._updateDirty()));
+    // Active section change → update honeycomb highlight without full re-render
+    this._unsub.push(state.on('active-section-change', () => this._refreshHoneycomb()));
+    // Plugin installed → full re-render to show new hex
+    this._unsub.push(state.on('plugin-added', () => this.render()));
 
     this.render();
   }
@@ -53,13 +58,13 @@ export class TopBar {
     const hash = state.shortHeadHash;
     const branch = state.currentBranch;
     const isDetached = state.isDetached;
-    const dslType = data?.dslType ?? 'markdown';
+    const activeDslId = state.activeDslId ?? data?.dslType ?? 'markdown';
 
     this.el.innerHTML = `
       <div class="topbar">
         <button class="dsl-icon-btn${this._dslMenuOpen ? ' active' : ''}" id="tb-dsl-menu-toggle"
           title="Menu" aria-label="Menu">
-          ${iconForDsl(dslType)}
+          ${_renderHoneycombSVG(listDSLs(), activeDslId)}
         </button>
         <span
           class="topbar-title"
@@ -129,8 +134,8 @@ export class TopBar {
 
   _renderDslMenuList() {
     const hasCommits = (state.vcs?.log()?.length ?? 0) > 0;
-    const dslType = state.data?.dslType ?? 'markdown';
-    const dslName = DSL_HELP[dslType]?.name ?? dslType;
+    const activeDslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
+    const dslName = DSL_HELP[activeDslId]?.name ?? activeDslId;
     return `
       <ul class="tools-menu-list">
         <li class="tools-menu-item" id="tb-dsl-help" title="Syntax reference for ${escHtml(dslName)}">
@@ -150,6 +155,9 @@ export class TopBar {
         <li class="tools-menu-item" id="tb-merge" title="Import & merge another unifile (Ctrl+Shift+M)">
           ${iconImport()} Import & merge…
           <kbd>⌃⇧M</kbd>
+        </li>
+        <li class="tools-menu-item" id="tb-install-plugin" title="Install a DSL plugin (.plugin.js file)">
+          ${iconPlugin()} Install plugin…
         </li>
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-archived-comments" title="Browse archived comment threads">
@@ -320,12 +328,24 @@ export class TopBar {
     this._bindDropdownEvents();
   }
 
+  /**
+   * Refresh just the honeycomb SVG in the button, without a full re-render.
+   * Called on 'active-section-change' so the active hex updates on every cursor move
+   * without flickering the entire topbar.
+   */
+  _refreshHoneycomb() {
+    const btn = this.el.querySelector('#tb-dsl-menu-toggle');
+    if (!btn) return;
+    const activeDslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
+    btn.innerHTML = _renderHoneycombSVG(listDSLs(), activeDslId);
+  }
+
   _bindDropdownEvents() {
-    // DSL help modal
+    // DSL help modal — uses active section DSL or document default
     this.el.querySelector('#tb-dsl-help')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
-      showDslHelpModal(state.data?.dslType ?? 'markdown');
+      showDslHelpModal(state.activeDslId ?? state.data?.dslType ?? 'markdown');
     });
 
     // DSL menu items
@@ -349,6 +369,30 @@ export class TopBar {
       if (state.activePanel === PANELS.MERGE) state.closePanel();
       else state.openPanel(PANELS.MERGE);
     });
+    this.el.querySelector('#tb-install-plugin')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      // Trigger a hidden file picker — drag-and-drop is unreliable in some browsers
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.js';
+      input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+      document.body.appendChild(input);
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        input.remove();
+        if (!file) return;
+        const code = await file.text();
+        if (!code.includes('@unifile-plugin')) {
+          // eslint-disable-next-line no-alert
+          alert(`"${file.name}" does not appear to be a unifile plugin.\n\nExpected a file containing a "@unifile-plugin" header comment.`);
+          return;
+        }
+        this.handlers.onInstallPlugin?.(code, file.name);
+      });
+      input.click();
+    });
+
     this.el.querySelector('#tb-archived-comments')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
@@ -506,6 +550,14 @@ function iconImport() {
   </svg>`;
 }
 
+function iconPlugin() {
+  // Box with down-arrow: "install / bring in a module"
+  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M3.5 10a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5h-2a.5.5 0 0 0 0 1h2A1.5 1.5 0 0 0 14 9.5v-8A1.5 1.5 0 0 0 12.5 0h-9A1.5 1.5 0 0 0 2 1.5v8A1.5 1.5 0 0 0 3.5 11h2a.5.5 0 0 0 0-1h-2z"/>
+    <path d="M7.646 15.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 14.293V5.5a.5.5 0 0 0-1 0v8.793l-2.146-2.147a.5.5 0 0 0-.708.708l3 3z"/>
+  </svg>`;
+}
+
 function iconComment() {
   return `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
     <path d="M14 1a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4.414A2 2 0 0 0 3 11.586l-2 2V2a1 1 0 0 1 1-1h12zm-2 2H4a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0 2H4a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0 2H4a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1H4z"/>
@@ -519,9 +571,76 @@ function iconHelp() {
   </svg>`;
 }
 
+// ---------------------------------------------------------------------------
+// Honeycomb logo
+//
+// Renders a flat-top hexagonal grid — one hex per installed DSL plugin.
+// The hex for the currently active DSL (cursor position) is filled;
+// inactive hexes are outlined only. Labels use periodic-table abbreviations
+// (e.g. "Md" for Markdown, "Mm" for Mermaid) stored on each DSL plugin.
+// ---------------------------------------------------------------------------
+
+function _renderHoneycombSVG(dsls, activeDslId) {
+  if (!dsls.length) return '';
+
+  const R  = 11;                              // circumradius (vertex-to-centre)
+  const HH = R * Math.sqrt(3) / 2;           // half of flat-to-flat height ≈ 9.5
+  const COL_SPACING = R * Math.sqrt(3);       // horizontal between column centres ≈ 19.1
+  const ROW_SPACING = HH * 2 + 3;            // vertical between row centres ≈ 22
+  const COL1_STAGGER = HH + 1.5;             // col 1 shifts down by ~11
+
+  const COL0_X = R + 2;                      // ≈ 13
+  const COL1_X = COL0_X + COL_SPACING;       // ≈ 32
+
+  function hexPath(cx, cy) {
+    return [
+      `M ${(cx+R).toFixed(1)},${cy.toFixed(1)}`,
+      `L ${(cx+R/2).toFixed(1)},${(cy-HH).toFixed(1)}`,
+      `L ${(cx-R/2).toFixed(1)},${(cy-HH).toFixed(1)}`,
+      `L ${(cx-R).toFixed(1)},${cy.toFixed(1)}`,
+      `L ${(cx-R/2).toFixed(1)},${(cy+HH).toFixed(1)}`,
+      `L ${(cx+R/2).toFixed(1)},${(cy+HH).toFixed(1)}`,
+      'Z'
+    ].join(' ');
+  }
+
+  const placements = dsls.map((dsl, i) => {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const cx  = col === 0 ? COL0_X : COL1_X;
+    const cy  = col === 0
+      ? (R + 2) + row * ROW_SPACING
+      : (R + 2 + COL1_STAGGER) + row * ROW_SPACING;
+    return { dsl, cx, cy, isActive: dsl.id === activeDslId };
+  });
+
+  const W = dsls.length > 1
+    ? Math.ceil(COL1_X + R + 3)
+    : Math.ceil(COL0_X + R + 2);
+  const maxCY = Math.max(...placements.map(p => p.cy));
+  const H = Math.ceil(maxCY + HH + 3);
+
+  const hexSvgs = placements.map(({ dsl, cx, cy, isActive }) => `
+    <g>
+      <path d="${hexPath(cx, cy)}"
+        fill="${isActive ? 'var(--accent, #89b4fa)' : 'none'}"
+        stroke="${isActive ? 'var(--accent, #89b4fa)' : 'var(--text-sub, #a6adc8)'}"
+        stroke-width="1.5"/>
+      <text x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" dy="0.35em"
+        text-anchor="middle"
+        font-size="7.5" font-family="inherit"
+        fill="${isActive ? 'var(--bg, #1e1e2e)' : 'var(--text-sub, #a6adc8)'}"
+        font-weight="bold">${escHtml(dsl.label ?? dsl.id.slice(0,2))}</text>
+    </g>`).join('');
+
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
+    fill="none" xmlns="http://www.w3.org/2000/svg"
+    class="tb-honeycomb" aria-hidden="true">${hexSvgs}</svg>`;
+}
+
 /**
  * Small muted icon representing the document's DSL type.
- * Shown at the far left of the topbar as a clickable menu button.
+ * Kept for reference; replaced by _renderHoneycombSVG in the topbar.
  */
 function iconForDsl(dslType) {
   if (dslType === 'mermaid') {

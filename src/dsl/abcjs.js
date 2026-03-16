@@ -692,6 +692,8 @@ function getEditorExtensions() {
 
 const abcjsDSL = {
   id: 'abcjs',
+  label: 'Ab',
+  version: '1.0.0',
   name: 'ABC Notation',
   extensions: ['.abc'],
   editorMode: 'abc',

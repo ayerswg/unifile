@@ -133,6 +133,8 @@ function getEditorExtensions() {
 
 const mermaidDSL = {
   id: 'mermaid',
+  label: 'Mm',
+  version: '1.0.0',
   name: 'Mermaid',
   extensions: ['.mmd', '.mermaid'],
   editorMode: 'mermaid',

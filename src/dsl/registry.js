@@ -28,6 +28,9 @@ export function registerDSL(plugin) {
   if (!plugin.id || !plugin.name || !plugin.render) {
     throw new Error(`DSL plugin missing required fields: ${JSON.stringify(plugin)}`);
   }
+  if (!plugin.label || !plugin.version) {
+    throw new Error(`DSL plugin "${plugin.id}" missing required label or version fields`);
+  }
   _registry.set(plugin.id, plugin);
 }
 

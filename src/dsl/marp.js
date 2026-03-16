@@ -611,6 +611,8 @@ function detect(content) {
 
 registerDSL({
   id: 'marp',
+  label: 'Mp',
+  version: '1.0.0',
   name: 'MARP Slides',
   extensions: ['.marp'],
   editorMode: 'marp',

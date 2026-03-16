@@ -110,11 +110,16 @@ const dslArg = (args.find(a => a.startsWith('--dsl='))?.split('=')[1] ?? 'markdo
 // DSL metadata — single source of truth shared by build + app (see also
 // src/dsl/registry.js which stores a superset of this at runtime).
 export const DSL_META = {
-  markdown: { abbrev: 'md',  plugins: ['markdown'],            defaultDslType: 'markdown' },
-  mermaid:  { abbrev: 'mer', plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid'  },
-  abcjs:    { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs'    },
-  marp:     { abbrev: 'mar', plugins: ['marp'],                defaultDslType: 'marp'     },
+  markdown:  { abbrev: 'md',  plugins: ['markdown'],            defaultDslType: 'markdown' },
+  mermaid:   { abbrev: 'mer', plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid'  },
+  abcjs:     { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs'    },
+  marp:      { abbrev: 'mar', plugins: ['marp'],                defaultDslType: 'marp'     },
+  // Universal: Markdown-only baseline; other DSLs installed at runtime via drag-drop
+  universal: { abbrev: 'uni', plugins: ['markdown'],            defaultDslType: 'markdown' },
 };
+
+// DSLs that can be built as standalone plugin bundles (drag-and-drop installation)
+const PLUGIN_DSLS = ['mermaid', 'abcjs', 'marp'];
 
 if (!DSL_META[dslArg]) {
   console.error(`Unknown --dsl: "${dslArg}". Choose: ${Object.keys(DSL_META).join(' | ')}`);
@@ -294,11 +299,127 @@ async function buildPWA(dsl, meta) {
 }
 
 // ---------------------------------------------------------------------------
+// Build plugin bundle
+//
+// Creates a standalone <dslId>.plugin.js file that can be drag-dropped onto
+// a running unifile.uni.html to install the DSL at runtime.
+//
+// Plugin format (the file IS a function expression, not self-invoked):
+//   /* @unifile-plugin <id>@<version> */
+//   (function(register) { ... all deps bundled ... })
+//
+// Mechanism: the DSL module calls registerDSL() at module-eval time.
+// We stub the registry so registerDSL() calls globalThis.__uf_pending_register,
+// which the plugin wrapper sets to the host's register callback before eval.
+// globalThis property names survive minification (they're string lookups).
+// ---------------------------------------------------------------------------
+
+async function buildPlugin(dslId) {
+  console.log(`\nBuilding plugin [dsl=${dslId}]…`);
+
+  const pluginDir = join(DIST, 'plugins');
+  await mkdir(pluginDir, { recursive: true });
+
+  // Entry lives in SRC so relative DSL imports resolve correctly.
+  const entrySource = `// Auto-generated plugin entry for ${dslId} — do not edit
+import './dsl/${dslId}.js';
+// The DSL module calls registerDSL() → stubbed to globalThis.__uf_pending_register
+`;
+  const entryPath = join(SRC, `_plugin_entry_${dslId}.js`);
+  await writeFile(entryPath, entrySource, 'utf8');
+
+  // Stub the registry: registerDSL() delegates to __uf_pending_register (set by wrapper).
+  const registryStubPlugin = {
+    name: 'registry-stub',
+    setup(build) {
+      // DSL files live in src/dsl/ and import the registry as './registry.js'.
+      // The original filter /dsl\/registry/ only matched '../dsl/registry.js' style
+      // paths, missing the intra-dsl './registry.js' imports.  This broader filter
+      // catches both by matching any relative import whose path ends in 'registry'.
+      build.onResolve({ filter: /registry(\.js)?$/ }, (args) => {
+        // Only intercept relative imports (starts with ./ or ../) to avoid stubbing
+        // unrelated third-party packages that happen to have 'registry' in their name.
+        if (args.path.startsWith('.')) {
+          return { path: 'registry-stub', namespace: 'registry-stub' };
+        }
+        return null;
+      });
+      build.onLoad({ filter: /.*/, namespace: 'registry-stub' }, () => ({
+        contents: `
+export function registerDSL(plugin) {
+  if (typeof globalThis.__uf_pending_register === "function") {
+    globalThis.__uf_pending_register(plugin);
+  }
+}
+export function listDSLs()  { return []; }
+export function getDSL()    { throw new Error("getDSL not available in plugin"); }
+export function detectDSL() { return null; }
+`,
+        loader: 'js',
+      }));
+    },
+  };
+
+  const esbuildPlugins = [registryStubPlugin];
+  if (dslId === 'mermaid') esbuildPlugins.push(elkjsStubPlugin);
+  if (dslId === 'marp')    esbuildPlugins.push(hljsLanguageFilterPlugin);
+
+  const result = await esbuild.build({
+    entryPoints: [entryPath],
+    bundle: true,
+    format: 'esm',   // plain top-level JS (no auto-IIFE from esbuild)
+    minify: !DEV,
+    write: false,
+    logLevel: 'info',
+    external: ['buffer'],
+    define: { 'process.env.NODE_ENV': DEV ? '"development"' : '"production"' },
+    logOverride: { 'indirect-require': 'silent' },
+    plugins: esbuildPlugins,
+  });
+  await unlink(entryPath).catch(() => {});
+
+  const version = '1.0.0';
+  const bundleCode = result.outputFiles[0].text;
+
+  // Wrap: the host calls (pluginFn)(registerDSL) which sets __uf_pending_register,
+  // then the bundled module code runs and calls registerDSL → our callback.
+  const wrappedCode = `/* @unifile-plugin ${dslId}@${version} */
+(function(register) {
+globalThis.__uf_pending_register = register;
+try {
+${bundleCode}
+} finally {
+delete globalThis.__uf_pending_register;
+}
+})`;
+
+  const outPath = join(pluginDir, `unifile-${dslId}.plugin.js`);
+  await writeFile(outPath, wrappedCode, 'utf8');
+  const kb = Math.round(wrappedCode.length / 1024);
+  console.log(`  ✓ ${outPath}  (${kb} KB)`);
+}
+
+// ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
 
 async function main() {
   const meta = DSL_META[dslArg];
+
+  // Special mode: build all plugin bundles
+  if (args.includes('--plugins')) {
+    try {
+      for (const dslId of PLUGIN_DSLS) {
+        await buildPlugin(dslId);
+      }
+      console.log('\nPlugin builds complete.');
+    } catch (err) {
+      console.error('\nPlugin build failed:', err.message);
+      process.exit(1);
+    }
+    return;
+  }
+
   try {
     await buildQuine(dslArg, meta);
     if (BUILD_PWA) await buildPWA(dslArg, meta);

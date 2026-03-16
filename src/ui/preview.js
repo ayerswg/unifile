@@ -20,6 +20,7 @@ export class Preview {
     this._renderTimer = null;
     this._lastContent = null;
     this._lastDsl = null;
+    this._activeSectionVersion = null; // declared version from #! line
 
     this._build();
 
@@ -38,6 +39,12 @@ export class Preview {
     }));
     this._unsub.push(state.on('branch-switch', ({ content }) => {
       this._scheduleRender(content, true);
+    }));
+    // Active section changed (cursor moved to a different #! section) →
+    // re-render immediately with the new DSL / slice.
+    this._unsub.push(state.on('active-section-change', ({ version }) => {
+      this._activeSectionVersion = version ?? null;
+      this._scheduleRender(state.currentContent, true);
     }));
   }
 
@@ -80,7 +87,12 @@ export class Preview {
   }
 
   async _render(content) {
-    const dslId = state.data?.dslType ?? 'markdown';
+    // Active section overrides: use section slice and section DSL if available.
+    const range  = state.activeSectionRange;
+    const dslId  = state.activeDslId ?? state.data?.dslType ?? 'markdown';
+    const renderContent = range
+      ? content.slice(range.from, range.to)
+      : content;
 
     let dsl;
     try {
@@ -93,10 +105,17 @@ export class Preview {
     this._lastContent = content;
     this._lastDsl = dslId;
 
-    if (!content || !content.trim()) {
+    if (!renderContent || !renderContent.trim()) {
       this.content.innerHTML = '<p class="preview-empty">Start writing to see a preview.</p>';
       return;
     }
+
+    // Version mismatch warning: document declares a version the plugin doesn't match
+    const declaredVer = this._activeSectionVersion;
+    const pluginVer   = dsl.version ?? null;
+    const versionBanner = (declaredVer && pluginVer && declaredVer !== pluginVer)
+      ? `<div class="preview-version-warn">⚠ Document uses ${dslId}@${declaredVer}, plugin is ${pluginVer} — rendering with available version</div>`
+      : '';
 
     // Show spinner for slow renders
     const spinnerTimer = setTimeout(() => {
@@ -106,9 +125,13 @@ export class Preview {
     }, 200);
 
     try {
-      await dsl.render(content, this.content);
+      await dsl.render(renderContent, this.content);
+      // Prepend version warning banner if needed (after render clears the element)
+      if (versionBanner) {
+        this.content.insertAdjacentHTML('afterbegin', versionBanner);
+      }
     } catch (err) {
-      this.content.innerHTML = `<pre class="error">Render error:\n${escHtml(err.message)}</pre>`;
+      this.content.innerHTML = `${versionBanner}<pre class="error">Render error:\n${escHtml(err.message)}</pre>`;
     } finally {
       clearTimeout(spinnerTimer);
     }

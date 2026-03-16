@@ -1068,6 +1068,8 @@ const imageDropPaste = EditorView.domEventHandlers({
 
 const markdownDSL = {
   id: 'markdown',
+  label: 'Md',
+  version: '1.0.0',
   name: 'Markdown',
   extensions: ['.md', '.markdown'],
   editorMode: 'markdown',

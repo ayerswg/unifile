@@ -104,6 +104,12 @@ class AppState extends EventBus {
 
     /** @type {boolean} Whether a valid ABC tune is loaded and ready to play */
     this.abcHasTune = false;
+
+    /** @type {string|null} DSL id at current cursor position; null → use data.dslType */
+    this.activeDslId = null;
+
+    /** @type {{ from: number, to: number }|null} Active section content range; null → whole doc */
+    this.activeSectionRange = null;
   }
 
   // -------------------------------------------------------------------------

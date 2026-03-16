@@ -16,7 +16,7 @@ import {
   IS_QUINE
 } from '../core/storage.js';
 import { isEncrypted, decryptData } from '../core/crypto.js';
-import { getDSL } from '../dsl/registry.js';
+import { getDSL, registerDSL } from '../dsl/registry.js';
 
 import { initTheme } from './theme.js';
 import { TopBar } from './topbar.js';
@@ -81,13 +81,20 @@ export class App {
       dsl: this._getDsl(data.dslType)
     });
 
-    // 6. Render the shell
+    // 6. Load any stored DSL plugins from the quine data (before mounting components
+    //    so the topbar renders with all plugins already registered)
+    this._loadStoredPlugins(data);
+
+    // 7. Render the shell
     this._buildShell();
 
-    // 7. Mount components
+    // 8. Bind plugin drag-and-drop handler
+    this._bindPluginDrop();
+
+    // 9. Mount components
     this._mountComponents();
 
-    // 8. Global keyboard shortcuts
+    // 10. Global keyboard shortcuts
     this._bindGlobalKeys();
 
     // 9. PWA: register service worker
@@ -266,6 +273,27 @@ export class App {
         const preview = this._components.preview;
         if (!preview) return '';
         return preview.renderToString(state.currentContent, state.data?.dslType);
+      },
+
+      /**
+       * Install a plugin from a .plugin.js file selected via the menu picker.
+       * @param {string} code  Raw plugin JS source
+       * @param {string} [filename]  Original filename (for error messages)
+       */
+      onInstallPlugin: (code, filename = 'plugin') => {
+        try {
+          this._evalPlugin(code);
+        } catch (e) {
+          // eslint-disable-next-line no-alert
+          alert(`Failed to load plugin "${filename}":\n${e.message}`);
+          return;
+        }
+        const data = state.data;
+        data.plugins ??= {};
+        const m = code.match(/@unifile-plugin\s+([\w-]+)/);
+        if (m) data.plugins[m[1]] = code;
+        state.update({ data, isDirty: true });
+        state.emit('plugin-added');
       }
     };
   }
@@ -310,6 +338,76 @@ export class App {
     }
 
     // Quine: auto-save to browser storage as backup; main save is manual (export)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Plugin infrastructure
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Eval and register all DSL plugins stored in the quine data.
+   * Called before components mount so the topbar renders with all DSLs.
+   * @param {object} data  The loaded quine data object
+   */
+  _loadStoredPlugins(data) {
+    const plugins = data?.plugins ?? {};
+    for (const [id, code] of Object.entries(plugins)) {
+      try {
+        this._evalPlugin(code);
+      } catch (e) {
+        console.warn(`[unifile] Failed to load stored plugin "${id}":`, e);
+      }
+    }
+  }
+
+  /**
+   * Evaluate a plugin function-expression string and register it.
+   * Plugin format: `(function(register) { ... })` — a function expression that
+   * accepts the register callback and calls it with the plugin object.
+   * @param {string} code  Raw plugin JS source
+   */
+  _evalPlugin(code) {
+    // eslint-disable-next-line no-new-func
+    const fn = new Function(`return (${code})`)();
+    fn(registerDSL);
+  }
+
+  /**
+   * Listen for .plugin.js files dropped anywhere on the page.
+   * Validates, evals, stores the plugin code, and emits 'plugin-added'.
+   */
+  _bindPluginDrop() {
+    document.body.addEventListener('dragover', (e) => {
+      if ([...e.dataTransfer.types].includes('Files')) e.preventDefault();
+    });
+
+    document.body.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const file = [...e.dataTransfer.files].find(f => f.name.endsWith('.plugin.js'));
+      if (!file) return;
+
+      const code = await file.text();
+      // Safety check: only process files that are self-identified unifile plugins
+      if (!code.includes('@unifile-plugin')) {
+        console.warn('[unifile] Dropped file does not appear to be a unifile plugin (missing @unifile-plugin header)');
+        return;
+      }
+
+      try {
+        this._evalPlugin(code);
+      } catch (e) {
+        console.warn('[unifile] Failed to load dropped plugin:', e);
+        return;
+      }
+
+      // Persist in quine data so the plugin survives save/reload and self-export
+      const data = state.data;
+      data.plugins ??= {};
+      const m = code.match(/@unifile-plugin\s+([\w-]+)/);
+      if (m) data.plugins[m[1]] = code;
+      state.update({ data, isDirty: true });
+      state.emit('plugin-added');
+    });
   }
 
   // ---------------------------------------------------------------------------

@@ -192,6 +192,13 @@
   :root:not([data-theme]) .cm-play-note { color: #40a02b !important; }
 }
 
+/* #! shebang line decoration — marks DSL section headers as muted/italic */
+.cm-shebang-line { color: var(--accent) !important; opacity: .55; font-style: italic; }
+[data-theme="light"] .cm-shebang-line { color: var(--accent) !important; opacity: .6; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .cm-shebang-line { opacity: .6; }
+}
+
 /* Active line disappears when the editor is focused — selection highlight takes over */
 .cm-editor.cm-focused .cm-activeLine { background: transparent !important; }
 /* Active line also disappears during ABC playback (editor may be unfocused after
@@ -296,25 +303,25 @@ html, body {
   border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--text-muted);
-  opacity: 0.55;
   padding: 3px 5px;
   cursor: pointer;
-  transition: opacity .15s, color .15s, border-color .15s, background .15s;
+  transition: color .15s, border-color .15s, background .15s;
   user-select: none;
 }
 .dsl-icon-btn:hover {
-  opacity: 1;
   color: var(--text);
   border-color: var(--border);
   background: var(--bg-surface);
 }
 .dsl-icon-btn.active {
-  opacity: 1;
   color: var(--text);
   border-color: var(--border);
   background: var(--bg-overlay);
 }
 
+
+/* Honeycomb DSL hexagons SVG in topbar — sizing handled by SVG attributes */
+.tb-honeycomb { display: block; line-height: 0; }
 
 /* (topbar-extras kept for any legacy references) */
 .topbar-extras {
@@ -893,6 +900,18 @@ html, body {
   margin: 3rem auto;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Version mismatch warning banner in preview pane */
+.preview-version-warn {
+  padding: 5px 10px;
+  margin-bottom: 8px;
+  background: rgba(249,226,175,.12);
+  border-left: 3px solid var(--warning, #f9e2af);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+  color: var(--warning, #f9e2af);
+  font-family: ui-monospace, monospace;
+}
 
 /* ==============================================================
    PANE FOOTER BARS
