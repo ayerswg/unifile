@@ -16,9 +16,10 @@ export class DslFooter {
     this.el = container;
     this._unsub = [];
 
-    // Full re-render only on DSL type change (handled inside render)
+    // Full re-render when the effective DSL changes (either file-level or
+    // per-section via activeDslId).  Both trigger 'change' via state.update().
     this._unsub.push(state.on('change', () => {
-      const newDsl = state.data?.dslType ?? 'markdown';
+      const newDsl = state.activeDslId ?? state.data?.dslType ?? 'markdown';
       if (newDsl !== this._lastDsl) this.render();
     }));
 
@@ -52,7 +53,7 @@ export class DslFooter {
   // ---------------------------------------------------------------------------
 
   render() {
-    const dslType = state.data?.dslType ?? 'markdown';
+    const dslType = state.activeDslId ?? state.data?.dslType ?? 'markdown';
     this._lastDsl = dslType;
 
     if (dslType !== 'abcjs') {

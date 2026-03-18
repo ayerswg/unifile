@@ -14,8 +14,7 @@
  */
 
 import abcjs from 'abcjs';
-import { StreamLanguage, syntaxHighlighting } from '@codemirror/language';
-import { catppuccinHighlight } from '../ui/editor-theme.js';
+import { StreamLanguage } from '@codemirror/language';
 import { registerDSL } from './registry.js';
 import { state } from '../ui/state.js';
 
@@ -169,6 +168,12 @@ let _audioContext = null;
 // Web Audio oscillators scheduled for the current playback.
 let _scheduledOscs = [];
 
+// Character offset of the active section's content start within the full document.
+// render() receives section-sliced content, so abcjs char positions are 0-based
+// relative to the section.  Add _sectionOffset to convert to full-doc positions
+// (for dsl-select events) and subtract it when going the other way (rangeHighlight).
+let _sectionOffset = 0;
+
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
@@ -176,6 +181,10 @@ let _scheduledOscs = [];
 async function render(content, el) {
   // Stop any in-progress playback when the content changes.
   if (_synth) stopPlayback();
+
+  // Capture section offset so click positions (section-relative) can be
+  // translated to full-document positions and vice-versa.
+  _sectionOffset = state.activeSectionRange?.from ?? 0;
 
   _engraver    = null;
   _tuneObjects = null;
@@ -203,7 +212,10 @@ async function render(content, el) {
       // We just need to tell the editor which source range to jump to.
       clickListener: (abcElem) => {
         if (abcElem.startChar !== undefined && abcElem.endChar !== undefined) {
-          state.emit('dsl-select', { from: abcElem.startChar, to: abcElem.endChar });
+          state.emit('dsl-select', {
+            from: abcElem.startChar + _sectionOffset,
+            to:   abcElem.endChar   + _sectionOffset,
+          });
         }
       }
     });
@@ -240,10 +252,13 @@ function _setHasTune(hasTune) {
 
 state.on('editor-select', ({ from, to }) => {
   _lastEditorSel = { from, to };
-  if (_engraver && state.data?.dslType === 'abcjs' && !state.abcPlaying) {
+  if (_engraver && (state.activeDslId ?? state.data?.dslType) === 'abcjs' && !state.abcPlaying) {
     try {
+      // Translate full-doc positions to section-relative positions for abcjs.
       // Collapsed cursor → clear all highlights; real selection → show range.
-      _engraver.rangeHighlight(from === to ? 0 : from, from === to ? 0 : to);
+      const adjFrom = from === to ? 0 : Math.max(0, from - _sectionOffset);
+      const adjTo   = from === to ? 0 : Math.max(0, to   - _sectionOffset);
+      _engraver.rangeHighlight(adjFrom, adjTo);
     } catch { /* engraver may be stale after a re-render — ignore */ }
   }
 });
@@ -401,7 +416,11 @@ async function startPlayback() {
   }
 
   const tune = _tuneObjects[0];
-  const { from: selFrom, to: selTo } = _lastEditorSel;
+  // Translate full-doc editor positions to section-relative positions so they
+  // match the char indices in abcjs noteTimings (which are 0-based from the
+  // start of the section content passed to render()).
+  const selFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
+  const selTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
 
   // ── 1.  Populate midiPitches by running the MIDI flattener ───────────────
   //
@@ -535,7 +554,9 @@ function stopPlayback() {
 
   // Restore the static (red) preview selection, if any.
   if (_engraver && _lastEditorSel.from !== _lastEditorSel.to) {
-    try { _engraver.rangeHighlight(_lastEditorSel.from, _lastEditorSel.to); } catch { /* stale */ }
+    const adjFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
+    const adjTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
+    try { _engraver.rangeHighlight(adjFrom, adjTo); } catch { /* stale */ }
   } else if (_engraver) {
     try { _engraver.rangeHighlight(0, 0); } catch { /* stale */ }
   }
@@ -543,7 +564,7 @@ function stopPlayback() {
 
 // External play/pause trigger (emitted by the topbar play button).
 state.on('abc-play', () => {
-  if (state.data?.dslType === 'abcjs') startPlayback();
+  if ((state.activeDslId ?? state.data?.dslType) === 'abcjs') startPlayback();
 });
 
 async function renderToString(content) {
@@ -682,7 +703,6 @@ async function exportMIDI(content) {
 function getEditorExtensions() {
   return [
     abcLanguage,
-    syntaxHighlighting(catppuccinHighlight)
   ];
 }
 

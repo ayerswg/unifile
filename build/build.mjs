@@ -135,6 +135,19 @@ async function generateEntry(plugins, mode) {
   const src = `// Auto-generated entry — do not edit (regenerated on every build)
 ${plugins.map(p => `import './dsl/${p}.js';`).join('\n')}
 import { App } from './ui/app.js';
+import { state as _state } from './ui/state.js';
+import * as _cmLanguage from '@codemirror/language';
+import { tags as _tags, Tag as _Tag, highlightTree as _highlightTree } from '@lezer/highlight';
+import { catppuccinHighlight as _cpHL } from './ui/editor-theme.js';
+
+// Expose host-bundle singletons so dynamically-installed plugins can share them.
+// Plugins stub-resolve these imports to globalThis.__uf.* at bundle eval time.
+globalThis.__uf = {
+  state:               _state,
+  cmLanguage:          _cmLanguage,
+  lezerHighlight:      { tags: _tags, Tag: _Tag, highlightTree: _highlightTree },
+  catppuccinHighlight: _cpHL,
+};
 
 async function main() {
   const app = new App();
@@ -360,7 +373,100 @@ export function detectDSL() { return null; }
     },
   };
 
-  const esbuildPlugins = [registryStubPlugin];
+  // Stub host APIs: instead of bundling isolated copies of state.js,
+  // editor-theme.js, and @codemirror/language, plugins delegate to
+  // globalThis.__uf which the host sets up in App._exposeHostAPIs()
+  // before loading any plugins.  This ensures:
+  //   • state.on/emit routes through the host's singleton → events work cross-component
+  //   • catppuccinHighlight + StreamLanguage use the host's CM6 module instances
+  //     → language compartment reconfigure produces valid syntax highlighting
+  const hostApiStubPlugin = {
+    name: 'host-api-stubs',
+    setup(build) {
+      // ── state.js ──────────────────────────────────────────────────────────
+      build.onResolve({ filter: /[/\\]ui[/\\]state(\.js)?$/ }, (args) => {
+        if (args.path.startsWith('.')) {
+          return { path: 'uf-state-stub', namespace: 'uf-host-stub' };
+        }
+        return null;
+      });
+
+      // ── editor-theme.js ───────────────────────────────────────────────────
+      build.onResolve({ filter: /editor-theme(\.js)?$/ }, (args) => {
+        if (args.path.startsWith('.')) {
+          return { path: 'uf-editor-theme-stub', namespace: 'uf-host-stub' };
+        }
+        return null;
+      });
+
+      // ── @codemirror/language ──────────────────────────────────────────────
+      // StreamLanguage.define and syntaxHighlighting must use the host's module
+      // instances so that the resulting CM6 Extension objects are recognised by
+      // the host's EditorState (same Facet references).
+      //
+      // IMPORTANT: Only stub when imported from OUR source files (src/dsl/…),
+      // NOT from node_modules.  Transitive deps like @codemirror/autocomplete
+      // and @codemirror/lang-markdown also import from @codemirror/language
+      // and need the full real module — our minimal stub would break them.
+      build.onResolve({ filter: /^@codemirror\/language$/ }, (args) => {
+        // args.importer is the absolute path of the file doing the importing.
+        // node_modules paths contain '/node_modules/'; our DSL source files don't.
+        if (args.importer && !args.importer.includes('node_modules')) {
+          return { path: 'uf-cm-language-stub', namespace: 'uf-host-stub' };
+        }
+        return null; // Let esbuild resolve normally for transitive node_modules deps
+      });
+
+      // ── @lezer/highlight ──────────────────────────────────────────────────
+      // tags, HighlightStyle etc. must be the host's instances so that token
+      // types from a plugin's StreamLanguage match the host's highlight rules.
+      // Same importer guard as above — only stub our DSL source, not node_modules.
+      build.onResolve({ filter: /^@lezer\/highlight$/ }, (args) => {
+        if (args.importer && !args.importer.includes('node_modules')) {
+          return { path: 'uf-lezer-stub', namespace: 'uf-host-stub' };
+        }
+        return null;
+      });
+
+      // ── Load all stubs from a single namespace ────────────────────────────
+      build.onLoad({ filter: /.*/, namespace: 'uf-host-stub' }, (args) => {
+        const stubs = {
+          'uf-state-stub': `
+// Plugin state → host's state singleton via globalThis.__uf
+export const state = globalThis.__uf?.state;
+// VIEW_MODES / PANELS not used by DSL plugins; provide empty stubs for safety
+export const VIEW_MODES = {};
+export const PANELS = {};
+`,
+          'uf-editor-theme-stub': `
+// Plugin editor-theme → host's catppuccinHighlight instance
+export const catppuccinHighlight = globalThis.__uf?.catppuccinHighlight;
+export const catppuccinTheme = null;
+export const catppuccinThemeLight = null;
+`,
+          'uf-cm-language-stub': `
+// Plugin @codemirror/language → host's CM6 module instances
+const _l = globalThis.__uf?.cmLanguage ?? {};
+export const StreamLanguage    = _l.StreamLanguage;
+export const syntaxHighlighting = _l.syntaxHighlighting;
+`,
+          'uf-lezer-stub': `
+// Plugin @lezer/highlight → host's tags/Tag/highlightTree instances
+const _l = globalThis.__uf?.lezerHighlight ?? {};
+export const tags         = _l.tags;
+export const Tag          = _l.Tag;
+export const highlightTree = _l.highlightTree;
+`,
+        };
+        return {
+          contents: stubs[args.path] ?? '',
+          loader: 'js',
+        };
+      });
+    },
+  };
+
+  const esbuildPlugins = [registryStubPlugin, hostApiStubPlugin];
   if (dslId === 'mermaid') esbuildPlugins.push(elkjsStubPlugin);
   if (dslId === 'marp')    esbuildPlugins.push(hljsLanguageFilterPlugin);
 

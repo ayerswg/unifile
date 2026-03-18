@@ -20,12 +20,13 @@ import { EditorView, keymap, highlightActiveLine, Decoration,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { indentOnInput, bracketMatching, syntaxHighlighting } from '@codemirror/language';
+import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 
 import { catppuccinTheme, catppuccinHighlight } from './editor-theme.js';
+import { highlightTree } from '@lezer/highlight';
 import { state, VIEW_MODES, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
 import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
@@ -244,6 +245,81 @@ const commentLineNumbersExt = gutter({
 });
 
 // ---------------------------------------------------------------------------
+// Per-section syntax highlighting
+//
+// Instead of reconfiguring a whole-doc language on every cursor-section
+// change (which recolours the entire editor), we use highlightTree() to
+// parse each section independently and emit per-section Decoration.mark
+// spans with the correct token classes.
+//
+// rebuildSectionHighlightsEffect is dispatched when the document's default
+// DSL changes (metadata-only change, no docChanged) or a plugin is installed.
+// ---------------------------------------------------------------------------
+
+const rebuildSectionHighlightsEffect = StateEffect.define();
+
+/** Recursively find the first Language/LanguageSupport instance in an extension. */
+function _extractLanguage(ext) {
+  if (!ext) return null;
+  if (ext instanceof Language) return ext;
+  if (ext?.language instanceof Language) return ext.language;  // LanguageSupport
+  if (Array.isArray(ext)) {
+    for (const e of ext) {
+      const found = _extractLanguage(e);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/** Build per-section syntax decoration set for the current document. */
+function _buildSectionHighlights(editorState) {
+  const text     = editorState.doc.toString();
+  const sections = parseDocSections(text);
+  const builder  = new RangeSetBuilder();
+  const defaultDslId = state.data?.dslType ?? 'markdown';
+
+  function addHighlights(from, to, dslId) {
+    if (from >= to) return;
+    const rangeText = text.slice(from, to);
+    try {
+      const dsl  = getDSL(dslId);
+      const exts = dsl.getEditorExtensions?.() ?? [];
+      const lang = _extractLanguage(exts);
+      if (!lang) return;
+      const tree = lang.parser.parse(rangeText);
+      highlightTree(tree, catppuccinHighlight, (tFrom, tTo, classes) => {
+        if (tFrom >= tTo) return;
+        builder.add(from + tFrom, from + tTo, Decoration.mark({ class: classes }));
+      });
+    } catch { /* non-fatal: DSL not loaded yet or parse error */ }
+  }
+
+  if (sections.length === 0) {
+    addHighlights(0, text.length, defaultDslId);
+  } else {
+    if (sections[0].from > 0) {
+      addHighlights(0, sections[0].from, defaultDslId);
+    }
+    for (const sect of sections) {
+      addHighlights(sect.contentFrom, sect.to, sect.dslId);
+    }
+  }
+  return builder.finish();
+}
+
+const sectionSyntaxField = StateField.define({
+  create: (editorState) => _buildSectionHighlights(editorState),
+  update: (deco, tr) => {
+    if (tr.docChanged || tr.effects.some(e => e.is(rebuildSectionHighlightsEffect))) {
+      return _buildSectionHighlights(tr.state);
+    }
+    return deco.map(tr.changes);
+  },
+  provide: f => EditorView.decorations.from(f)
+});
+
+// ---------------------------------------------------------------------------
 // Static base extensions — same for every DSL
 // ---------------------------------------------------------------------------
 
@@ -274,9 +350,17 @@ const baseExtensions = [
   // Shebang line decoration (#! section headers appear muted/italic)
   shebangDecoField,
 
+  // Inject the catppuccin highlight CSS rules so sectionSyntaxField's
+  // Decoration.mark({ class }) spans get styled. Using the StyleModule directly
+  // (instead of syntaxHighlighting(catppuccinHighlight)) injects the CSS without
+  // triggering automatic whole-doc tree scanning.
+  EditorView.styleModule.of(catppuccinHighlight.module),
+
+  // Per-section syntax highlighting
+  sectionSyntaxField,
+
   // Theme
   catppuccinTheme,
-  syntaxHighlighting(catppuccinHighlight),
 ];
 
 // ---------------------------------------------------------------------------
@@ -446,14 +530,24 @@ export class Editor {
       this._view.dispatch({ effects: setPlayHighlight.of(ranges ?? null) });
     }));
 
-    // DSL change → swap language extension
-    // Skip when section-based tracking already manages the language compartment.
+    // DSL change → swap language compartment for features (completions, indent)
+    // and rebuild per-section syntax highlights.
     this._unsub.push(state.on('change', () => {
-      if (state.activeDslId !== null) return; // section override in effect
+      if (state.activeDslId !== null) return;
       const dsl = state.data?.dslType ?? 'markdown';
       if (dsl !== this._currentDsl) {
         this._currentDsl = dsl;
         this._swapLanguage(dsl);
+        if (this._view) {
+          this._view.dispatch({ effects: rebuildSectionHighlightsEffect.of(null) });
+        }
+      }
+    }));
+
+    // Plugin installed → existing #!dslId sections now have a language → rebuild
+    this._unsub.push(state.on('plugin-added', () => {
+      if (this._view) {
+        this._view.dispatch({ effects: rebuildSectionHighlightsEffect.of(null) });
       }
     }));
   }
@@ -523,7 +617,9 @@ export class Editor {
           const effectiveDsl = newDslId ?? state.data?.dslType ?? 'markdown';
           if (effectiveDsl !== this._currentDsl) {
             this._currentDsl = effectiveDsl;
-            this._swapLanguage(effectiveDsl);
+            // Guard against CM6 dispatch failures (e.g. plugin extensions with
+            // isolated module instances) so the section-change event always fires.
+            try { this._swapLanguage(effectiveDsl); } catch { /* continue */ }
           }
           state.emit('active-section-change', {
             dslId:   effectiveDsl,

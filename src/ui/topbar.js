@@ -62,9 +62,9 @@ export class TopBar {
 
     this.el.innerHTML = `
       <div class="topbar">
-        <button class="dsl-icon-btn${this._dslMenuOpen ? ' active' : ''}" id="tb-dsl-menu-toggle"
+        <button class="tb-hamburger${this._dslMenuOpen ? ' active' : ''}" id="tb-dsl-menu-toggle"
           title="Menu" aria-label="Menu">
-          ${_renderHoneycombSVG(listDSLs(), activeDslId)}
+          ${iconHamburger()}
         </button>
         <span
           class="topbar-title"
@@ -73,6 +73,9 @@ export class TopBar {
           data-placeholder="Untitled"
           title="Click to edit title"
         >${escHtml(state.title)}</span>
+        <div id="tb-hex-row" class="tb-hex-row" aria-hidden="true">
+          ${_renderHoneycombHorizontalSVG(listDSLs(), activeDslId)}
+        </div>
 
         <div class="topbar-right">
           <div class="vcs-pill-group">
@@ -334,10 +337,10 @@ export class TopBar {
    * without flickering the entire topbar.
    */
   _refreshHoneycomb() {
-    const btn = this.el.querySelector('#tb-dsl-menu-toggle');
-    if (!btn) return;
+    const hexRow = this.el.querySelector('#tb-hex-row');
+    if (!hexRow) return;
     const activeDslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
-    btn.innerHTML = _renderHoneycombSVG(listDSLs(), activeDslId);
+    hexRow.innerHTML = _renderHoneycombHorizontalSVG(listDSLs(), activeDslId);
   }
 
   _bindDropdownEvents() {
@@ -499,6 +502,14 @@ export class TopBar {
 // Icon SVGs (inline, no external deps)
 // ---------------------------------------------------------------------------
 
+function iconHamburger() {
+  return `<svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor" aria-hidden="true">
+    <rect x="0" y="0"  width="14" height="2" rx="1"/>
+    <rect x="0" y="5"  width="14" height="2" rx="1"/>
+    <rect x="0" y="10" width="14" height="2" rx="1"/>
+  </svg>`;
+}
+
 function iconCommit() {
   return `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
     <circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -636,6 +647,55 @@ function _renderHoneycombSVG(dsls, activeDslId) {
   return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
     fill="none" xmlns="http://www.w3.org/2000/svg"
     class="tb-honeycomb" aria-hidden="true">${hexSvgs}</svg>`;
+}
+
+/**
+ * Horizontal honeycomb row — pointy-top hexagons sharing flat vertical edges.
+ * One hex per installed DSL; active DSL hex is filled.
+ */
+function _renderHoneycombHorizontalSVG(dsls, activeDslId) {
+  if (!dsls.length) return '';
+
+  const R    = 10;
+  const HH   = R * Math.sqrt(3) / 2;   // half-width of each hex ≈ 8.66
+  const STEP = R * Math.sqrt(3);        // center-to-center spacing ≈ 17.32
+  const PAD  = 2;
+
+  // Pointy-top hex: points at 12 and 6 o'clock, flat left/right edges
+  function hexPath(cx, cy) {
+    return [
+      `M ${cx.toFixed(1)},${(cy - R).toFixed(1)}`,
+      `L ${(cx + HH).toFixed(1)},${(cy - R / 2).toFixed(1)}`,
+      `L ${(cx + HH).toFixed(1)},${(cy + R / 2).toFixed(1)}`,
+      `L ${cx.toFixed(1)},${(cy + R).toFixed(1)}`,
+      `L ${(cx - HH).toFixed(1)},${(cy + R / 2).toFixed(1)}`,
+      `L ${(cx - HH).toFixed(1)},${(cy - R / 2).toFixed(1)}`,
+      'Z'
+    ].join(' ');
+  }
+
+  const W  = (2 * PAD + dsls.length * STEP).toFixed(1);
+  const H  = (2 * R + 2 * PAD).toFixed(1);
+  const cy = R + PAD;
+
+  const hexSvgs = dsls.map((dsl, i) => {
+    const cx       = PAD + HH + i * STEP;
+    const isActive = dsl.id === activeDslId;
+    return `<g data-dsl="${escHtml(dsl.id)}">
+      <path d="${hexPath(cx, cy)}"
+        fill="${isActive ? 'var(--accent, #89b4fa)' : 'none'}"
+        stroke="${isActive ? 'var(--accent, #89b4fa)' : 'var(--text-sub, #a6adc8)'}"
+        stroke-width="1.5"/>
+      <text x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" dy="0.35em"
+        text-anchor="middle" font-size="7" font-family="inherit"
+        fill="${isActive ? 'var(--bg, #1e1e2e)' : 'var(--text-sub, #a6adc8)'}"
+        font-weight="bold">${escHtml(dsl.label ?? dsl.id.slice(0, 2))}</text>
+    </g>`;
+  }).join('');
+
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
+    fill="none" xmlns="http://www.w3.org/2000/svg"
+    class="tb-honeycomb-h" aria-hidden="true">${hexSvgs}</svg>`;
 }
 
 /**

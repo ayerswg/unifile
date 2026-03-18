@@ -29,11 +29,9 @@
  * File extension: .marp
  */
 
-import { syntaxHighlighting } from '@codemirror/language';
 import { markdown as cmMarkdown, markdownKeymap } from '@codemirror/lang-markdown';
 import { keymap, ViewPlugin, Decoration, EditorView } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
-import { catppuccinHighlight } from '../ui/editor-theme.js';
 import { Marp } from '@marp-team/marp-core';
 import PptxGenJS from 'pptxgenjs';
 import { registerDSL } from './registry.js';
@@ -593,7 +591,6 @@ const marpEditorTheme = EditorView.baseTheme({
 function getEditorExtensions() {
   return [
     cmMarkdown(),                        // Lezer syntax tree → markdownKeymap works
-    syntaxHighlighting(catppuccinHighlight),
     keymap.of(markdownKeymap),           // list continuation, Tab indent, smart Backspace
     marpDecoPlugin,                      // front-matter + slide-separator colours
     marpEditorTheme,

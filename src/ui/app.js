@@ -18,6 +18,15 @@ import {
 import { isEncrypted, decryptData } from '../core/crypto.js';
 import { getDSL, registerDSL } from '../dsl/registry.js';
 
+// Host API surface — exposed on globalThis.__uf so that installed plugins can
+// import the same module instances as the host instead of bundling their own.
+// Without this, plugins end up with isolated copies of CodeMirror facets and
+// a separate state singleton, breaking syntax highlighting and cross-component
+// events (abcjs playback, note-click→editor jump, etc.).
+import { catppuccinHighlight } from './editor-theme.js';
+import { StreamLanguage, syntaxHighlighting } from '@codemirror/language';
+import { tags as lezerTags, Tag as lezerTag, highlightTree } from '@lezer/highlight';
+
 import { initTheme } from './theme.js';
 import { TopBar } from './topbar.js';
 import { Editor } from './editor.js';
@@ -81,23 +90,27 @@ export class App {
       dsl: this._getDsl(data.dslType)
     });
 
-    // 6. Load any stored DSL plugins from the quine data (before mounting components
+    // 6. Expose host APIs for plugins (must run before plugins are loaded so that
+    //    plugins can use the host's CM6 + state instances instead of bundling copies)
+    this._exposeHostAPIs();
+
+    // 7. Load any stored DSL plugins from the quine data (before mounting components
     //    so the topbar renders with all plugins already registered)
     this._loadStoredPlugins(data);
 
-    // 7. Render the shell
+    // 8. Render the shell
     this._buildShell();
 
-    // 8. Bind plugin drag-and-drop handler
+    // 9. Bind plugin drag-and-drop handler
     this._bindPluginDrop();
 
-    // 9. Mount components
+    // 10. Mount components
     this._mountComponents();
 
-    // 10. Global keyboard shortcuts
+    // 11. Global keyboard shortcuts
     this._bindGlobalKeys();
 
-    // 9. PWA: register service worker
+    // 12. PWA: register service worker
     if (!IS_QUINE && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js').catch(console.warn);
     }
@@ -343,6 +356,28 @@ export class App {
   // ---------------------------------------------------------------------------
   // Plugin infrastructure
   // ---------------------------------------------------------------------------
+
+  /**
+   * Expose the host's module instances on globalThis.__uf so that installed
+   * plugins can use them instead of bundling their own isolated copies.
+   *
+   * Without this:
+   *   - Plugin's @codemirror/language is a different module instance → CM6 facets
+   *     don't match the host's → syntax highlighting broken in the language compartment.
+   *   - Plugin's state.js is a different EventEmitter copy → plugin event listeners
+   *     (editor-select, dsl-select, abc-play …) never fire on host events → playback,
+   *     note-click-to-jump, and reverse-highlight all silently fail.
+   *
+   * Must be called before _loadStoredPlugins() so stubs resolve correctly.
+   */
+  _exposeHostAPIs() {
+    globalThis.__uf = {
+      state,
+      catppuccinHighlight,
+      cmLanguage:    { StreamLanguage, syntaxHighlighting },
+      lezerHighlight: { tags: lezerTags, Tag: lezerTag, highlightTree },
+    };
+  }
 
   /**
    * Eval and register all DSL plugins stored in the quine data.

@@ -294,8 +294,8 @@ html, body {
   user-select: none;
 }
 
-/* DSL menu button — clickable icon at far left, opens the tools/settings dropdown */
-.dsl-icon-btn {
+/* Hamburger menu button — far left, opens the tools/settings dropdown */
+.tb-hamburger {
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -303,25 +303,33 @@ html, body {
   border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--text-muted);
-  padding: 3px 5px;
+  padding: 5px 6px;
   cursor: pointer;
   transition: color .15s, border-color .15s, background .15s;
   user-select: none;
 }
-.dsl-icon-btn:hover {
+.tb-hamburger:hover {
   color: var(--text);
   border-color: var(--border);
   background: var(--bg-surface);
 }
-.dsl-icon-btn.active {
+.tb-hamburger.active {
   color: var(--text);
   border-color: var(--border);
   background: var(--bg-overlay);
 }
 
+/* Horizontal hex row — shown inline after the title */
+.tb-hex-row {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  line-height: 0;
+}
 
 /* Honeycomb DSL hexagons SVG in topbar — sizing handled by SVG attributes */
-.tb-honeycomb { display: block; line-height: 0; }
+.tb-honeycomb  { display: block; line-height: 0; }
+.tb-honeycomb-h { display: block; line-height: 0; }
 
 /* (topbar-extras kept for any legacy references) */
 .topbar-extras {

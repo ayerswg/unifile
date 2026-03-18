@@ -10,8 +10,7 @@
  */
 
 import mermaid from 'mermaid';
-import { StreamLanguage, syntaxHighlighting } from '@codemirror/language';
-import { catppuccinHighlight } from '../ui/editor-theme.js';
+import { StreamLanguage } from '@codemirror/language';
 import { registerDSL } from './registry.js';
 
 // ---------------------------------------------------------------------------
@@ -123,7 +122,6 @@ async function exportPNG(content) {
 function getEditorExtensions() {
   return [
     mermaidLanguage,
-    syntaxHighlighting(catppuccinHighlight)
   ];
 }
 

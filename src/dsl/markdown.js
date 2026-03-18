@@ -18,7 +18,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { markdown as cmMarkdown, commonmarkLanguage } from '@codemirror/lang-markdown';
 import { GFM } from '@lezer/markdown';
-import { Language, syntaxHighlighting } from '@codemirror/language';
+import { Language } from '@codemirror/language';
 import { keymap, EditorView, ViewPlugin, Decoration, WidgetType } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { markdownKeymap } from '@codemirror/lang-markdown';
@@ -34,7 +34,6 @@ const gfmEditorLanguage = new Language(
   [],
   'markdown'
 );
-import { catppuccinHighlight } from '../ui/editor-theme.js';
 import { registerDSL } from './registry.js';
 import {
   Document, Paragraph, TextRun, HeadingLevel,
@@ -723,8 +722,6 @@ function getEditorExtensions() {
     cmMarkdown({ base: gfmEditorLanguage }),
     // Continue list items on Enter, smart delete with Backspace
     keymap.of(markdownKeymap),
-    // Catppuccin syntax highlighting — **bold**, *italic*, ~~struck~~, etc.
-    syntaxHighlighting(catppuccinHighlight),
     // Collapse base64 image data URLs to a readable widget in the editor
     imageDataUrlPlugin,
     // Handle paste/drop of image files → insert as markdown with base64 data URL
