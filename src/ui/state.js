@@ -110,6 +110,12 @@ class AppState extends EventBus {
 
     /** @type {{ from: number, to: number }|null} Active section content range; null → whole doc */
     this.activeSectionRange = null;
+
+    /** @type {string} Primary model ID (from front matter 'model' key, defaults to 'flow') */
+    this.primaryModel = 'flow';
+
+    /** @type {string|null} Secondary model ID (from front matter 'model2' key) */
+    this.secondaryModel = null;
   }
 
   // -------------------------------------------------------------------------

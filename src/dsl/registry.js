@@ -46,6 +46,14 @@ export function getDSL(id) {
 }
 
 /**
+ * Deregister a DSL plugin by id.
+ * @param {string} id
+ */
+export function deregisterDSL(id) {
+  _registry.delete(id);
+}
+
+/**
  * List all registered DSLs.
  * @returns {object[]}
  */

@@ -16,7 +16,8 @@ import {
   IS_QUINE
 } from '../core/storage.js';
 import { isEncrypted, decryptData } from '../core/crypto.js';
-import { getDSL, registerDSL } from '../dsl/registry.js';
+import { getDSL, registerDSL, deregisterDSL } from '../dsl/registry.js';
+import { parseGlobalFrontMatter, serializeGlobalFrontMatter } from '../core/front-matter.js';
 
 // Host API surface — exposed on globalThis.__uf so that installed plugins can
 // import the same module instances as the host instead of bundling their own.
@@ -81,13 +82,16 @@ export class App {
     let viewMode = prefs.viewMode ?? VIEW_MODES.SPLIT;
     if (_isMobile() && viewMode === VIEW_MODES.SPLIT) viewMode = VIEW_MODES.PREVIEW;
 
+    const { meta: fmMeta } = parseGlobalFrontMatter(currentContent);
     state.update({
       data,
       vcs,
       currentContent,
       isDirty: false,
       viewMode,
-      dsl: this._getDsl(data.dslType)
+      dsl: this._getDsl(data.dslType),
+      primaryModel:   fmMeta.model  ?? 'flow',
+      secondaryModel: fmMeta.model2 ?? null,
     });
 
     // 6. Expose host APIs for plugins (must run before plugins are loaded so that
@@ -106,6 +110,9 @@ export class App {
 
     // 10. Mount components
     this._mountComponents();
+
+    // 10b. Bind model-related handlers (needs editor component from step 10)
+    this._bindModelHandlers();
 
     // 11. Global keyboard shortcuts
     this._bindGlobalKeys();
@@ -307,6 +314,13 @@ export class App {
         if (m) data.plugins[m[1]] = code;
         state.update({ data, isDirty: true });
         state.emit('plugin-added');
+      },
+
+      onRemovePlugin: (id) => {
+        deregisterDSL(id);
+        const data = state.data;
+        if (data.plugins) delete data.plugins[id];
+        state.update({ data, isDirty: true });
       }
     };
   }
@@ -452,6 +466,39 @@ export class App {
   _getDsl(dslType) {
     try { return getDSL(dslType); }
     catch { return null; }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Model handlers
+  // ---------------------------------------------------------------------------
+
+  _bindModelHandlers() {
+    // Keep primaryModel/secondaryModel in sync whenever the document changes.
+    state.on('content-change', ({ content }) => {
+      const { meta } = parseGlobalFrontMatter(content);
+      const primaryModel   = meta.model  ?? 'flow';
+      const secondaryModel = meta.model2 ?? null;
+      if (primaryModel !== state.primaryModel || secondaryModel !== state.secondaryModel) {
+        state.update({ primaryModel, secondaryModel });
+      }
+    });
+
+    // Topbar model picker → patch the document's front matter.
+    state.on('model-set', ({ slot, modelId }) => {
+      const content = state.currentContent;
+      const { meta, bodyFrom } = parseGlobalFrontMatter(content);
+
+      if (slot === 'primary') {
+        if (!modelId || modelId === 'flow') delete meta.model;
+        else meta.model = modelId;
+      } else {
+        if (!modelId) delete meta.model2;
+        else meta.model2 = modelId;
+      }
+
+      const newContent = serializeGlobalFrontMatter(meta) + content.slice(bodyFrom);
+      this._components.editor?.setValue(newContent);
+    });
   }
 
   _bindGlobalKeys() {

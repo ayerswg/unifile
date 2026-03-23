@@ -37,10 +37,6 @@ export class TopBar {
 
     this._unsub.push(state.on('change', () => this.render()));
     this._unsub.push(state.on('content-change', () => this._updateDirty()));
-    // Active section change → update honeycomb highlight without full re-render
-    this._unsub.push(state.on('active-section-change', () => this._refreshHoneycomb()));
-    // Plugin installed → full re-render to show new hex
-    this._unsub.push(state.on('plugin-added', () => this.render()));
 
     this.render();
   }
@@ -54,11 +50,10 @@ export class TopBar {
   // ---------------------------------------------------------------------------
 
   render() {
-    const { data, isDirty } = state;
+    const { isDirty } = state;
     const hash = state.shortHeadHash;
     const branch = state.currentBranch;
     const isDetached = state.isDetached;
-    const activeDslId = state.activeDslId ?? data?.dslType ?? 'markdown';
 
     this.el.innerHTML = `
       <div class="topbar">
@@ -73,9 +68,6 @@ export class TopBar {
           data-placeholder="Untitled"
           title="Click to edit title"
         >${escHtml(state.title)}</span>
-        <div id="tb-hex-row" class="tb-hex-row" aria-hidden="true">
-          ${_renderHoneycombHorizontalSVG(listDSLs(), activeDslId)}
-        </div>
 
         <div class="topbar-right">
           <div class="vcs-pill-group">
@@ -159,8 +151,8 @@ export class TopBar {
           ${iconImport()} Import & merge…
           <kbd>⌃⇧M</kbd>
         </li>
-        <li class="tools-menu-item" id="tb-install-plugin" title="Install a DSL plugin (.plugin.js file)">
-          ${iconPlugin()} Install plugin…
+        <li class="tools-menu-item" id="tb-manage-plugins" title="Manage installed DSL plugins">
+          ${iconPlugin()} Manage plugins…
         </li>
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-archived-comments" title="Browse archived comment threads">
@@ -331,18 +323,6 @@ export class TopBar {
     this._bindDropdownEvents();
   }
 
-  /**
-   * Refresh just the honeycomb SVG in the button, without a full re-render.
-   * Called on 'active-section-change' so the active hex updates on every cursor move
-   * without flickering the entire topbar.
-   */
-  _refreshHoneycomb() {
-    const hexRow = this.el.querySelector('#tb-hex-row');
-    if (!hexRow) return;
-    const activeDslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
-    hexRow.innerHTML = _renderHoneycombHorizontalSVG(listDSLs(), activeDslId);
-  }
-
   _bindDropdownEvents() {
     // DSL help modal — uses active section DSL or document default
     this.el.querySelector('#tb-dsl-help')?.addEventListener('click', () => {
@@ -372,28 +352,10 @@ export class TopBar {
       if (state.activePanel === PANELS.MERGE) state.closePanel();
       else state.openPanel(PANELS.MERGE);
     });
-    this.el.querySelector('#tb-install-plugin')?.addEventListener('click', () => {
+    this.el.querySelector('#tb-manage-plugins')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
-      // Trigger a hidden file picker — drag-and-drop is unreliable in some browsers
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.js';
-      input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
-      document.body.appendChild(input);
-      input.addEventListener('change', async () => {
-        const file = input.files?.[0];
-        input.remove();
-        if (!file) return;
-        const code = await file.text();
-        if (!code.includes('@unifile-plugin')) {
-          // eslint-disable-next-line no-alert
-          alert(`"${file.name}" does not appear to be a unifile plugin.\n\nExpected a file containing a "@unifile-plugin" header comment.`);
-          return;
-        }
-        this.handlers.onInstallPlugin?.(code, file.name);
-      });
-      input.click();
+      showManagePluginsModal(this.handlers);
     });
 
     this.el.querySelector('#tb-archived-comments')?.addEventListener('click', () => {
@@ -583,147 +545,6 @@ function iconHelp() {
 }
 
 // ---------------------------------------------------------------------------
-// Honeycomb logo
-//
-// Renders a flat-top hexagonal grid — one hex per installed DSL plugin.
-// The hex for the currently active DSL (cursor position) is filled;
-// inactive hexes are outlined only. Labels use periodic-table abbreviations
-// (e.g. "Md" for Markdown, "Mm" for Mermaid) stored on each DSL plugin.
-// ---------------------------------------------------------------------------
-
-function _renderHoneycombSVG(dsls, activeDslId) {
-  if (!dsls.length) return '';
-
-  const R  = 11;                              // circumradius (vertex-to-centre)
-  const HH = R * Math.sqrt(3) / 2;           // half of flat-to-flat height ≈ 9.5
-  const COL_SPACING = R * Math.sqrt(3);       // horizontal between column centres ≈ 19.1
-  const ROW_SPACING = HH * 2 + 3;            // vertical between row centres ≈ 22
-  const COL1_STAGGER = HH + 1.5;             // col 1 shifts down by ~11
-
-  const COL0_X = R + 2;                      // ≈ 13
-  const COL1_X = COL0_X + COL_SPACING;       // ≈ 32
-
-  function hexPath(cx, cy) {
-    return [
-      `M ${(cx+R).toFixed(1)},${cy.toFixed(1)}`,
-      `L ${(cx+R/2).toFixed(1)},${(cy-HH).toFixed(1)}`,
-      `L ${(cx-R/2).toFixed(1)},${(cy-HH).toFixed(1)}`,
-      `L ${(cx-R).toFixed(1)},${cy.toFixed(1)}`,
-      `L ${(cx-R/2).toFixed(1)},${(cy+HH).toFixed(1)}`,
-      `L ${(cx+R/2).toFixed(1)},${(cy+HH).toFixed(1)}`,
-      'Z'
-    ].join(' ');
-  }
-
-  const placements = dsls.map((dsl, i) => {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    const cx  = col === 0 ? COL0_X : COL1_X;
-    const cy  = col === 0
-      ? (R + 2) + row * ROW_SPACING
-      : (R + 2 + COL1_STAGGER) + row * ROW_SPACING;
-    return { dsl, cx, cy, isActive: dsl.id === activeDslId };
-  });
-
-  const W = dsls.length > 1
-    ? Math.ceil(COL1_X + R + 3)
-    : Math.ceil(COL0_X + R + 2);
-  const maxCY = Math.max(...placements.map(p => p.cy));
-  const H = Math.ceil(maxCY + HH + 3);
-
-  const hexSvgs = placements.map(({ dsl, cx, cy, isActive }) => `
-    <g>
-      <path d="${hexPath(cx, cy)}"
-        fill="${isActive ? 'var(--accent, #89b4fa)' : 'none'}"
-        stroke="${isActive ? 'var(--accent, #89b4fa)' : 'var(--text-sub, #a6adc8)'}"
-        stroke-width="1.5"/>
-      <text x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" dy="0.35em"
-        text-anchor="middle"
-        font-size="7.5" font-family="inherit"
-        fill="${isActive ? 'var(--bg, #1e1e2e)' : 'var(--text-sub, #a6adc8)'}"
-        font-weight="bold">${escHtml(dsl.label ?? dsl.id.slice(0,2))}</text>
-    </g>`).join('');
-
-  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
-    fill="none" xmlns="http://www.w3.org/2000/svg"
-    class="tb-honeycomb" aria-hidden="true">${hexSvgs}</svg>`;
-}
-
-/**
- * Horizontal honeycomb row — pointy-top hexagons sharing flat vertical edges.
- * One hex per installed DSL; active DSL hex is filled.
- */
-function _renderHoneycombHorizontalSVG(dsls, activeDslId) {
-  if (!dsls.length) return '';
-
-  const R    = 10;
-  const HH   = R * Math.sqrt(3) / 2;   // half-width of each hex ≈ 8.66
-  const STEP = R * Math.sqrt(3);        // center-to-center spacing ≈ 17.32
-  const PAD  = 2;
-
-  // Pointy-top hex: points at 12 and 6 o'clock, flat left/right edges
-  function hexPath(cx, cy) {
-    return [
-      `M ${cx.toFixed(1)},${(cy - R).toFixed(1)}`,
-      `L ${(cx + HH).toFixed(1)},${(cy - R / 2).toFixed(1)}`,
-      `L ${(cx + HH).toFixed(1)},${(cy + R / 2).toFixed(1)}`,
-      `L ${cx.toFixed(1)},${(cy + R).toFixed(1)}`,
-      `L ${(cx - HH).toFixed(1)},${(cy + R / 2).toFixed(1)}`,
-      `L ${(cx - HH).toFixed(1)},${(cy - R / 2).toFixed(1)}`,
-      'Z'
-    ].join(' ');
-  }
-
-  const W  = (2 * PAD + dsls.length * STEP).toFixed(1);
-  const H  = (2 * R + 2 * PAD).toFixed(1);
-  const cy = R + PAD;
-
-  const hexSvgs = dsls.map((dsl, i) => {
-    const cx       = PAD + HH + i * STEP;
-    const isActive = dsl.id === activeDslId;
-    return `<g data-dsl="${escHtml(dsl.id)}">
-      <path d="${hexPath(cx, cy)}"
-        fill="${isActive ? 'var(--accent, #89b4fa)' : 'none'}"
-        stroke="${isActive ? 'var(--accent, #89b4fa)' : 'var(--text-sub, #a6adc8)'}"
-        stroke-width="1.5"/>
-      <text x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" dy="0.35em"
-        text-anchor="middle" font-size="7" font-family="inherit"
-        fill="${isActive ? 'var(--bg, #1e1e2e)' : 'var(--text-sub, #a6adc8)'}"
-        font-weight="bold">${escHtml(dsl.label ?? dsl.id.slice(0, 2))}</text>
-    </g>`;
-  }).join('');
-
-  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
-    fill="none" xmlns="http://www.w3.org/2000/svg"
-    class="tb-honeycomb-h" aria-hidden="true">${hexSvgs}</svg>`;
-}
-
-/**
- * Small muted icon representing the document's DSL type.
- * Kept for reference; replaced by _renderHoneycombSVG in the topbar.
- */
-function iconForDsl(dslType) {
-  if (dslType === 'mermaid') {
-    // Official mermaid.js logo (trident/mermaid-tail shape)
-    return `<svg width="14" height="14" viewBox="0 0 491 491" fill="currentColor">
-      <path d="M407.48,111.18C335.587,108.103 269.573,152.338 245.08,220C220.587,152.338 154.573,108.103 82.68,111.18C80.285,168.229 107.577,222.632 154.74,254.82C178.908,271.419 193.35,298.951 193.27,328.27L193.27,379.13L296.9,379.13L296.9,328.27C296.816,298.953 311.255,271.42 335.42,254.82C382.596,222.644 409.892,168.233 407.48,111.18Z"/>
-    </svg>`;
-  }
-  if (dslType === 'abcjs') {
-    // Lucide "music" icon — filled note head + stem + flag
-    return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="8" cy="18" r="4"/>
-      <path d="M12 18V2l7 4"/>
-    </svg>`;
-  }
-  // Markdown — official markdown-mark (dcurtis/markdown-mark)
-  return `<svg width="18" height="11" viewBox="0 0 208 128" fill="currentColor">
-    <path d="M193 128H15a15 15 0 0 1-15-15V15A15 15 0 0 1 15 0h178a15 15 0 0 1 15 15v98a15 15 0 0 1-15 15zM50 98V59l20 25 20-25v39h20V30H90L70 55 50 30H30v68zm134-34h-20V30h-20v34h-20l30 35z"/>
-  </svg>`;
-}
-
-// ---------------------------------------------------------------------------
 // DSL help content
 // ---------------------------------------------------------------------------
 
@@ -785,12 +606,14 @@ console.log(x);
       {
         title: 'Front Matter',
         content: `<pre><code>---
+model: flow
+model2: grid
 title: My Document
 subtitle: A subtitle
 author: Jane Smith
 date: 2026-01-01
 ---</code></pre>
-<p class="help-note">YAML block at the top of the document. Renders as a title block above the content.</p>`
+<p class="help-note"><code>model</code> sets the document's primary coordinate model (flow / grid / spatial / timeline / graph). <code>model2</code> sets an optional secondary model. <code>title</code>, <code>subtitle</code>, <code>author</code>, <code>date</code> render as a title block.</p>`
       },
       {
         title: 'Page Breaks',
@@ -1136,6 +959,97 @@ function showDslHelpModal(dslType) {
 
   // Focus the modal for keyboard accessibility
   overlay.querySelector('.dsl-help-modal').focus?.();
+}
+
+function showManagePluginsModal(handlers) {
+  const overlay = document.createElement('div');
+  overlay.className = 'dsl-help-overlay';
+
+  const renderContent = () => {
+    const plugins = state.data?.plugins ?? {};
+    const ids = Object.keys(plugins);
+
+    const rows = ids.map(id => {
+      let dslName = id;
+      try { dslName = listDSLs().find(d => d.id === id)?.name ?? id; } catch { /* ignore */ }
+      return `
+        <div class="plugin-mgr-row" data-id="${escHtml(id)}">
+          <code class="plugin-mgr-shebang">#!${escHtml(id)}</code>
+          <span class="plugin-mgr-name">${escHtml(dslName)}</span>
+          <button class="plugin-mgr-remove" data-id="${escHtml(id)}" title="Remove plugin">Remove</button>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="dsl-help-modal" role="dialog" aria-modal="true" aria-label="Manage plugins" tabindex="-1">
+        <div class="dsl-help-header">
+          <div class="dsl-help-title">Manage Plugins</div>
+          <button class="dsl-help-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="dsl-help-body plugin-mgr-body">
+          ${ids.length === 0
+            ? '<p class="plugin-mgr-empty">No plugins installed. Use the button below to install a .plugin.js file.</p>'
+            : `<div class="plugin-mgr-list">${rows}</div>`}
+        </div>
+        <div class="dsl-help-footer plugin-mgr-footer">
+          <button class="plugin-mgr-install-btn" id="plugin-mgr-install">Install plugin…</button>
+        </div>
+      </div>
+    `;
+  };
+
+  overlay.innerHTML = renderContent();
+  document.body.appendChild(overlay);
+
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('.dsl-help-close').addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+
+  const refresh = () => {
+    overlay.innerHTML = renderContent();
+    // Re-bind events after refresh
+    overlay.querySelector('.dsl-help-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    bindActions();
+  };
+
+  const bindActions = () => {
+    overlay.querySelectorAll('.plugin-mgr-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        handlers.onRemovePlugin?.(id);
+        refresh();
+      });
+    });
+
+    overlay.querySelector('#plugin-mgr-install')?.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.js';
+      input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+      document.body.appendChild(input);
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        input.remove();
+        if (!file) return;
+        const code = await file.text();
+        if (!code.includes('@unifile-plugin')) {
+          // eslint-disable-next-line no-alert
+          alert(`"${file.name}" does not appear to be a unifile plugin.\n\nExpected a file containing a "@unifile-plugin" header comment.`);
+          return;
+        }
+        handlers.onInstallPlugin?.(code, file.name);
+        refresh();
+      });
+      input.click();
+    });
+  };
+
+  bindActions();
 }
 
 function iconExternalLink() {
