@@ -119,7 +119,7 @@ export const DSL_META = {
 };
 
 // DSLs that can be built as standalone plugin bundles (drag-and-drop installation)
-const PLUGIN_DSLS = ['mermaid', 'abcjs', 'marp'];
+const PLUGIN_DSLS = ['mermaid', 'abcjs', 'marp', 'fountain'];
 
 if (!DSL_META[dslArg]) {
   console.error(`Unknown --dsl: "${dslArg}". Choose: ${Object.keys(DSL_META).join(' | ')}`);

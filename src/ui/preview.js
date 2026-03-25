@@ -21,6 +21,7 @@ import { parseGlobalFrontMatter } from '../core/front-matter.js';
 // Flow model layouts
 import { renderSlides,   teardownSlides   } from '../layout/flow-slides.js';
 import { renderDocument, teardownDocument } from '../layout/flow-document.js';
+import { renderWebpage,  teardownWebpage  } from '../layout/flow-webpage.js';
 
 // Primary model renderers
 import { renderGrid,     teardownGrid     } from '../layout/grid-table.js';
@@ -62,11 +63,17 @@ export class Preview {
     this._unsub.push(state.on('branch-switch', ({ content }) => {
       this._scheduleRender(content, true);
     }));
-    // In any model/layout mode the full document re-renders; debounce to avoid thrash.
     this._unsub.push(state.on('active-section-change', ({ version }) => {
       this._activeSectionVersion = version ?? null;
-      const immediate = !this._lastRenderer;
-      this._scheduleRender(state.currentContent, immediate);
+      // In layout mode (slides / document / webpage) the full document is always
+      // rendered — section-cursor changes never need a fresh render.  Only
+      // content changes (content-change) and DSL/model changes (change) do.
+      // Skipping here also prevents the note-deselection bug where CM6's
+      // post-focus DOM-selection reconciliation fires a second
+      // active-section-change (without fromDslSelect) and wipes the preview.
+      if (this._lastRenderer) return;
+      // Standalone mode: render immediately so the section switches without lag.
+      this._scheduleRender(state.currentContent, true);
     }));
   }
 
@@ -83,6 +90,10 @@ export class Preview {
     this.content.addEventListener('click', (e) => {
       let el = e.target;
       while (el && el !== this.content) {
+        // If a DSL wrapper is marked as self-handling (e.g. abcjs, which fires
+        // its own precise dsl-select via its click listener), bail out here so
+        // we don't clobber the fine-grained selection with the block-level one.
+        if (el.dataset?.dslHandled) return;
         if (el.dataset?.docFrom != null) {
           const pos = parseInt(el.dataset.docFrom, 10);
           const to  = el.dataset.docTo != null ? parseInt(el.dataset.docTo, 10) : pos;
@@ -135,7 +146,10 @@ export class Preview {
   async _render(content) {
     const { meta, bodyFrom } = parseGlobalFrontMatter(content ?? '');
     const model  = meta.model ?? state.primaryModel ?? 'flow';
-    const layout = meta.layout ?? null;
+    // Webpage is the default layout for the flow model — it renders the full
+    // document body as a flowing webpage and treats `---` as <hr>.
+    // Explicit `layout:` in front matter overrides this default.
+    const layout = meta.layout ?? (model === 'flow' ? 'webpage' : null);
 
     // ── 1. Non-flow primary model → model renderer ─────────────────────────
     if (model !== 'flow') {
@@ -312,6 +326,7 @@ const _MODEL_RENDERERS = {
 const _FLOW_LAYOUT_RENDERERS = {
   slides:   { render: renderSlides,   teardown: teardownSlides   },
   document: { render: renderDocument, teardown: teardownDocument },
+  webpage:  { render: renderWebpage,  teardown: teardownWebpage  },
 };
 
 // ---------------------------------------------------------------------------

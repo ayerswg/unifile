@@ -38,6 +38,10 @@
 import { parseDocSections } from '../core/doc-sections.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 import { getDSL } from '../dsl/registry.js';
+import { attachScaleObserver, detachScaleObserver } from './_scale.js';
+
+// Intrinsic design width for all slides — zoom scales this to fit the container.
+const SLIDE_INTRINSIC_W = 960;
 
 // Aspect ratios for preset dimension names — used as `aspect-ratio` values.
 const ASPECT_RATIO = {
@@ -64,6 +68,9 @@ const ASPECT_RATIO = {
 export async function renderSlides(content, container) {
   const { meta, bodyFrom } = parseGlobalFrontMatter(content);
   const ar     = _aspectRatio(meta.dimensions);
+  // `margin:` in front matter overrides the default slide frame padding.
+  // Accepts any CSS padding shorthand: "40px", "40px 60px", etc.
+  const margin = meta.margin ?? null;   // null → keep CSS default (48px 56px)
   const slides = _splitSlides(content, bodyFrom);
 
   container.innerHTML = '';
@@ -77,12 +84,15 @@ export async function renderSlides(content, container) {
     const slide = slides[i];
     const outer = document.createElement('div');
     outer.className  = 'uf-slide';
+    // Fixed intrinsic size — zoom (set by ResizeObserver) handles visual scaling.
+    outer.style.width       = `${SLIDE_INTRINSIC_W}px`;
     outer.style.aspectRatio = ar;
     outer.setAttribute('aria-label', `Slide ${i + 1} of ${slides.length}`);
     outer.dataset.docFrom = slide.from;
 
     const frame = document.createElement('div');
     frame.className = 'uf-slide-frame';
+    if (margin) frame.style.padding = margin;   // override CSS default when specified
     outer.appendChild(frame);
 
     const badge = document.createElement('div');
@@ -94,8 +104,11 @@ export async function renderSlides(content, container) {
     deck.appendChild(outer);
 
     // Render content asynchronously — may call slow DSLs like mermaid.
-    await _renderSlideContent(slide.text, frame);
+    await _renderSlideContent(slide.text, frame, slide.from);
   }
+
+  // Scale slides to fit the container width (print-preview style — no reflow).
+  attachScaleObserver(container, '.uf-slide', SLIDE_INTRINSIC_W);
 }
 
 /**
@@ -104,6 +117,7 @@ export async function renderSlides(content, container) {
  * @param {HTMLElement} container
  */
 export function teardownSlides(container) {
+  detachScaleObserver(container);
   container.classList.remove('slides-mode');
 }
 
@@ -146,8 +160,14 @@ function _splitSlides(content, bodyFrom) {
     }
 
     if (!inFence && /^---\s*$/.test(line)) {
-      const s = current.join('\n').trim();
-      if (s) slides.push({ text: s, from: currentFrom });
+      const raw = current.join('\n');
+      const s   = raw.trim();
+      if (s) {
+        // Point `from` at the first non-whitespace character so that
+        // click-back positions land on actual content, not blank lines.
+        const lead = raw.search(/\S/);
+        slides.push({ text: s, from: currentFrom + (lead >= 0 ? lead : 0) });
+      }
       offset += line.length + 1; // +1 for the '\n'
       current = [];
       currentFrom = offset;
@@ -157,8 +177,12 @@ function _splitSlides(content, bodyFrom) {
     }
   }
 
-  const last = current.join('\n').trim();
-  if (last) slides.push({ text: last, from: currentFrom });
+  const lastRaw = current.join('\n');
+  const last    = lastRaw.trim();
+  if (last) {
+    const lead = lastRaw.search(/\S/);
+    slides.push({ text: last, from: currentFrom + (lead >= 0 ? lead : 0) });
+  }
 
   return slides.length ? slides : [{ text: '', from: bodyFrom }];
 }
@@ -176,31 +200,59 @@ function _splitSlides(content, bodyFrom) {
  * @param {string}      slideText  Slide content (positions relative to this string)
  * @param {HTMLElement} el         The `.uf-slide-frame` element
  */
-async function _renderSlideContent(slideText, el) {
+/**
+ * @param {string}      slideText  Slide content (trimmed; position 0 = slideFrom)
+ * @param {HTMLElement} el         The `.uf-slide-frame` element
+ * @param {number}      slideFrom  Absolute document offset of slideText[0]
+ */
+async function _renderSlideContent(slideText, el, slideFrom) {
   const sections = parseDocSections(slideText);
 
   if (!sections.length) {
     // No shebangs — render the entire slide as markdown.
-    await _renderPart('markdown', slideText, el);
+    await _renderPart('markdown', slideText, el, slideFrom, slideFrom + slideText.length, slideFrom);
     return;
   }
 
   // Content before the first shebang → markdown.
-  const preamble = slideText.slice(0, sections[0].from).trim();
-  if (preamble) await _renderPart('markdown', preamble, el);
+  const preambleRaw = slideText.slice(0, sections[0].from);
+  const preamble    = preambleRaw.trim();
+  if (preamble) {
+    const lead = preambleRaw.search(/\S/);
+    const pFrom = slideFrom + (lead >= 0 ? lead : 0);
+    await _renderPart('markdown', preamble, el,
+      pFrom,
+      slideFrom + sections[0].from,
+      pFrom);  // contentFrom == docFrom for plain markdown (no shebang)
+  }
 
   // Each shebang section.
   for (let i = 0; i < sections.length; i++) {
     const sec  = sections[i];
-    const next = sections[i + 1];
-    const text = slideText.slice(sec.contentFrom, next ? next.from : slideText.length).trim();
-    if (text) await _renderPart(sec.dslId, text, el);
+    const raw  = slideText.slice(sec.contentFrom, sec.to);
+    const text = raw.trim();
+    if (text) {
+      // docFrom = shebang line; dslContentFrom = first content char after shebang.
+      const lead = raw.search(/\S/);
+      await _renderPart(sec.dslId, text, el,
+        slideFrom + sec.from,
+        slideFrom + sec.to,
+        slideFrom + sec.contentFrom + (lead >= 0 ? lead : 0));
+    }
   }
 }
 
-async function _renderPart(dslId, text, parentEl) {
+async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom) {
   const wrap = document.createElement('div');
   wrap.className = `uf-slide-part uf-dsl-${_safeClass(dslId)}`;
+  // docFrom/docTo bracket the whole section including the shebang line.
+  if (docFrom != null) wrap.dataset.docFrom = docFrom;
+  if (docTo   != null) wrap.dataset.docTo   = docTo;
+  // dslContentFrom is the absolute offset of the first character of the *content*
+  // (after the shebang line and any leading whitespace).  DSL renderers that
+  // annotate fine-grained elements (fountain, mermaid, abcjs) use this as their
+  // base offset so click-back lands on the specific element, not just the block.
+  if (contentFrom != null) wrap.dataset.dslContentFrom = contentFrom;
   parentEl.appendChild(wrap);
 
   try {

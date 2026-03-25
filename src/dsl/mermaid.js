@@ -44,7 +44,8 @@ const mermaidLanguage = StreamLanguage.define({
   }
 });
 
-// Initialise once at module load
+// Initialise once at module load with the dark theme (app default).
+// The render() function re-initialises per-call based on rendering context.
 mermaid.initialize({ startOnLoad: false, theme: 'dark' });
 
 // ---------------------------------------------------------------------------
@@ -61,15 +62,95 @@ async function render(content, el) {
     return;
   }
 
+  // Print layouts (slides / document pages) are always white — force the light
+  // 'default' theme.  Everything else follows the current browser/app preference.
+  // Re-initialising before each render is safe because renders are sequential
+  // (each slide or page is awaited before the next begins).
+  const inPrintContext = !!el.closest?.('.uf-slide-frame, .uf-doc-page');
+  mermaid.initialize({ startOnLoad: false, theme: inPrintContext ? 'default' : _resolveTheme() });
+
   const id = `mermaid-${++_renderCounter}`;
 
   try {
     const { svg } = await mermaid.render(id, content);
     el.innerHTML = svg;
+
+    const svgEl = el.querySelector('svg');
+    if (svgEl) {
+      if (inPrintContext) {
+        // Make the SVG fill its container: width="100%" scales to parent,
+        // removing height lets it auto-size from viewBox aspect ratio,
+        // removing the inline style drops mermaid's own "max-width: Npx".
+        svgEl.setAttribute('width', '100%');
+        svgEl.removeAttribute('height');
+        svgEl.removeAttribute('style');
+        svgEl.querySelector('rect.background')?.remove();
+      }
+
+      // Annotate individual flowchart nodes with their source positions so
+      // click-back lands on the specific node rather than the whole block.
+      _annotateFlowNodes(svgEl, content, el);
+    }
   } catch (e) {
     el.innerHTML = `<pre class="error">Mermaid error:\n${e.message}</pre>`;
     document.getElementById(id)?.remove();
   }
+}
+
+/**
+ * Annotate individual flowchart node `<g>` elements with data-doc-from/data-doc-to
+ * so that click-back lands on the specific node line rather than the whole block.
+ *
+ * Works for `graph` / `flowchart` diagrams only — other diagram types have
+ * different SVG structures. Falls back gracefully for unknown types.
+ *
+ * @param {SVGElement} svgEl   The rendered SVG element
+ * @param {string}     content The mermaid source text passed to render()
+ * @param {Element}    wrapEl  The wrapper element with data-doc-from (absolute offset)
+ */
+function _annotateFlowNodes(svgEl, content, wrapEl) {
+  const nodes = svgEl.querySelectorAll('g.node');
+  if (!nodes.length) return;
+
+  // Absolute document offset where this section's *content* starts (after shebang).
+  // dslContentFrom is set by layout renderers; fall back to docFrom for the
+  // standalone preview path where docFrom already points at content start.
+  const base = parseInt(wrapEl.dataset.dslContentFrom ?? wrapEl.dataset.docFrom ?? '0', 10);
+
+  for (const node of nodes) {
+    // Mermaid node id format: "flowchart-NODEID-N" or "mermaid-abc-NODEID-N"
+    const rawId = node.id ?? '';
+    const m = /^(?:flowchart-|mermaid-[^-]+-|mermaid-[a-z0-9]+-)?(.+?)-\d+$/.exec(rawId);
+    if (!m) continue;
+    const nodeId = m[1];
+    if (!nodeId) continue;
+
+    // Search source text for the node ID at a word boundary.
+    const re = new RegExp(`(?:^|\\s|[\\[\\](){}|>])${_escRegex(nodeId)}(?:$|[\\s\\[\\](){}|<>\\-=.])`, 'm');
+    const match = re.exec(content);
+    if (!match) continue;
+
+    // Adjust for any leading non-ID character in the match
+    const matchStart = match.index + (match[0].search(new RegExp(_escRegex(nodeId))));
+    const lineStart  = content.lastIndexOf('\n', matchStart) + 1;
+    const lineEnd    = content.indexOf('\n', matchStart);
+
+    node.dataset.docFrom = base + lineStart;
+    node.dataset.docTo   = base + (lineEnd >= 0 ? lineEnd : content.length);
+  }
+}
+
+function _escRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Return the mermaid theme that matches the current app/browser colour scheme. */
+function _resolveTheme() {
+  const forced = document.documentElement.dataset.theme;
+  if (forced === 'light') return 'default';
+  if (forced === 'dark')  return 'dark';
+  // Auto — follow the OS/browser preference
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'default';
 }
 
 async function renderToString(content) {

@@ -2,10 +2,14 @@
  * DSL-specific preview footer controls
  *
  * Rendered below the preview pane. Currently handles ABC notation
- * play/stop. Future: piano keyboard entry, slide controls, etc.
+ * play/stop.
  *
- * The component re-renders only when the DSL type changes.
- * Incremental play-state/tune-state updates patch the existing DOM.
+ * The play button is shown only when:
+ *   1. The active DSL is 'abcjs', AND
+ *   2. A note is currently selected (red highlight) OR playback is active.
+ *
+ * This ties the button to the specific abcjs block the user last interacted
+ * with, rather than showing it unconditionally whenever an abcjs section exists.
  */
 
 import { state } from './state.js';
@@ -16,29 +20,10 @@ export class DslFooter {
     this.el = container;
     this._unsub = [];
 
-    // Full re-render when the effective DSL changes (either file-level or
-    // per-section via activeDslId).  Both trigger 'change' via state.update().
-    this._unsub.push(state.on('change', () => {
-      const newDsl = state.activeDslId ?? state.data?.dslType ?? 'markdown';
-      if (newDsl !== this._lastDsl) this.render();
-    }));
-
-    // Incremental: update play button icon/class without full re-render
-    this._unsub.push(state.on('abc-play-state', ({ playing }) => {
-      const btn = this.el.querySelector('#pf-play');
-      if (!btn) return;
-      btn.classList.toggle('playing', playing);
-      btn.title = playing ? 'Stop (Space)' : 'Play (Space)';
-      btn.querySelector('.pf-icon').innerHTML = playing ? _iconStop() : _iconPlay();
-      btn.querySelector('.pf-label').textContent = playing ? 'Stop' : 'Play';
-    }));
-
-    // Incremental: update has-tune class
-    this._unsub.push(state.on('abc-tune-state', ({ hasTune }) => {
-      const btn = this.el.querySelector('#pf-play');
-      if (!btn) return;
-      btn.classList.toggle('has-tune', hasTune);
-    }));
+    // Re-render on any state change that can affect button visibility.
+    this._unsub.push(state.on('change',           () => this._maybeRender()));
+    this._unsub.push(state.on('abc-note-selected', () => this.render()));
+    this._unsub.push(state.on('abc-play-state',    () => this.render()));
 
     this._lastDsl = null;
     this.render();
@@ -46,6 +31,11 @@ export class DslFooter {
 
   destroy() {
     this._unsub.forEach(fn => fn());
+  }
+
+  _maybeRender() {
+    const newDsl = state.activeDslId ?? state.data?.dslType ?? 'markdown';
+    if (newDsl !== this._lastDsl) this.render();
   }
 
   // ---------------------------------------------------------------------------
@@ -56,19 +46,20 @@ export class DslFooter {
     const dslType = state.activeDslId ?? state.data?.dslType ?? 'markdown';
     this._lastDsl = dslType;
 
-    if (dslType !== 'abcjs') {
+    // Show the play/stop button only when there is something to act on.
+    const noteSelected = state.abcNoteSelected;
+    const playing      = state.abcPlaying;
+
+    if (dslType !== 'abcjs' || (!noteSelected && !playing)) {
       this.el.innerHTML = '';
       return;
     }
 
-    const playing = state.abcPlaying;
-    const hasTune = state.abcHasTune;
-
     this.el.innerHTML = `
       <button
-        class="pf-btn play-btn${playing ? ' playing' : ''}${hasTune ? ' has-tune' : ''}"
+        class="pf-btn play-btn has-tune${playing ? ' playing' : ''}"
         id="pf-play"
-        title="${playing ? 'Stop (Space)' : 'Play (Space)'}">
+        title="${playing ? 'Stop (Space)' : 'Play from selected note (Space)'}">
         <span class="pf-icon">${playing ? _iconStop() : _iconPlay()}</span>
         <span class="pf-label">${playing ? 'Stop' : 'Play'}</span>
       </button>

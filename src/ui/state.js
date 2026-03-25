@@ -105,6 +105,9 @@ class AppState extends EventBus {
     /** @type {boolean} Whether a valid ABC tune is loaded and ready to play */
     this.abcHasTune = false;
 
+    /** @type {boolean} Whether a note in the ABC preview is currently selected (red highlight) */
+    this.abcNoteSelected = false;
+
     /** @type {string|null} DSL id at current cursor position; null → use data.dslType */
     this.activeDslId = null;
 

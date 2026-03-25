@@ -168,6 +168,62 @@ function renderFrontMatterBlock(meta) {
 }
 
 // ---------------------------------------------------------------------------
+// Click-back: annotate rendered DOM elements with source positions
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk the rendered block-level DOM children of `el` and match them 1:1
+ * with the marked top-level token list. Sets data-doc-from / data-doc-to
+ * directly on DOM nodes (bypasses DOMPurify which strips data-* attributes).
+ *
+ * @param {HTMLElement} el         - container element (already has innerHTML set)
+ * @param {Array}       tokens     - marked.lexer() top-level token list for `body`
+ * @param {number}      bodyOffset - char offset of body start within render content
+ * @param {number}      sectionBase - absolute offset of section start in the document
+ */
+function _annotateClickback(el, tokens, bodyOffset, sectionBase) {
+  // Block-level children, skipping the optional front-matter header div
+  const blockEls = Array.from(el.children).filter(
+    c => !c.classList.contains('fm-header') && !c.classList.contains('preview-version-warn')
+  );
+
+  let off    = 0;  // char offset within body
+  let elIdx  = 0;
+
+  for (const token of tokens) {
+    const rawLen = token.raw?.length ?? 0;
+
+    // 'space' tokens are blank lines — no rendered element, just advance offset
+    if (token.type === 'space') { off += rawLen; continue; }
+
+    const domEl = blockEls[elIdx++];
+    if (!domEl) { off += rawLen; continue; }
+
+    const from = sectionBase + bodyOffset + off;
+    const to   = from + rawLen;
+    domEl.dataset.docFrom = from;
+    domEl.dataset.docTo   = to;
+
+    // For lists, annotate individual <li> elements so clicking a specific
+    // list item jumps to that item's line in the source.
+    if (token.type === 'list' && token.items?.length) {
+      const liEls = domEl.querySelectorAll(':scope > li');
+      let itemOff = off;
+      token.items.forEach((item, i) => {
+        const itemLen = item.raw?.length ?? 0;
+        if (liEls[i]) {
+          liEls[i].dataset.docFrom = sectionBase + bodyOffset + itemOff;
+          liEls[i].dataset.docTo   = sectionBase + bodyOffset + itemOff + itemLen;
+        }
+        itemOff += itemLen;
+      });
+    }
+
+    off += rawLen;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -178,8 +234,17 @@ function safeHtml(raw) {
 }
 
 async function render(content, el) {
+  const sectionBase = parseInt(el.dataset.docFrom ?? '0', 10);
   const { meta, body } = parseFrontMatter(content || '');
+  // bodyOffset: how many chars of `content` are front matter (before `body` starts)
+  const bodyOffset = (content || '').length - body.length;
+
+  // Lex before rendering so we have token.raw lengths for position annotation
+  const tokens = marked.lexer(body);
   el.innerHTML = renderFrontMatterBlock(meta) + safeHtml(marked.parse(body));
+
+  // Annotate block elements with source positions for click-back
+  _annotateClickback(el, tokens, bodyOffset, sectionBase);
 
   // Add copy buttons to fenced code blocks
   el.querySelectorAll('pre > code').forEach(code => {
@@ -794,6 +859,13 @@ const PAGE_CONTENT_HEIGHT_PX = 864;
  * we read offsetTop / scrollHeight values.
  */
 function addPageRuler(el) {
+  // Page rulers are only meaningful in the standalone flow preview where the
+  // whole document is in one scrollable pane.  When markdown is rendered
+  // inside a layout-managed wrapper (slide part, document page, or webpage
+  // section) the surrounding layout already handles pagination / flow, so
+  // rulers would just add visual noise.  el.closest() includes `el` itself.
+  if (el.closest?.('.uf-slide-part, .uf-doc-part, .uf-web-part')) return;
+
   // Make `el` the containing block so absolute children position against it.
   // `.preview-content` may already be position:relative; setting it again is harmless.
   el.style.position = 'relative';

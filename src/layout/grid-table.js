@@ -7,8 +7,8 @@
  *
  * Syntax
  * ──────
- *   CellRef: value           — assign a value to a cell
- *   CellRef: =formula        — assign a formula
+ *   CellRef value            — assign a value to a cell  (whitespace separator)
+ *   CellRef =formula         — assign a formula (formula starts with =)
  *   // comment or # comment  — ignored
  *   blank lines              — ignored
  *
@@ -23,7 +23,7 @@
  *
  * Formulas (prefix =)
  *   =A1+B2           arithmetic (+, -, *, /, %, ^)
- *   =SUM(A1:A10)     range functions
+ *   =SUM(A1:A10)     range functions  (colon is range separator inside formulas)
  *   =AVERAGE(B1:B5)
  *   =COUNT(A1:C1)
  *   =MIN(A1:A5) / =MAX(A1:A5)
@@ -34,19 +34,19 @@
  *   ---
  *   model: grid
  *   ---
- *   A1: Item
- *   B1: Price
- *   C1: Qty
- *   D1: Total
- *   A2: Widget
- *   B2: 9.99
- *   C2: 5
- *   D2: =B2*C2
- *   A3: Gadget
- *   B3: 24.99
- *   C3: 2
- *   D3: =B3*C3
- *   D4: =SUM(D2:D3)
+ *   A1 Item
+ *   B1 Price
+ *   C1 Qty
+ *   D1 Total
+ *   A2 Widget
+ *   B2 9.99
+ *   C2 5
+ *   D2 =B2*C2
+ *   A3 Gadget
+ *   B3 24.99
+ *   C3 2
+ *   D3 =B3*C3
+ *   D4 =SUM(D2:D3)
  *
  * Front matter keys:
  *   frozen-rows   — number of header rows to freeze-style (default: 1 if row 1 exists)
@@ -64,7 +64,7 @@ import { parseGlobalFrontMatter } from '../core/front-matter.js';
 export function renderGrid(content, container) {
   const { meta, bodyFrom } = parseGlobalFrontMatter(content);
   const body = content.slice(bodyFrom);
-  const { cells, maxCol, maxRow } = _parseSheet(body);
+  const { cells, maxCol, maxRow } = _parseSheet(body, bodyFrom);
 
   const frozenRows = parseInt(meta['frozen-rows'] ?? (maxRow >= 0 ? '1' : '0'), 10);
   const frozenCols = parseInt(meta['frozen-cols'] ?? '0', 10);
@@ -74,8 +74,11 @@ export function renderGrid(content, container) {
   container.innerHTML = '';
   container.classList.add('grid-model-mode');
 
+  // Container-level click-back fallback (jumps to start of grid body)
+  container.dataset.docFrom = bodyFrom;
+
   if (maxCol < 0 || maxRow < 0) {
-    container.innerHTML = '<p class="preview-empty">Enter cell values using A1: value syntax.</p>';
+    container.innerHTML = '<p class="preview-empty">Enter cell values using A1 value syntax (e.g. A1 Hello, B1 42, C1 =A1+B1).</p>';
     return;
   }
 
@@ -95,6 +98,20 @@ export function renderGrid(content, container) {
   const totalCols = maxCol + 1;
   const totalRows = maxRow + 1;
 
+  // Pre-compute first-cell positions per row and column for header click-back
+  const rowFirstPos = new Array(totalRows).fill(null);
+  const colFirstPos = new Array(totalCols).fill(null);
+  for (let r = 0; r < totalRows; r++) {
+    for (let c = 0; c < totalCols; c++) {
+      const ref = _indexToCol(c) + (r + 1);
+      const srcFrom = cells.get(ref)?.srcFrom;
+      if (srcFrom != null) {
+        if (rowFirstPos[r] === null || srcFrom < rowFirstPos[r]) rowFirstPos[r] = srcFrom;
+        if (colFirstPos[c] === null || srcFrom < colFirstPos[c]) colFirstPos[c] = srcFrom;
+      }
+    }
+  }
+
   // Column header row (A, B, C...)
   if (showHeaders) {
     const thead = document.createElement('thead');
@@ -110,6 +127,8 @@ export function renderGrid(content, container) {
       th.className = 'uf-grid-col-hdr';
       if (c < frozenCols) th.classList.add('frozen-col');
       th.textContent = _indexToCol(c);
+      // Click-back: jump to first defined cell in this column
+      if (colFirstPos[c] != null) th.dataset.docFrom = colFirstPos[c];
       tr.appendChild(th);
     }
   }
@@ -127,6 +146,8 @@ export function renderGrid(content, container) {
       th.className = 'uf-grid-row-hdr';
       if (r < frozenRows) th.classList.add('frozen-row');
       th.textContent = r + 1;
+      // Click-back: jump to first defined cell in this row
+      if (rowFirstPos[r] != null) th.dataset.docFrom = rowFirstPos[r];
       tr.appendChild(th);
     }
 
@@ -142,9 +163,12 @@ export function renderGrid(content, container) {
       const num = typeof rawVal === 'number';
       if (num) td.classList.add('numeric');
 
-      // Source position for click-back
-      const srcFrom = cells.get(ref)?.srcFrom;
-      if (srcFrom != null) td.dataset.docFrom = srcFrom;
+      // Source positions for click-back (absolute via bodyFrom)
+      const cellData = cells.get(ref);
+      if (cellData?.srcFrom != null) {
+        td.dataset.docFrom = cellData.srcFrom;
+        td.dataset.docTo   = cellData.srcTo;
+      }
 
       td.textContent = rawVal != null ? _formatValue(rawVal) : '';
       tr.appendChild(td);
@@ -162,8 +186,12 @@ export function teardownGrid(container) {
 
 /**
  * Parse the document body into a Map of cell ref → { raw, srcFrom }.
+ *
+ * @param {string} body     - body text (after front matter)
+ * @param {number} bodyFrom - absolute offset of body start in the full document
+ *                            (used so srcFrom values are full-doc absolute)
  */
-function _parseSheet(body) {
+function _parseSheet(body, bodyFrom = 0) {
   const cells  = new Map();
   let maxCol   = -1;
   let maxRow   = -1;
@@ -173,13 +201,17 @@ function _parseSheet(body) {
     const trimmed = line.trim();
 
     if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('#')) {
-      const colonIdx = trimmed.indexOf(':');
-      if (colonIdx > 0) {
-        const ref = trimmed.slice(0, colonIdx).trim().toUpperCase();
-        const raw = trimmed.slice(colonIdx + 1).trim();
+      // Syntax: CellRef<whitespace>value  (colon is NOT the separator)
+      const m = /^([A-Z]+\d+)\s+(.*)$/i.exec(trimmed);
+      if (m) {
+        const ref = m[1].toUpperCase();
+        const raw = m[2].trim();
         const pos = _parseCellRef(ref);
         if (pos) {
-          cells.set(ref, { raw, srcFrom: offset });
+          const srcFrom = bodyFrom + offset;
+          // srcTo: end of meaningful content on this line (no trailing whitespace/newline)
+          const srcTo = srcFrom + line.trimEnd().length;
+          cells.set(ref, { raw, srcFrom, srcTo });
           maxCol = Math.max(maxCol, pos.col);
           maxRow = Math.max(maxRow, pos.row);
         }

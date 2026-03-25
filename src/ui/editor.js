@@ -63,7 +63,7 @@ const dslHighlightField = StateField.define({
     deco = deco.map(tr.changes);
     for (const e of tr.effects) {
       if (e.is(setDslHighlight)) {
-        if (e.value === null) {
+        if (e.value === null || e.value.from >= e.value.to) {
           deco = Decoration.none;
         } else {
           const { from, to } = e.value;
@@ -505,11 +505,16 @@ export class Editor {
       if (!this._view) return;
       // Clamp to document length to guard against stale positions.
       const docLen = this._view.state.doc.length;
-      const safeFrom = Math.min(from, docLen);
-      const safeTo   = Math.min(to,   docLen);
+      const safeFrom = Math.min(from,  docLen);
+      const safeTo   = Math.min(to ?? from, docLen);
+      // Use the native CM6 text selection as the visual highlight — same
+      // appearance as drag-selecting text.  If there's a real range, select
+      // it; otherwise just move the cursor.
+      const hasRange = safeFrom < safeTo;
       this._view.dispatch({
-        effects: setDslHighlight.of({ from: safeFrom, to: safeTo }),
-        selection: { anchor: safeFrom, head: safeTo },
+        selection: hasRange
+          ? { anchor: safeFrom, head: safeTo }
+          : { anchor: safeFrom, head: safeFrom },
         scrollIntoView: true,
         annotations: Transaction.userEvent.of(DSL_SELECT_EVENT)
       });
@@ -579,19 +584,22 @@ export class Editor {
 
       if (update.docChanged) state.setContent(update.state.doc.toString());
 
+      // Detect whether this update came from a DSL-element click (dsl-select event).
+      // Used in two places below: to suppress editor-select, and to annotate
+      // active-section-change so layout-mode renderers can skip a needless re-render.
+      const isDslSelect = (update.selectionSet || update.docChanged) &&
+        update.transactions.some(
+          tr => tr.annotation(Transaction.userEvent) === DSL_SELECT_EVENT
+        );
+
       // When the user changes the selection (without also editing the document),
       // notify DSL previews so they can highlight the corresponding elements.
       // Skip when the selection change came from a DSL click (the preview already
       // knows which element was clicked) and skip on doc changes (the preview will
       // fully re-render, making any position-based highlight immediately stale).
-      if (update.selectionSet && !update.docChanged) {
-        const isDslSelect = update.transactions.some(
-          tr => tr.annotation(Transaction.userEvent) === DSL_SELECT_EVENT
-        );
-        if (!isDslSelect) {
-          const sel = update.state.selection.main;
-          state.emit('editor-select', { from: sel.from, to: sel.to });
-        }
+      if (update.selectionSet && !update.docChanged && !isDslSelect) {
+        const sel = update.state.selection.main;
+        state.emit('editor-select', { from: sel.from, to: sel.to });
       }
 
       // Active section tracking — update state.activeDslId / activeSectionRange
@@ -622,9 +630,10 @@ export class Editor {
             try { this._swapLanguage(effectiveDsl); } catch { /* continue */ }
           }
           state.emit('active-section-change', {
-            dslId:   effectiveDsl,
-            range:   newRange,
-            version: sect?.version ?? null
+            dslId:         effectiveDsl,
+            range:         newRange,
+            version:       sect?.version ?? null,
+            fromDslSelect: isDslSelect,
           });
         }
       }

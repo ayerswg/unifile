@@ -23,13 +23,15 @@
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 import { parseDocSections } from '../core/doc-sections.js';
 import { getDSL } from '../dsl/registry.js';
+import { attachScaleObserver, detachScaleObserver } from './_scale.js';
 
-// Page dimensions in mm → aspect ratio for CSS
-const PAGE_SIZES = {
-  a4:     { w: 210, h: 297 },
-  letter: { w: 216, h: 279 },
-  a5:     { w: 148, h: 210 },
-  legal:  { w: 216, h: 356 },
+// Page sizes in CSS pixels at 96dpi (1in = 96px, 1mm ≈ 3.7795px).
+// These are the intrinsic "paper" dimensions — zoom scales them to fit preview.
+const PAGE_PX = {
+  letter: { w: 816,  h: 1056 },  // 8.5 × 11 in
+  a4:     { w: 794,  h: 1123 },  // 210 × 297 mm
+  a5:     { w: 559,  h: 794  },  // 148 × 210 mm
+  legal:  { w: 816,  h: 1344 },  // 8.5 × 14 in
 };
 
 // ---------------------------------------------------------------------------
@@ -51,11 +53,15 @@ export async function renderDocument(content, container) {
   for (let i = 0; i < pages.length; i++) {
     const page = document.createElement('div');
     page.className = 'uf-doc-page';
+    // Fixed intrinsic dimensions — CSS zoom (set by ResizeObserver) handles scaling.
     page.style.cssText = `
-      width: min(${cfg.pageW}mm, 100%);
+      width: ${cfg.pageW}px;
+      height: ${cfg.pageH}px;
       padding: ${cfg.margin};
       font-size: ${cfg.fontSize};
       line-height: ${cfg.lineHeight};
+      box-sizing: border-box;
+      overflow: hidden;
     `;
     page.dataset.docFrom = pages[i].from;
     doc.appendChild(page);
@@ -68,22 +74,12 @@ export async function renderDocument(content, container) {
       page.appendChild(hdr);
     }
 
-    // Page number (if position is top-*)
-    if (cfg.pageNumbers && cfg.pageNumbers.startsWith('top')) {
-      page.appendChild(_pageNumEl(i + 1, pages.length, cfg.pageNumbers));
-    }
-
     // Content area
     const body = document.createElement('div');
     body.className = 'uf-doc-body';
     page.appendChild(body);
 
-    await _renderPageContent(pages[i].text, body);
-
-    // Page number (if position is bottom-*)
-    if (cfg.pageNumbers && cfg.pageNumbers.startsWith('bottom')) {
-      page.appendChild(_pageNumEl(i + 1, pages.length, cfg.pageNumbers));
-    }
+    await _renderPageContent(pages[i].text, body, pages[i].from);
 
     // Footer
     if (cfg.footer) {
@@ -92,10 +88,19 @@ export async function renderDocument(content, container) {
       ftr.innerHTML = _fillTokens(cfg.footer, { page: i + 1, total: pages.length, title: meta.title ?? '' });
       page.appendChild(ftr);
     }
+
+    // Page number badge — absolutely-positioned overlay like slide badge.
+    if (cfg.pageNumbers && cfg.pageNumbers !== 'none') {
+      page.appendChild(_pageNumEl(i + 1, pages.length, cfg.pageNumbers));
+    }
   }
+
+  // Scale pages to fit the container width (print-preview — no reflow).
+  attachScaleObserver(container, '.uf-doc-page', cfg.pageW);
 }
 
 export function teardownDocument(container) {
+  detachScaleObserver(container);
   container.classList.remove('document-mode');
 }
 
@@ -104,24 +109,26 @@ export function teardownDocument(container) {
 // ---------------------------------------------------------------------------
 
 function _parseConfig(meta) {
-  const size = _parsePageSize(meta.page ?? 'a4');
-  const margin = meta.margin ?? '20mm 25mm';
+  const px     = _parsePagePx(meta.page ?? 'letter');
+  const margin = meta.margin ?? '72px 80px'; // ~0.75in × ~0.83in margins
   return {
-    pageW:      size.w,
-    pageH:      size.h,
-    margin:     _expandMargin(margin),
-    fontSize:   meta['font-size']   ?? '11pt',
-    lineHeight: meta['line-height'] ?? '1.6',
-    header:     meta.header  ?? null,
-    footer:     meta.footer  ?? null,
+    pageW:       px.w,
+    pageH:       px.h,
+    margin:      _expandMargin(margin),
+    fontSize:    meta['font-size']   ?? '12px',
+    lineHeight:  meta['line-height'] ?? '1.6',
+    header:      meta.header  ?? null,
+    footer:      meta.footer  ?? null,
     pageNumbers: meta['page-numbers'] ?? 'bottom-center',
   };
 }
 
-function _parsePageSize(pageStr) {
-  if (PAGE_SIZES[pageStr]) return PAGE_SIZES[pageStr];
-  const m = /^(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)/.exec(pageStr.trim());
-  return m ? { w: parseFloat(m[1]), h: parseFloat(m[2]) } : PAGE_SIZES.a4;
+function _parsePagePx(pageStr) {
+  const key = String(pageStr ?? 'letter').toLowerCase().trim();
+  if (PAGE_PX[key]) return PAGE_PX[key];
+  // Custom WxH in px — e.g. "800x1000"
+  const m = /^(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)/.exec(key);
+  return m ? { w: parseFloat(m[1]), h: parseFloat(m[2]) } : PAGE_PX.letter;
 }
 
 function _expandMargin(m) {
@@ -142,9 +149,11 @@ function _fillTokens(template, vars) {
 
 function _pageNumEl(page, total, position) {
   const el = document.createElement('div');
+  // Derive horizontal alignment from position string (bottom-center, top-right, etc.)
   const align = position.split('-')[1] ?? 'center';
   el.className = `uf-doc-pagenum uf-doc-pagenum-${align}`;
   el.textContent = `${page} / ${total}`;
+  el.setAttribute('aria-hidden', 'true');
   return el;
 }
 
@@ -175,8 +184,12 @@ function _splitPages(content, bodyFrom) {
     }
 
     if (!inFence && /^---\s*$/.test(line)) {
-      const s = current.join('\n').trim();
-      if (s) pages.push({ text: s, from: currentFrom });
+      const raw = current.join('\n');
+      const s   = raw.trim();
+      if (s) {
+        const lead = raw.search(/\S/);
+        pages.push({ text: s, from: currentFrom + (lead >= 0 ? lead : 0) });
+      }
       offset += line.length + 1;
       current = [];
       currentFrom = offset;
@@ -186,8 +199,12 @@ function _splitPages(content, bodyFrom) {
     }
   }
 
-  const last = current.join('\n').trim();
-  if (last) pages.push({ text: last, from: currentFrom });
+  const lastRaw = current.join('\n');
+  const last    = lastRaw.trim();
+  if (last) {
+    const lead = lastRaw.search(/\S/);
+    pages.push({ text: last, from: currentFrom + (lead >= 0 ? lead : 0) });
+  }
 
   return pages.length ? pages : [{ text: '', from: bodyFrom }];
 }
@@ -196,29 +213,46 @@ function _splitPages(content, bodyFrom) {
 // Per-page rendering (same shebang dispatch as slides)
 // ---------------------------------------------------------------------------
 
-async function _renderPageContent(pageText, el) {
+async function _renderPageContent(pageText, el, pageFrom) {
   if (!pageText) return;
   const sections = parseDocSections(pageText);
 
   if (!sections.length) {
-    await _renderPart('markdown', pageText, el);
+    await _renderPart('markdown', pageText, el, pageFrom, pageFrom + pageText.length, pageFrom);
     return;
   }
 
-  const preamble = pageText.slice(0, sections[0].from).trim();
-  if (preamble) await _renderPart('markdown', preamble, el);
+  const preambleRaw = pageText.slice(0, sections[0].from);
+  const preamble    = preambleRaw.trim();
+  if (preamble) {
+    const lead = preambleRaw.search(/\S/);
+    const pFrom = pageFrom + (lead >= 0 ? lead : 0);
+    await _renderPart('markdown', preamble, el,
+      pFrom,
+      pageFrom + sections[0].from,
+      pFrom);
+  }
 
   for (let i = 0; i < sections.length; i++) {
     const sec  = sections[i];
-    const next = sections[i + 1];
-    const text = pageText.slice(sec.contentFrom, next ? next.from : pageText.length).trim();
-    if (text) await _renderPart(sec.dslId, text, el);
+    const raw  = pageText.slice(sec.contentFrom, sec.to);
+    const text = raw.trim();
+    if (text) {
+      const lead = raw.search(/\S/);
+      await _renderPart(sec.dslId, text, el,
+        pageFrom + sec.from,
+        pageFrom + sec.to,
+        pageFrom + sec.contentFrom + (lead >= 0 ? lead : 0));
+    }
   }
 }
 
-async function _renderPart(dslId, text, parentEl) {
+async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom) {
   const wrap = document.createElement('div');
   wrap.className = `uf-doc-part uf-dsl-${_safeClass(dslId)}`;
+  if (docFrom    != null) wrap.dataset.docFrom        = docFrom;
+  if (docTo      != null) wrap.dataset.docTo          = docTo;
+  if (contentFrom != null) wrap.dataset.dslContentFrom = contentFrom;
   parentEl.appendChild(wrap);
   try {
     const dsl = getDSL(dslId);

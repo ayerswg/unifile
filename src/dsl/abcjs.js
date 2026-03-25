@@ -160,6 +160,28 @@ let _playEl = null;
 // Used by playback to determine which note / range to start from.
 let _lastEditorSel = { from: 0, to: 0 };
 
+// Whether a note in the preview is currently highlighted red (user clicked a note
+// or has a text-range selection in the editor covering ABC content).
+// When true the play button is shown; when false it is hidden.
+let _hasNoteHighlight = false;
+
+// Section-relative {from, to} of the last clicked note, and the localOffset of
+// the block it belongs to.  Used to restore the visual highlight when the same
+// block re-renders (e.g. after active-section-change fires a debounced re-render).
+let _lastNoteClickRange  = null;
+let _lastNoteBlockOffset = -1;
+
+function _setNoteSelected(v) {
+  if (_hasNoteHighlight === v) return;
+  _hasNoteHighlight = v;
+  state.abcNoteSelected = v;
+  state.emit('abc-note-selected', { selected: v });
+  if (!v) {
+    _lastNoteClickRange  = null;
+    _lastNoteBlockOffset = -1;
+  }
+}
+
 // Active playback handles (null when not playing).
 // _synth is used as a boolean sentinel — truthy while playing.
 let _synth = null;
@@ -184,8 +206,18 @@ async function render(content, el) {
 
   // Capture section offset so click positions (section-relative) can be
   // translated to full-document positions and vice-versa.
-  _sectionOffset = state.activeSectionRange?.from ?? 0;
+  //
+  // In layout mode (slides / document / webpage) the layout renderer sets
+  // el.dataset.dslContentFrom to the absolute offset of the first content
+  // character (after the #!abcjs shebang).  Use that when present; fall back
+  // to state.activeSectionRange?.from for the standalone preview path.
+  _sectionOffset = el.dataset.dslContentFrom != null
+    ? parseInt(el.dataset.dslContentFrom, 10)
+    : (state.activeSectionRange?.from ?? 0);
 
+  // Note-selected state is NOT reset here.  Clearing happens in the editor-select
+  // handler (collapsed cursor) so that a debounced re-render triggered by
+  // active-section-change does not flash the play button away after a note click.
   _engraver    = null;
   _tuneObjects = null;
   _playEl      = null;
@@ -201,28 +233,71 @@ async function render(content, el) {
   container.className = 'abc-preview-wrap';
   el.appendChild(container);
 
+  // In layout mode (slides / document / webpage), dslContentFrom is set on el.
+  // Mark the wrapper so _bindClickBack in preview.js defers to abcjs's own
+  // precise clickListener rather than emitting a coarse block-level selection.
+  // We only set this in layout mode — in standalone mode stopPropagation handles
+  // it, and we must not pollute this.content across re-renders.
+  if (el.dataset.dslContentFrom != null) {
+    el.dataset.dslHandled = '1';
+  }
+
+  // Capture the section offset for this specific block at render time.
+  // When multiple abcjs blocks exist (e.g. layout: webpage), the clickListener
+  // closure uses localOffset so it always refers to its own block, and it
+  // re-establishes the module-level context variables when clicked.
+  const localOffset = _sectionOffset;
+
   try {
     const tablature = parseTabDirectives(content);
+
+    // Declared before renderAbc so the clickListener closure can capture the
+    // binding; assigned after renderAbc once we have the tuneObjects back.
+    let localEngraver    = null;
+    let localTuneObjects = null;
+
     const tuneObjects = abcjs.renderAbc(container, content, {
       responsive: 'resize',
       add_classes: true,
       ...(tablature ? { tablature } : {}),
-      // abcjs automatically highlights the clicked element by adding the
-      // class `abcjs-note_selected` and setting fill="#ff0000" on its paths.
-      // We just need to tell the editor which source range to jump to.
-      clickListener: (abcElem) => {
+      // abcjs highlights the clicked note (abcjs-note_selected + fill="#ff0000").
+      // We tell the editor which source range to jump to, and show the play button.
+      clickListener: (abcElem, _tuneNum, _classes, _analysis, _drag, mouseEvent) => {
+        mouseEvent?.stopPropagation();
+        // Re-establish this block as the active playback context so that the
+        // play button always acts on the tune whose note was last clicked.
+        _engraver    = localEngraver;
+        _tuneObjects = localTuneObjects;
+        _playEl      = container;
+        _sectionOffset = localOffset;
         if (abcElem.startChar !== undefined && abcElem.endChar !== undefined) {
+          // Remember which block's note was clicked so we can restore the
+          // visual highlight if the block re-renders before the user moves.
+          _lastNoteBlockOffset = localOffset;
+          _lastNoteClickRange  = { from: abcElem.startChar, to: abcElem.endChar };
           state.emit('dsl-select', {
-            from: abcElem.startChar + _sectionOffset,
-            to:   abcElem.endChar   + _sectionOffset,
+            from: abcElem.startChar + localOffset,
+            to:   abcElem.endChar   + localOffset,
           });
+          _setNoteSelected(true); // show the play button
         }
       }
     });
+
+    localEngraver    = tuneObjects?.[0]?.engraver ?? null;
+    localTuneObjects = tuneObjects ?? null;
+
     // Store engraver so editor selections can drive reverse highlighting
-    _engraver    = tuneObjects?.[0]?.engraver ?? null;
-    _tuneObjects = tuneObjects ?? null;
+    _engraver    = localEngraver;
+    _tuneObjects = localTuneObjects;
     _playEl      = container;
+
+    // If a note from this block was selected before the re-render, restore the
+    // visual highlight on the freshly-created SVG elements.
+    if (_hasNoteHighlight && _lastNoteClickRange && localOffset === _lastNoteBlockOffset && localEngraver) {
+      try { localEngraver.rangeHighlight(_lastNoteClickRange.from, _lastNoteClickRange.to); } catch { /* stale */ }
+    }
+
     _setHasTune(!!(tuneObjects?.[0]));
   } catch (e) {
     el.innerHTML = `<pre class="error">ABC parse error:\n${e.message}</pre>`;
@@ -252,14 +327,20 @@ function _setHasTune(hasTune) {
 
 state.on('editor-select', ({ from, to }) => {
   _lastEditorSel = { from, to };
+
+  // A collapsed cursor means no note is actively selected — hide the play button.
+  // Guard against clearing during playback (user may move cursor while music plays).
+  if (from === to && !state.abcPlaying) _setNoteSelected(false);
+
   if (_engraver && (state.activeDslId ?? state.data?.dslType) === 'abcjs' && !state.abcPlaying) {
     try {
-      // Translate full-doc positions to section-relative positions for abcjs.
-      // Collapsed cursor → clear all highlights; real selection → show range.
+      // Translated to section-relative: collapsed cursor clears, range highlights.
       const adjFrom = from === to ? 0 : Math.max(0, from - _sectionOffset);
       const adjTo   = from === to ? 0 : Math.max(0, to   - _sectionOffset);
       _engraver.rangeHighlight(adjFrom, adjTo);
     } catch { /* engraver may be stale after a re-render — ignore */ }
+    // A real text-range selection over ABC content counts as a note selected.
+    if (from !== to) _setNoteSelected(true);
   }
 });
 
@@ -552,13 +633,14 @@ function stopPlayback() {
   state.emit('abc-play-state', { playing: false });
   state.emit('abc-play-cursor', null);
 
-  // Restore the static (red) preview selection, if any.
+  // Restore range-selection highlight if the user had a text range selected.
+  // For note-click selections (collapsed _lastEditorSel), abcjs's own
+  // abcjs-note_selected fill survives naturally — don't call rangeHighlight(0,0)
+  // which would erase it.
   if (_engraver && _lastEditorSel.from !== _lastEditorSel.to) {
     const adjFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
     const adjTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
     try { _engraver.rangeHighlight(adjFrom, adjTo); } catch { /* stale */ }
-  } else if (_engraver) {
-    try { _engraver.rangeHighlight(0, 0); } catch { /* stale */ }
   }
 }
 

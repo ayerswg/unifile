@@ -986,28 +986,33 @@ html, body {
   gap: 28px;
 }
 
-/* Individual slide box — always light (print-oriented) */
+/* Individual slide box — always light (print-oriented).
+   Width + aspect-ratio are set inline by the renderer (960px intrinsic);
+   CSS zoom (set by ResizeObserver) scales the whole slide as a unit. */
 .uf-slide {
   position: relative;
-  width: min(100%, 900px);
-  /* aspect-ratio set inline by the renderer via meta.dimensions */
+  /* width / aspect-ratio set inline */
   background: #ffffff;
   color: #1e1e2e;
   border-radius: 4px;
   box-shadow: 0 4px 28px rgba(0,0,0,.40), 0 1px 4px rgba(0,0,0,.15);
   overflow: hidden;
+  transform-origin: top center; /* keeps shadow crisp during zoom */
 }
 
-/* Slide content area — fills the aspect-ratio box absolutely */
+/* Slide content area — fills the fixed-size slide box absolutely */
 .uf-slide-frame {
   position: absolute;
   inset: 0;
-  padding: clamp(20px, 5%, 52px);
+  padding: 48px 56px;
   box-sizing: border-box;
   overflow: hidden;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: clamp(13px, 1.6vw, 18px);
   line-height: 1.55;
+  /* Flex column lets non-markdown DSL parts (mermaid, abcjs, …) fill remaining space */
+  display: flex;
+  flex-direction: column;
 }
 
 /* Typography inside slides — scoped to light theme regardless of app theme */
@@ -1054,16 +1059,66 @@ html, body {
 .uf-slide-frame th      { background: #f0f0f0; font-weight: 600; }
 
 /* DSL blocks (mermaid, abcjs, etc.) within a slide */
-.uf-slide-part { margin: .6em 0; }
+.uf-slide-part { margin: .6em 0; flex: 0 0 auto; }
 .uf-slide-part:first-child { margin-top: 0; }
 .uf-slide-part:last-child  { margin-bottom: 0; }
-/* Contain tall diagrams so they don't overflow the slide box */
-.uf-slide-part svg {
+
+/* Non-markdown DSL parts (visual diagrams) grow to fill remaining slide space */
+.uf-slide-part:not(.uf-dsl-markdown) {
+  flex: 1 1 0;
+  min-height: 0;        /* required for flex overflow containment */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* SVGs inside non-markdown slide parts: fill width, auto-height from viewBox,
+   clamped to flex-item height so they never overflow the slide frame.
+   The flex item has a definite height (from the outer absolute-positioned
+   slide frame), so max-height: 100% resolves correctly. */
+.uf-slide-part:not(.uf-dsl-markdown) svg {
   max-width: 100%;
   max-height: 100%;
+  width: 100%;
+  height: auto;
+  display: block;
 }
-/* Prevent the dark-mode ABC SVG invert from leaking into slides */
-.uf-slide-frame .abc-preview-wrap svg { filter: none !important; }
+
+/* Wrapper elements (e.g. .abc-preview-wrap) inside non-markdown slide parts
+   must also carry the height constraint so their children's max-height: 100%
+   resolves against the part height, not the wrapper's unconstrained auto height. */
+.uf-slide-part:not(.uf-dsl-markdown) > :not(svg) {
+  max-width: 100%;
+  max-height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* SVGs in document pages: fill column width, auto height.
+   Pages clip via overflow:hidden so no max-height constraint is needed. */
+.uf-doc-part svg {
+  max-width: 100%;
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Webpage layout — simple flow container */
+.uf-webpage { padding: 0; }
+.uf-web-part { margin: 1em 0; }
+.uf-web-part:first-child { margin-top: 0; }
+.uf-web-part:last-child  { margin-bottom: 0; }
+
+/* Belt-and-suspenders: ensure mermaid background rect is transparent in print layouts */
+.uf-slide-frame .uf-dsl-mermaid svg rect.background,
+.uf-doc-page    .uf-dsl-mermaid svg rect.background {
+  fill: transparent !important;
+}
+/* Prevent the dark-mode ABC SVG invert from leaking into slides or doc pages */
+.uf-slide-frame .abc-preview-wrap svg,
+.uf-doc-page    .abc-preview-wrap svg { filter: none !important; }
 
 /* Slide number badge — bottom-right corner */
 .uf-slide-num {
@@ -1092,15 +1147,17 @@ html, body {
   align-items: center;
   gap: 24px;
 }
+/* width, height, padding, font-size, line-height, overflow all set inline
+   by the renderer; CSS zoom (ResizeObserver) scales the whole page as a unit. */
 .uf-doc-page {
   background: #ffffff;
   color: #1e1e2e;
   box-shadow: 0 4px 24px rgba(0,0,0,.35), 0 1px 4px rgba(0,0,0,.12);
   border-radius: 2px;
-  box-sizing: border-box;
   font-family: Georgia, 'Times New Roman', serif;
   position: relative;
   cursor: pointer;
+  transform-origin: top center;
 }
 .uf-doc-header, .uf-doc-footer {
   font-size: 9pt;
@@ -1126,10 +1183,66 @@ html, body {
 .uf-doc-body table { border-collapse: collapse; width: 100%; }
 .uf-doc-body th, .uf-doc-body td { border: 1px solid #ddd; padding: .3em .6em; }
 .uf-doc-body th { background: #f0f0f0; }
-.uf-doc-pagenum { font-size: 9pt; color: #aaa; margin-top: 6px; }
-.uf-doc-pagenum-left   { text-align: left; }
-.uf-doc-pagenum-center { text-align: center; }
-.uf-doc-pagenum-right  { text-align: right; }
+/* ==============================================================
+   PRINT LAYOUT LIGHT-MODE LOCK
+   Slides and document pages are always white/light regardless of
+   the app's dark/light mode setting.  Override every CSS custom
+   property so any child DSL plugin that uses var(--text) etc.
+   gets light values instead of inheriting dark-mode colours.
+   ============================================================== */
+.uf-slide,
+.uf-doc-page {
+  color-scheme: light;
+  --bg:          #eff1f5;
+  --bg-alt:      #e6e9ef;
+  --bg-surface:  #dce0e8;
+  --bg-overlay:  #ccd0da;
+  --text:        #4c4f69;
+  --text-sub:    #6c6f85;
+  --text-muted:  #9ca0b0;
+  --border:      #ccd0da;
+  --accent:      #1e66f5;
+  --accent-2:    #8839ef;
+  --success:     #40a02b;
+  --warning:     #df8e1d;
+  --error:       #d20f39;
+  --hl-heading:  #1e66f5;
+  --hl-link:     #04a5e5;
+  --hl-code:     #40a02b;
+  --hl-fence:    #fe640b;
+  --hl-quote:    #df8e1d;
+  --hl-meta:     #8c8fa1;
+  --hl-punct:    #9ca0b0;
+  --hl-keyword:  #8839ef;
+  --hl-operator: #04a5e5;
+  --hl-atom:     #d20f39;
+  --hl-number:   #fe640b;
+  --hl-string:   #40a02b;
+  --hl-comment:  #8c8fa1;
+  --hl-name:     #4c4f69;
+  --hl-type:     #df8e1d;
+  --hl-class:    #1e66f5;
+  --hl-property: #1e66f5;
+  --hl-variable: #4c4f69;
+  --hl-function: #1e66f5;
+  --hl-strike:   #9ca0b0;
+  --hl-sep:      #ccd0da;
+  --hl-code-bg:  #e6e9ef;
+}
+
+/* Page number badge — absolutely-positioned overlay at bottom of page (like slide badge) */
+.uf-doc-pagenum {
+  position: absolute;
+  bottom: 8px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: rgba(0,0,0,.25);
+  pointer-events: none;
+  user-select: none;
+}
+.uf-doc-pagenum-left   { left: 12px; }
+.uf-doc-pagenum-center { left: 50%; transform: translateX(-50%); }
+.uf-doc-pagenum-right  { right: 12px; }
 
 /* ==============================================================
    GRID MODEL  (model: grid)
