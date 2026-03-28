@@ -50,13 +50,13 @@ function makeMarp() {
 // ── Pre-processing ────────────────────────────────────────────────────────────
 
 /**
- * Ensure every `---` slide separator has a blank line before it.
+ * Convert `===` slide separators to `---` for marp-core, and ensure every
+ * converted separator has a blank line before it (markdown-it parses
+ * `text\n---` as a setext H2 heading otherwise).
  *
- * markdown-it parses `text\n---` as a setext H2 heading. This means a URL
- * or any text immediately before `---` eats the separator before Marpit's
- * slide-split rule can claim it. Inserting a blank line prevents that.
+ * `---` outside the YAML front matter is left as-is and renders as an <hr>.
  *
- * We skip `---` lines that are:
+ * We skip `===` lines that are:
  *  • inside the YAML front matter (first ---…--- block)
  *  • inside a fenced code block (``` or ~~~)
  */
@@ -99,13 +99,15 @@ function preprocessMarp(content) {
       }
     }
 
-    // ── Slide separator guard ─────────────────────────────────────────────────
-    if (!inFence && !inFrontMatter && /^-{3}\s*$/.test(trimmed)) {
-      // If the last written line is non-blank the separator would be consumed
+    // ── Slide separator: `===` → `---` for marp-core ─────────────────────────
+    if (!inFence && !inFrontMatter && /^={3,}\s*$/.test(trimmed)) {
+      // If the last written line is non-blank the `---` would be consumed
       // as a setext heading underline — inject a blank line to prevent that.
       if (out.length > 0 && out[out.length - 1].trim() !== '') {
         out.push('');
       }
+      out.push('---');
+      continue;
     }
 
     out.push(line);
@@ -534,22 +536,23 @@ function buildMarpDecos(view) {
     const line = doc.line(n);
     const text = line.text;
 
+    // `===` is the slide separator
+    if (/^={3,}\s*$/.test(text)) {
+      builder.add(line.from, line.to, marpSlideSepMk);
+      continue;
+    }
+
+    // `---` is only meaningful as the YAML front-matter fence
     if (/^-{3}\s*$/.test(text)) {
       if (!frontMatterDone) {
         if (!inFrontMatter && n === 1) {
-          // Opening front-matter fence
           inFrontMatter = true;
           builder.add(line.from, line.to, marpFmSepMark);
         } else if (inFrontMatter) {
-          // Closing front-matter fence
           inFrontMatter  = false;
           frontMatterDone = true;
           builder.add(line.from, line.to, marpFmSepMark);
-        } else {
-          builder.add(line.from, line.to, marpSlideSepMk);
         }
-      } else {
-        builder.add(line.from, line.to, marpSlideSepMk);
       }
       continue;
     }

@@ -324,9 +324,8 @@ html, body {
 .plugin-mgr-list { display: flex; flex-direction: column; }
 .plugin-mgr-row {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 20px;
+  flex-direction: column;
+  align-items: stretch;
   border-bottom: 1px solid var(--border);
 }
 .plugin-mgr-row:last-child { border-bottom: none; }
@@ -377,6 +376,122 @@ html, body {
   transition: background .12s, color .12s;
 }
 .plugin-mgr-install-btn:hover { background: var(--accent); color: var(--bg); }
+.plugin-mgr-builtin-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+/* Plugin extension slots (inside Manage Plugins modal) */
+.plugin-mgr-row-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 20px;
+}
+.plugin-ext-details {}
+.plugin-ext-summary {
+  padding: 6px 20px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.plugin-ext-summary::-webkit-details-marker { display: none; }
+.plugin-ext-summary::before {
+  content: '▶';
+  font-size: 8px;
+  transition: transform .15s;
+  display: inline-block;
+}
+details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
+.plugin-ext-summary:hover { color: var(--text); }
+.plugin-ext-body {
+  padding: 4px 20px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.plugin-ext-slot {}
+.plugin-ext-slot-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.plugin-ext-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+.plugin-ext-clear {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: var(--radius);
+  border: 1px solid var(--text-muted);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color .12s, color .12s;
+  flex-shrink: 0;
+}
+.plugin-ext-clear:hover { border-color: #f38ba8; color: #f38ba8; }
+.plugin-ext-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+  line-height: 1.5;
+}
+.plugin-ext-text-input {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color .12s;
+}
+.plugin-ext-text-input:focus { border-color: var(--accent); }
+.plugin-ext-file-value {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.plugin-ext-filename {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.plugin-ext-no-file { color: var(--text-muted); }
+
+/* ABC soundfont load-error banner (auto-dismissed after 8 s) */
+.abc-soundfont-error {
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  border: 1px solid var(--warning);
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
 
 /* (topbar-extras kept for any legacy references) */
 .topbar-extras {
@@ -1105,8 +1220,40 @@ html, body {
   display: block;
 }
 
-/* Webpage layout — simple flow container */
+/* Webpage layout — flow container with optional section breaks (===) */
 .uf-webpage { padding: 0; }
+
+/* Each === break creates a visually distinct section */
+.uf-webpage-section {
+  padding: 2em 0;
+}
+.uf-webpage-section:first-child { padding-top: 0; }
+
+/* Visual separator between sections — signals "separate page" */
+.uf-webpage-section-break {
+  position: relative;
+  margin: 0;
+  height: 3px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--accent, #89b4fa) 20%,
+    var(--accent, #89b4fa) 80%,
+    transparent 100%);
+  opacity: 0.45;
+}
+.uf-webpage-section-break::before {
+  content: '§';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg-base, #1e1e2e);
+  color: var(--accent, #89b4fa);
+  font-size: 0.75em;
+  padding: 0 0.5em;
+  opacity: 0.8;
+}
+
 .uf-web-part { margin: 1em 0; }
 .uf-web-part:first-child { margin-top: 0; }
 .uf-web-part:last-child  { margin-bottom: 0; }
@@ -1147,8 +1294,10 @@ html, body {
   align-items: center;
   gap: 24px;
 }
-/* width, height, padding, font-size, line-height, overflow all set inline
-   by the renderer; CSS zoom (ResizeObserver) scales the whole page as a unit. */
+/* width, height, overflow:hidden, position set inline by the renderer.
+   Auto-pagination: content is cloned into fixed-height page frames, each
+   showing a different vertical slice via CSS `top` offset on the clone.
+   CSS zoom (ResizeObserver) scales the whole page as a unit. */
 .uf-doc-page {
   background: #ffffff;
   color: #1e1e2e;
@@ -1162,17 +1311,10 @@ html, body {
 .uf-doc-header, .uf-doc-footer {
   font-size: 9pt;
   color: #888;
-  border-bottom: 1px solid #ddd;
-  padding-bottom: 4px;
-  margin-bottom: 10px;
+  /* Layout (position, top/bottom, height) set inline per-page in JS */
 }
-.uf-doc-footer {
-  border-bottom: none;
-  border-top: 1px solid #ddd;
-  padding-top: 4px;
-  margin-top: 10px;
-  margin-bottom: 0;
-}
+.uf-doc-header { border-bottom: 1px solid #ddd; }
+.uf-doc-footer { border-top:    1px solid #ddd; }
 .uf-doc-body { color: #1e1e2e; }
 .uf-doc-body h1, .uf-doc-body h2, .uf-doc-body h3 { color: #1e1e2e; margin-top: 1em; }
 .uf-doc-body p   { margin: .6em 0; line-height: inherit; }

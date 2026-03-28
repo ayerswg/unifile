@@ -10,8 +10,9 @@
  *   Supported keys: title, subtitle, author, date.
  *   Renders as a centered header block above the document body.
  *
- * Page breaks: `---` (markdown horizontal rule) renders as a visible
+ * Page breaks: `===` (three or more `=` on a line) renders as a visible
  *   page-break marker in preview and forces a real page break in print/PDF/DOCX.
+ *   `---` renders as a standard horizontal rule.
  */
 
 import { marked } from 'marked';
@@ -42,20 +43,30 @@ import {
 } from 'docx';
 
 // ---------------------------------------------------------------------------
-// marked configuration — set options and override hr renderer for page breaks
+// marked configuration
 // ---------------------------------------------------------------------------
 
 marked.setOptions({ gfm: true, breaks: true });
 
-// Override `---` (hr) to output a page-break div instead of <hr>.
-// This div shows as a labelled separator in the preview and triggers an
-// actual page break in print/PDF/DOCX output.
+// `===` (three or more `=` on its own line) → page-break div.
+// Registered as a block extension so it takes priority over the built-in
+// setext-heading tokenizer (which only applies when `===` follows text).
+// `---` renders as a standard <hr>.
 marked.use({
-  renderer: {
-    hr() {
+  extensions: [{
+    name: 'pageBreak',
+    level: 'block',
+    start(src) {
+      return src.match(/(?:^|\n)={3,}[ \t]*(?:\n|$)/)?.index ?? -1;
+    },
+    tokenizer(src) {
+      const match = src.match(/^={3,}[ \t]*(?:\n|$)/);
+      if (match) return { type: 'pageBreak', raw: match[0] };
+    },
+    renderer() {
       return '<div class="page-break"><span>page break</span></div>\n';
     }
-  }
+  }]
 });
 
 // Strict GFM strikethrough: only ~~double-tilde~~ should render as <del>.
@@ -611,9 +622,13 @@ function tokenToParas(token, { indent = 0 } = {}, ctx) {
     case 'list':
       return listToParas(token, 0, ctx);
 
-    case 'hr':
-      // `---` → page break in DOCX
+    case 'pageBreak':
+      // `===` → page break in DOCX
       return [new Paragraph({ style: "Normal", children: [new PageBreak()] })];
+
+    case 'hr':
+      // `---` → empty paragraph (horizontal rule; no direct docx equivalent)
+      return [new Paragraph({ style: "Normal" })];
 
     case 'space':
       return [new Paragraph({ style: "Normal" })];
@@ -848,7 +863,7 @@ const PAGE_CONTENT_HEIGHT_PX = 864;
  * ─────────
  * 1. Walk from the top of the content accumulating height.
  * 2. Every PAGE_CONTENT_HEIGHT_PX of content → auto page break.
- * 3. Whenever a `.page-break` div (from `---` in the source) is reached
+ * 3. Whenever a `.page-break` div (from `===` in the source) is reached
  *    before the next automatic boundary, insert a break there instead and
  *    reset the page meter from that position.
  *
@@ -876,7 +891,7 @@ function addPageRuler(el) {
   const totalH = el.scrollHeight;
   if (totalH < 10) return; // nothing rendered yet
 
-  // Collect manual break positions from `---` → `.page-break` divs
+  // Collect manual break positions from `===` → `.page-break` divs
   const manuals = [];
   el.querySelectorAll('.page-break').forEach(pb => manuals.push(pb.offsetTop));
   manuals.sort((a, b) => a - b);

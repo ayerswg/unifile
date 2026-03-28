@@ -20,7 +20,12 @@
 import { state, PANELS } from './state.js';
 import { shortHash } from '../core/hash.js';
 import { showArchivedCommentsModal } from './comments.js';
-import { listDSLs } from '../dsl/registry.js';
+import { listDSLs, getDSL } from '../dsl/registry.js';
+import {
+  getExtensionMeta,
+  setTextExtension,
+  clearExtension,
+} from './plugin-extensions.js';
 
 export class TopBar {
   /**
@@ -965,21 +970,61 @@ function showManagePluginsModal(handlers) {
   const overlay = document.createElement('div');
   overlay.className = 'dsl-help-overlay';
 
-  const renderContent = () => {
-    const plugins = state.data?.plugins ?? {};
-    const ids = Object.keys(plugins);
+  // ---------------------------------------------------------------------------
+  // Build the HTML for one plugin row (with optional extension slots expander)
+  // ---------------------------------------------------------------------------
 
-    const rows = ids.map(id => {
-      let dslName = id;
-      try { dslName = listDSLs().find(d => d.id === id)?.name ?? id; } catch { /* ignore */ }
-      return `
-        <div class="plugin-mgr-row" data-id="${escHtml(id)}">
+  // Render a row for an installed (removable) plugin.
+  const renderPluginRow = (id) => {
+    let dslName = id;
+    let slots   = [];
+    try {
+      const dsl = getDSL(id);
+      dslName = dsl?.name ?? id;
+      slots   = dsl?.extensionSlots ?? [];
+    } catch { /* plugin may not be registered yet */ }
+
+    const slotsHtml = _renderSlots(id, slots);
+
+    return `
+      <div class="plugin-mgr-row" data-id="${escHtml(id)}">
+        <div class="plugin-mgr-row-header">
           <code class="plugin-mgr-shebang">#!${escHtml(id)}</code>
           <span class="plugin-mgr-name">${escHtml(dslName)}</span>
           <button class="plugin-mgr-remove" data-id="${escHtml(id)}" title="Remove plugin">Remove</button>
         </div>
-      `;
-    }).join('');
+        ${slotsHtml}
+      </div>
+    `;
+  };
+
+  // Render a row for a built-in DSL that declares extensionSlots (non-removable).
+  const renderBuiltinRow = (dsl) => {
+    const slotsHtml = _renderSlots(dsl.id, dsl.extensionSlots ?? []);
+    return `
+      <div class="plugin-mgr-row plugin-mgr-row--builtin" data-id="${escHtml(dsl.id)}">
+        <div class="plugin-mgr-row-header">
+          <code class="plugin-mgr-shebang">#!${escHtml(dsl.id)}</code>
+          <span class="plugin-mgr-name">${escHtml(dsl.name ?? dsl.id)}</span>
+          <span class="plugin-mgr-builtin-badge">built-in</span>
+        </div>
+        ${slotsHtml}
+      </div>
+    `;
+  };
+
+  const renderContent = () => {
+    const installedIds = Object.keys(state.data?.plugins ?? {});
+
+    // Built-in DSLs that declare extensionSlots and aren't also installed as plugins.
+    const builtinWithSlots = listDSLs().filter(
+      d => (d.extensionSlots?.length ?? 0) > 0 && !installedIds.includes(d.id)
+    );
+
+    const installedRows = installedIds.map(renderPluginRow).join('');
+    const builtinRows   = builtinWithSlots.map(renderBuiltinRow).join('');
+    const allRows       = builtinRows + installedRows;
+    const hasAny        = installedIds.length > 0 || builtinWithSlots.length > 0;
 
     return `
       <div class="dsl-help-modal" role="dialog" aria-modal="true" aria-label="Manage plugins" tabindex="-1">
@@ -988,9 +1033,9 @@ function showManagePluginsModal(handlers) {
           <button class="dsl-help-close" aria-label="Close">&times;</button>
         </div>
         <div class="dsl-help-body plugin-mgr-body">
-          ${ids.length === 0
+          ${!hasAny
             ? '<p class="plugin-mgr-empty">No plugins installed. Use the button below to install a .plugin.js file.</p>'
-            : `<div class="plugin-mgr-list">${rows}</div>`}
+            : `<div class="plugin-mgr-list">${allRows}</div>`}
         </div>
         <div class="dsl-help-footer plugin-mgr-footer">
           <button class="plugin-mgr-install-btn" id="plugin-mgr-install">Install plugin…</button>
@@ -1011,7 +1056,6 @@ function showManagePluginsModal(handlers) {
 
   const refresh = () => {
     overlay.innerHTML = renderContent();
-    // Re-bind events after refresh
     overlay.querySelector('.dsl-help-close').addEventListener('click', close);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     bindActions();
@@ -1022,6 +1066,31 @@ function showManagePluginsModal(handlers) {
       btn.addEventListener('click', () => {
         const id = btn.dataset.id;
         handlers.onRemovePlugin?.(id);
+        refresh();
+      });
+    });
+
+    // ── Text slot: save on Enter or blur ──────────────────────────────────
+    overlay.querySelectorAll('.plugin-ext-text-input').forEach(input => {
+      const { dslId, slotId } = input.dataset;
+
+      const save = () => {
+        setTextExtension(dslId, slotId, input.value);
+        // Update the clear-button visibility without full refresh.
+        const clearBtn = input.closest('.plugin-ext-slot')?.querySelector('.plugin-ext-clear');
+        if (clearBtn) clearBtn.style.display = input.value.trim() ? '' : 'none';
+      };
+
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+      input.addEventListener('blur', save);
+    });
+
+    // ── Clear button (text and file slots) ────────────────────────────────
+    overlay.querySelectorAll('.plugin-ext-clear').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const { dslId, slotId } = btn.dataset;
+        await clearExtension(dslId, slotId);
+        // Full refresh so all event bindings stay clean.
         refresh();
       });
     });
@@ -1050,6 +1119,68 @@ function showManagePluginsModal(handlers) {
   };
 
   bindActions();
+}
+
+// ---------------------------------------------------------------------------
+// Extension slot renderer helpers
+// ---------------------------------------------------------------------------
+
+/** Render the collapsible Extensions section for a plugin row. */
+function _renderSlots(dslId, slots) {
+  if (!slots || slots.length === 0) return '';
+  return `
+    <details class="plugin-ext-details">
+      <summary class="plugin-ext-summary">Extensions</summary>
+      <div class="plugin-ext-body">
+        ${slots.map(slot => _renderSlot(dslId, slot)).join('')}
+      </div>
+    </details>
+  `;
+}
+
+/** Render a single extension slot row inside the plugin expander. */
+function _renderSlot(dslId, slot) {
+  const meta = getExtensionMeta(dslId, slot.id);
+
+  if (slot.type === 'text') {
+    const current = meta?.value ?? '';
+    return `
+      <div class="plugin-ext-slot" data-slot-id="${escHtml(slot.id)}">
+        <div class="plugin-ext-slot-header">
+          <span class="plugin-ext-label">${escHtml(slot.label)}</span>
+          <button class="plugin-ext-clear" data-dsl-id="${escHtml(dslId)}" data-slot-id="${escHtml(slot.id)}"
+            title="Clear value" style="${current ? '' : 'display:none'}">Clear</button>
+        </div>
+        ${slot.description ? `<p class="plugin-ext-desc">${escHtml(slot.description)}</p>` : ''}
+        <input
+          class="plugin-ext-text-input"
+          type="text"
+          data-dsl-id="${escHtml(dslId)}"
+          data-slot-id="${escHtml(slot.id)}"
+          value="${escHtml(current)}"
+          placeholder="${escHtml(slot.placeholder ?? '')}"
+          spellcheck="false"
+        />
+      </div>
+    `;
+  }
+
+  // file type — placeholder for future file upload support
+  const filename = meta?.filename ?? null;
+  return `
+    <div class="plugin-ext-slot" data-slot-id="${escHtml(slot.id)}">
+      <div class="plugin-ext-slot-header">
+        <span class="plugin-ext-label">${escHtml(slot.label)}</span>
+        ${filename ? `<button class="plugin-ext-clear" data-dsl-id="${escHtml(dslId)}" data-slot-id="${escHtml(slot.id)}" title="Remove file">Remove</button>` : ''}
+      </div>
+      ${slot.description ? `<p class="plugin-ext-desc">${escHtml(slot.description)}</p>` : ''}
+      <div class="plugin-ext-file-value">
+        ${filename
+          ? `<span class="plugin-ext-filename">${escHtml(filename)}</span>`
+          : '<span class="plugin-ext-no-file">No file set</span>'}
+      </div>
+    </div>
+  `;
 }
 
 function iconExternalLink() {

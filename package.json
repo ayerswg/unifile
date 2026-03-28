@@ -4,15 +4,9 @@
   "description": "Framework for single-file offline HTML quines with version control",
   "type": "module",
   "scripts": {
-    "build": "node build/build.mjs --dsl=markdown",
-    "build:markdown": "node build/build.mjs --dsl=markdown",
-    "build:mermaid": "node build/build.mjs --dsl=mermaid",
-    "build:abcjs": "node build/build.mjs --dsl=abcjs",
-    "build:marp": "node build/build.mjs --dsl=marp",
-    "build:universal": "node build/build.mjs --dsl=universal",
+    "build": "node build/build.mjs",
+    "build:dev": "node build/build.mjs --dev",
     "build:plugins": "node build/build.mjs --plugins",
-    "build:all": "node build/build.mjs --dsl=markdown && node build/build.mjs --dsl=mermaid && node build/build.mjs --dsl=abcjs && node build/build.mjs --dsl=marp && node build/build.mjs --dsl=universal",
-    "build:dev": "node build/build.mjs --dsl=markdown --dev",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

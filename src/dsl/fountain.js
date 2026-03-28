@@ -153,8 +153,19 @@ function parseFountain(src) {
       else break;
     }
     const m = line.match(/^([A-Za-z][A-Za-z\s]*):\s*(.*)$/);
-    if (m) { titlePageData[m[1].trim()] = m[2].trim(); li++; }
-    else break;
+    // Reject all-caps "keys" — those are screenplay transitions (e.g. FADE IN:),
+    // not title-page metadata.  Valid title page keys always contain lowercase.
+    if (m && /[a-z]/.test(m[1])) {
+      const key = m[1].trim();
+      const valueLines = m[2].trim() ? [m[2].trim()] : [];
+      li++;
+      // Collect indented continuation lines (tab or leading spaces)
+      while (li < lines.length && /^[ \t]/.test(lines[li])) {
+        valueLines.push(lines[li].trim());
+        li++;
+      }
+      titlePageData[key] = valueLines.join('\n');
+    } else break;
   }
   if (Object.keys(titlePageData).length > 0) {
     elements.push({ type: 'title-page', data: titlePageData,
@@ -300,9 +311,13 @@ function parseFountain(src) {
     }
 
     // ── Character cue: ALL CAPS ────────────────────────────────────────────────
+    // Per Fountain spec, a character cue must be IMMEDIATELY followed by dialogue
+    // with NO blank lines between them.  We check the very next line — if it's
+    // blank (or absent), the all-caps line is action text, not a character name.
     if (_isCharacterCue(trimmed)) {
-      const next = _nextNonBlank(bodyLines, bi + 1);
-      if (next !== null && !_looksLikeSceneOrTransition(next.trim())) {
+      const nextLine = bodyLines[bi + 1] ?? '';
+      const nextTrimmed = nextLine.trim();
+      if (nextTrimmed && !_looksLikeSceneOrTransition(nextTrimmed)) {
         elements.push({ type: 'character', text: trimmed,
           srcFrom: from(bi), srcTo: to(bi + 1) });
         lastWasCharacter = true; inDialogueBlock = true;
@@ -354,9 +369,12 @@ function _stripBoneyards(lines) {
 
 function _isCharacterCue(trimmed) {
   if (!trimmed) return false;
-  const core = trimmed.replace(/\s*\(.*?\)\s*$/, '').trim();
+  // Strip ALL parenthetical extensions: (V.O.), (CONT'D), (O.S.), etc.
+  // A character name like "EDWARD (V.O.)(CONT'D)" has multiple extensions;
+  // we remove them all before checking the base name.
+  const core = trimmed.replace(/\s*\([^)]*\)/g, '').trim();
   if (core.length < 2) return false;
-  if (!/^[A-Z][A-Z0-9 '.-]+$/.test(core)) return false;
+  if (!/^[A-Z@][A-Z0-9 '.-]*[A-Z0-9.]$/.test(core) && !/^@/.test(trimmed)) return false;
   if (/^(INT|EXT|INT\.\/EXT|I\/E|EST)\b/.test(core)) return false;
   return true;
 }
@@ -399,74 +417,221 @@ function _ensureStyles() {
   const style = document.createElement('style');
   style.id = FOUNTAIN_STYLE_ID;
   style.textContent = `
-/* === Fountain base (context-agnostic) === */
+/* =======================================================================
+   Fountain base — always applied
+   All element nodes are <div>s so generic layout-container p/h* rules
+   cannot override fountain's carefully measured column margins.
+   ======================================================================= */
 .fountain-screenplay {
   font-family: 'Courier Prime', 'Courier New', Courier, monospace;
   font-size: 12pt;
   line-height: 1.5;
 }
 
-/* === Standalone mode: screenplay-like page layout, theme-aware === */
+/* =======================================================================
+   Standalone mode — screenplay "paper" presentation
+   Used when fountain is the top-level DSL (webpage or direct preview).
+   ======================================================================= */
 .fountain-standalone {
-  padding: 0.75in 0.75in 0.75in 1in;
-  max-width: 8in;
+  padding: 1in 1in 1in 1.5in;
+  max-width: 8.5in;
   margin: 0 auto;
-  /* Default: light mode (screenplay is a print format) */
   background: #f9f9f7;
   color: #111;
   border-radius: 2px;
-  box-shadow: 0 2px 12px rgba(0,0,0,.35);
+  box-shadow: 0 2px 16px rgba(0,0,0,.30);
 }
-
-/* Dark-mode: match the app surface instead of forcing white */
 [data-theme="dark"] .fountain-standalone {
-  background: var(--bg, #1e1e2e);
-  color: var(--fg, #cdd6f4);
+  background: #1e1e2e;
+  color: #cdd6f4;
   box-shadow: none;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .fountain-standalone {
-    background: var(--bg, #1e1e2e);
-    color: var(--fg, #cdd6f4);
+    background: #1e1e2e;
+    color: #cdd6f4;
     box-shadow: none;
   }
 }
 
-/* Print context: no outer chrome — slides/doc pages supply background + padding */
+/* =======================================================================
+   Print mode — inside a slide frame or document page.
+   The container already supplies background, padding, and size.
+   ======================================================================= */
 .fountain-print {
-  /* intentionally empty */
+  /* no outer chrome — let the container handle it */
 }
 
-/* === Element styles (work in both light and dark via currentColor + opacity) === */
-.fountain-title-page {
-  text-align: center;
-  margin-bottom: 3em;
-  padding-bottom: 1.5em;
+/* =======================================================================
+   Title page
+   In standalone mode: flex column, title/credit centred vertically,
+   contact pinned to the bottom-left — mimics a proper screenplay title page.
+   In print mode: natural flow (no viewport-relative min-height).
+   ======================================================================= */
+.fountain-standalone .fountain-title-page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(11in - 2in);   /* standard page minus top+bottom margins */
+  padding-bottom: 1em;
   border-bottom: 1px solid currentColor;
-  opacity: 0.9;
+  opacity: 0.92;
 }
-.fountain-title-page .ft-title  { font-size: 18pt; font-weight: bold; text-transform: uppercase; margin-bottom: .5em; }
-.fountain-title-page .ft-credit { font-size: 12pt; margin-bottom: .25em; }
-.fountain-title-page .ft-author { font-size: 14pt; font-weight: bold; margin-bottom: .25em; }
-.fountain-title-page .ft-meta   { font-size: 11pt; opacity: .7; margin-top: .25em; }
-.fountain-title-page .ft-contact{ margin-top: 2em; font-size: 10pt; opacity: .7; text-align: left; }
+.fountain-print .fountain-title-page {
+  display: flex;
+  flex-direction: column;
+  /* Pad so the page feels like a full sheet without relying on a fixed parent height */
+  min-height: 9in;
+  padding-bottom: .5em;
+  border-bottom: 1px solid currentColor;
+  opacity: 0.92;
+}
 
-.fountain-scene-heading { font-weight: bold; text-transform: uppercase; text-decoration: underline; margin-top: 1.5em; margin-bottom: .25em; }
-.fountain-action        { margin-bottom: .25em; }
-.fountain-character     { margin-left: 37%; margin-top: .75em; margin-bottom: 0; text-transform: uppercase; }
-.fountain-dialogue      { margin-left: 25%; margin-right: 15%; margin-top: 0; margin-bottom: 0; }
-.fountain-parenthetical { margin-left: 30%; margin-right: 20%; margin-top: 0; margin-bottom: 0; font-style: italic; opacity: .75; }
-.fountain-transition    { text-align: right; text-transform: uppercase; margin-top: 1em; margin-bottom: .5em; }
-.fountain-centered      { text-align: center; margin: .5em 0; }
-.fountain-lyric         { margin-left: 25%; margin-right: 15%; font-style: italic; }
-.fountain-note          { font-size: 10pt; opacity: .55; font-style: italic; border-left: 2px solid currentColor; padding-left: .5em; margin: .5em 0; }
-.fountain-synopsis      { font-style: italic; opacity: .6; margin-left: 1em; margin-bottom: .25em; font-size: 11pt; }
-.fountain-section-1     { font-size: 14pt; font-weight: bold; text-transform: uppercase; margin-top: 2em; margin-bottom: .5em; border-bottom: 1px solid currentColor; opacity: .8; }
-.fountain-section-2     { font-size: 12pt; font-weight: bold; text-transform: uppercase; margin-top: 1.5em; margin-bottom: .25em; opacity: .75; }
-.fountain-section-3     { font-size: 12pt; font-weight: bold; margin-top: 1em; margin-bottom: .25em; opacity: .7; }
-.fountain-page-break    { border-top: 1px dashed currentColor; margin: 2em 0; text-align: right; font-size: 9pt; opacity: .4; }
+/* Center block: title / credit / author / source float to the vertical middle.
+   flex:1 works when the parent has a defined height (standalone uses min-height on
+   the viewport; print uses min-height: 9in).  Both resolve the flex context. */
+.fountain-title-page .ft-center-block {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 2em 0;
+}
+.fountain-title-page .ft-title  {
+  display: block;
+  font-size: 18pt; font-weight: bold; text-transform: uppercase;
+  margin-bottom: .6em;
+}
+.fountain-title-page .ft-credit {
+  display: block;
+  font-size: 12pt; margin-bottom: .25em;
+}
+.fountain-title-page .ft-author {
+  display: block;
+  font-size: 14pt; font-weight: bold; margin-bottom: .25em;
+}
+.fountain-title-page .ft-meta   {
+  display: block;
+  font-size: 11pt; opacity: .7; margin-top: .25em;
+}
+/* Contact sits at the bottom-left, outside the center block */
+.fountain-title-page .ft-contact {
+  display: block;
+  font-size: 10pt; opacity: .7; text-align: left; margin-top: auto;
+  white-space: pre-line;
+}
+
+/* =======================================================================
+   Body elements
+   All are display:block divs.  Margins are relative to the text-column
+   width (the fountain-screenplay container minus its own padding), which
+   matches standard US screenplay proportions (6" column, Courier 12pt).
+
+   Standard column positions (% of 6" text column):
+     Action / scene heading   : 0 % – 100 %
+     Character cue            : 37 % from left  (≈ 2.2" / 6")
+     Dialogue                 : 17 % – 75 %     (≈ 1" – 4.5" / 6")
+     Parenthetical            : 24 % – 66 %     (≈ 1.4" – 4" / 6")
+     Transition               : right-aligned
+   ======================================================================= */
+.fountain-scene-heading {
+  display: block;
+  font-weight: bold;
+  text-transform: uppercase;
+  text-decoration: underline;
+  margin-top: 1.5em;
+  margin-bottom: .25em;
+}
+.fountain-action {
+  display: block;
+  margin-top: 0;
+  margin-bottom: .25em;
+}
+.fountain-character {
+  display: block;
+  margin-left: 37%;
+  margin-top: .75em;
+  margin-bottom: 0;
+  text-transform: uppercase;
+}
+.fountain-dialogue {
+  display: block;
+  margin-left: 17%;
+  margin-right: 25%;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.fountain-parenthetical {
+  display: block;
+  margin-left: 24%;
+  margin-right: 34%;
+  margin-top: 0;
+  margin-bottom: 0;
+  font-style: italic;
+  opacity: .8;
+}
+.fountain-transition {
+  display: block;
+  text-align: right;
+  text-transform: uppercase;
+  margin-top: 1em;
+  margin-bottom: .5em;
+}
+.fountain-centered {
+  display: block;
+  text-align: center;
+  margin: .5em 0;
+}
+.fountain-lyric {
+  display: block;
+  margin-left: 17%;
+  margin-right: 25%;
+  font-style: italic;
+}
+.fountain-note {
+  display: block;
+  font-size: 10pt;
+  opacity: .5;
+  font-style: italic;
+  border-left: 2px solid currentColor;
+  padding-left: .5em;
+  margin: .5em 0;
+}
+.fountain-synopsis {
+  display: block;
+  font-style: italic;
+  opacity: .55;
+  margin-left: 1em;
+  margin-bottom: .25em;
+  font-size: 11pt;
+}
+.fountain-section-1 {
+  display: block;
+  font-size: 14pt; font-weight: bold; text-transform: uppercase;
+  margin-top: 2em; margin-bottom: .5em;
+  border-bottom: 1px solid currentColor; opacity: .8;
+}
+.fountain-section-2 {
+  display: block;
+  font-size: 12pt; font-weight: bold; text-transform: uppercase;
+  margin-top: 1.5em; margin-bottom: .25em; opacity: .75;
+}
+.fountain-section-3 {
+  display: block;
+  font-size: 12pt; font-weight: bold;
+  margin-top: 1em; margin-bottom: .25em; opacity: .7;
+}
+.fountain-page-break {
+  display: block;
+  border-top: 1px dashed currentColor;
+  margin: 2em 0;
+  text-align: right;
+  font-size: 9pt;
+  opacity: .4;
+}
 .fountain-page-break::after { content: 'page break'; }
-.fountain-blank         { display: block; height: .5em; }
+.fountain-blank { display: block; height: .5em; }
 `;
   document.head.appendChild(style);
 }
@@ -481,25 +646,39 @@ function _makeTitlePage(el, base) {
   div.className = 'fountain-title-page';
   div.dataset.docFrom = base + el.srcFrom;
   div.dataset.docTo   = base + el.srcTo;
-  const add = (cls, text) => {
+
+  // Center block: title, credit, author, source, and any extra meta float
+  // to the vertical middle of the page.
+  const center = document.createElement('div');
+  center.className = 'ft-center-block';
+
+  const addTo = (container, cls, text) => {
     if (!text) return;
-    const p = document.createElement('p');
-    p.className = cls;
-    p.textContent = text;
-    div.appendChild(p);
+    for (const line of text.split('\n')) {
+      if (!line) continue;
+      const d = document.createElement('div');
+      d.className = cls;
+      d.innerHTML = _fmt(line);
+      container.appendChild(d);
+    }
   };
-  add('ft-title',   d['Title']);
-  add('ft-credit',  d['Credit']);
-  add('ft-author',  d['Author'] || d['Authors']);
-  add('ft-credit',  d['Source']);
+
+  addTo(center, 'ft-title',  d['Title']);
+  addTo(center, 'ft-credit', d['Credit']);
+  addTo(center, 'ft-author', d['Author'] || d['Authors']);
+  addTo(center, 'ft-credit', d['Source']);
   for (const k of ['Draft date', 'Date', 'Copyright']) {
-    if (d[k]) add('ft-meta', `${k}: ${d[k]}`);
+    if (d[k]) addTo(center, 'ft-meta', `${k}: ${d[k]}`);
   }
-  add('ft-contact', d['Contact']);
   for (const [k, v] of Object.entries(d)) {
     const known = ['Title','Credit','Author','Authors','Source','Draft date','Date','Copyright','Contact'];
-    if (!known.includes(k)) add('ft-meta', `${k}: ${v}`);
+    if (!known.includes(k)) addTo(center, 'ft-meta', `${k}: ${v}`);
   }
+  div.appendChild(center);
+
+  // Contact block anchored to the bottom-left
+  addTo(div, 'ft-contact', d['Contact']);
+
   return div;
 }
 
@@ -552,37 +731,37 @@ async function render(content, el) {
       }
       switch (elem.type) {
         case 'scene-heading':
-          wrap.appendChild(_makeEl('p', 'fountain-scene-heading', _esc(elem.text), elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-scene-heading', _esc(elem.text), elem, base));
           break;
         case 'action':
-          wrap.appendChild(_makeEl('p', 'fountain-action', elem.text, elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-action', elem.text, elem, base));
           break;
         case 'character':
-          wrap.appendChild(_makeEl('p', 'fountain-character', _esc(elem.text), elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-character', _esc(elem.text), elem, base));
           break;
         case 'dialogue':
-          wrap.appendChild(_makeEl('p', 'fountain-dialogue', elem.text, elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-dialogue', elem.text, elem, base));
           break;
         case 'parenthetical':
-          wrap.appendChild(_makeEl('p', 'fountain-parenthetical', _esc(elem.text), elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-parenthetical', _esc(elem.text), elem, base));
           break;
         case 'transition':
-          wrap.appendChild(_makeEl('p', 'fountain-transition', _esc(elem.text), elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-transition', _esc(elem.text), elem, base));
           break;
         case 'centered':
-          wrap.appendChild(_makeEl('p', 'fountain-centered', _esc(elem.text), elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-centered', _esc(elem.text), elem, base));
           break;
         case 'lyric':
-          wrap.appendChild(_makeEl('p', 'fountain-lyric', `~ ${_esc(elem.text)}`, elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-lyric', `~ ${_esc(elem.text)}`, elem, base));
           break;
         case 'note':
-          wrap.appendChild(_makeEl('p', 'fountain-note', `[[${_esc(elem.text)}]]`, elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-note', `[[${_esc(elem.text)}]]`, elem, base));
           break;
         case 'synopsis':
-          wrap.appendChild(_makeEl('p', 'fountain-synopsis', `= ${_esc(elem.text)}`, elem, base));
+          wrap.appendChild(_makeEl('div', 'fountain-synopsis', `= ${_esc(elem.text)}`, elem, base));
           break;
         case 'section':
-          wrap.appendChild(_makeEl('p', `fountain-section-${elem.level}`, _esc(elem.text), elem, base));
+          wrap.appendChild(_makeEl('div', `fountain-section-${elem.level}`, _esc(elem.text), elem, base));
           break;
         case 'page-break': {
           const hr = document.createElement('div');
@@ -593,7 +772,7 @@ async function render(content, el) {
           break;
         }
         case 'blank': {
-          const sp = document.createElement('span');
+          const sp = document.createElement('div');
           sp.className = 'fountain-blank';
           wrap.appendChild(sp);
           break;

@@ -506,7 +506,11 @@ export class Editor {
       // Clamp to document length to guard against stale positions.
       const docLen = this._view.state.doc.length;
       const safeFrom = Math.min(from,  docLen);
-      const safeTo   = Math.min(to ?? from, docLen);
+      let   safeTo   = Math.min(to ?? from, docLen);
+      // Trim trailing newlines so clicking a block doesn't visually include
+      // the blank separator line that follows it in the source.
+      const doc = this._view.state.doc;
+      while (safeTo > safeFrom && doc.sliceString(safeTo - 1, safeTo) === '\n') safeTo--;
       // Use the native CM6 text selection as the visual highlight — same
       // appearance as drag-selecting text.  If there's a real range, select
       // it; otherwise just move the cursor.

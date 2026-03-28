@@ -503,6 +503,11 @@ async function startPlayback() {
   const selFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
   const selTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
 
+  // Check whether the user has configured a soundfont URL via the extension slot.
+  // Read directly from state.data (state is stubbed to the host singleton in
+  // plugin builds, so this always sees the live document data).
+  const soundfontUrl = state.data?.pluginExtensions?.abcjs?.['soundfont-url']?.value ?? null;
+
   // ── 1.  Populate midiPitches by running the MIDI flattener ───────────────
   //
   // tune.setUpAudio() runs the sequencer + flattener which mutates each note's
@@ -543,7 +548,7 @@ async function startPlayback() {
   }
   // else: cursor at 0 / no selection → play from beginning
 
-  // ── 3.  Schedule audio (Web Audio oscillators) ───────────────────────────
+  // ── 3.  Schedule audio ───────────────────────────────────────────────────
   //
   // AudioContext must be created synchronously inside the user-gesture handler
   // so the browser's autoplay policy allows it to start immediately.
@@ -557,9 +562,59 @@ async function startPlayback() {
     _audioContext = null;
     return;
   }
-  _scheduleOscillators(noteEvents, startSeconds, stopChar);
 
-  _synth = { stop: () => {} };
+  if (soundfontUrl && abcjs.synth?.CreateSynth) {
+    // ── 3a.  Soundfont synth path ─────────────────────────────────────────
+    //
+    // abcjs.synth.CreateSynth fetches per-instrument MIDI.js files from the
+    // configured base URL and decodes them into AudioBuffers.
+    // This path always starts from the beginning of the tune (the synth API
+    // does not support starting at an arbitrary time offset).
+    try {
+      const synth = new abcjs.synth.CreateSynth();
+      await synth.init({
+        audioContext: _audioContext,
+        visualObj:    tune,
+        options: {
+          soundFontUrl: soundfontUrl,
+          onEnded:      () => stopPlayback(),
+        },
+      });
+      await synth.prime();
+      _synth = synth;
+    } catch (err) {
+      // Synth setup failed (e.g. wrong URL format, network unavailable, CORS).
+      // Show an error banner in the preview so the user knows what went wrong,
+      // then fall through to the oscillator path so playback still works.
+      const msg = err?.message ?? String(err);
+      if (_playEl) {
+        const banner = document.createElement('div');
+        banner.className = 'abc-soundfont-error';
+        banner.textContent = `⚠ Soundfont failed to load (${msg}). Using oscillator playback instead.`;
+        _playEl.insertAdjacentElement('afterbegin', banner);
+        setTimeout(() => banner.remove(), 8000);
+      }
+      console.warn('[abcjs] Soundfont synth init failed, falling back to oscillators:', msg);
+      try { _audioContext.close(); } catch { /* ignore */ }
+      _audioContext = null;
+      _synth = null;
+
+      // Re-create AudioContext for the oscillator path.
+      try {
+        _audioContext = new AudioContext();
+        await _audioContext.resume();
+      } catch {
+        _audioContext = null;
+        return;
+      }
+    }
+  }
+
+  if (!_synth) {
+    // ── 3b.  Web Audio oscillator path (offline, no soundfont) ───────────
+    _scheduleOscillators(noteEvents, startSeconds, stopChar);
+    _synth = { stop: () => {} };
+  }
 
   // ── 4.  Timing callbacks (visual feedback only) ──────────────────────────
 
@@ -604,7 +659,16 @@ async function startPlayback() {
   _playEl?.classList.add('abc-playing');
   state.abcPlaying = true;
   state.emit('abc-play-state', { playing: true });
-  _timingCallbacks.start(startSeconds, 'seconds');
+
+  if (typeof _synth?.start === 'function') {
+    // Seek to the requested start position before starting (synth.seek() sets
+    // pausedTimeSec so that start() resumes from there rather than the beginning).
+    if (startSeconds > 0) _synth.seek(startSeconds, 'seconds');
+    _synth.start();
+    _timingCallbacks.start(startSeconds, 'seconds');
+  } else {
+    _timingCallbacks.start(startSeconds, 'seconds');
+  }
 }
 
 function stopPlayback() {
@@ -812,7 +876,26 @@ const abcjsDSL = {
 
   detect(content) {
     return /^X:\s*\d+/m.test(content) || /^T:/m.test(content);
-  }
+  },
+
+  /**
+   * Extension slots — configurable sub-capabilities exposed in the
+   * Manage Plugins modal.  Each slot is a user-configurable input that
+   * the DSL can read at runtime via plugin-extensions.js helpers.
+   */
+  extensionSlots: [
+    {
+      id:          'soundfont-url',
+      type:        'text',
+      label:       'Soundfont URL',
+      placeholder: 'https://paulrosen.github.io/midi-js-soundfonts/FluidR3_GM/',
+      description: 'Base URL for an mp3-format soundfont collection. '
+        + 'When set, playback uses the abcjs synthesiser for richer instrument sounds instead of '
+        + 'the built-in offline oscillators. Playback will start from the beginning of the tune. '
+        + 'Compatible URLs: …/FluidR3_GM/  or  …/MusyngKite/  '
+        + '(the …/abcjs/ path uses a different format and will not work here).',
+    },
+  ],
 };
 
 registerDSL(abcjsDSL);

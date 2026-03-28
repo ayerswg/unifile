@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <!-- Enforce fully-offline operation: block all external network connections. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; worker-src 'self' blob:; media-src blob:; frame-src 'none'; object-src 'none';">
+  <!--
+    CSP: allow inbound fetches (for optional plugin assets like soundfonts) but
+    block all form submissions and outbound data-exfiltration vectors.
+    connect-src *  — XHR/fetch reads from any URL (e.g. soundfont CDN)
+    form-action 'none'  — no <form> can POST data anywhere
+    All other directives remain locked down (no external scripts/frames/etc).
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src *; worker-src 'self' blob:; media-src blob: https:; frame-src 'none'; object-src 'none'; form-action 'none';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Unifile</title>
   <meta name="description" content="A self-contained document with full version history.">

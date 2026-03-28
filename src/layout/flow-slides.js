@@ -2,8 +2,8 @@
  * Flow → Slides layout renderer.
  *
  * Renders a document with `layout: slides` in its global front matter as a
- * slide deck preview.  Each slide is delimited by a bare `---` line (not
- * inside a code fence).  Content within a slide can contain embedded DSL
+ * slide deck preview.  Each slide is delimited by a bare `===` line (3+ equals,
+ * not inside a code fence).  Content within a slide can contain embedded DSL
  * sections via the usual `#!<dslId>` shebang syntax, e.g.:
  *
  *   ---
@@ -16,7 +16,7 @@
  *
  *   Subtitle text
  *
- *   ---
+ *   ===
  *
  *   ## Data Slide
  *
@@ -26,10 +26,10 @@
  *     "Design" : 20
  *     "Other" : 35
  *
- *   ---
+ *   ===
  *
- * In slides mode `---` is always a slide separator — users wanting a
- * horizontal rule within a slide should use `***` or `___` instead.
+ * In slides mode `===` is always a slide separator. `---` inside slide
+ * content is passed through to the DSL renderer (markdown treats it as `<hr>`).
  *
  * Front matter keys consumed:
  *   dimensions  — 16:9 | 4:3 | 1:1 | a4 | letter | WxH  (default: 16:9)
@@ -80,6 +80,11 @@ export async function renderSlides(content, container) {
   deck.className = 'uf-slide-deck';
   container.appendChild(deck);
 
+  // `dsl:` front matter sets the default DSL for segments that have no #!shebang.
+  // It persists across === breaks so fountain (etc.) doesn't have to repeat #!fountain
+  // on every slide.
+  let currentDslId = meta.dsl ?? 'markdown';
+
   for (let i = 0; i < slides.length; i++) {
     const slide = slides[i];
     const outer = document.createElement('div');
@@ -103,8 +108,8 @@ export async function renderSlides(content, container) {
 
     deck.appendChild(outer);
 
-    // Render content asynchronously — may call slow DSLs like mermaid.
-    await _renderSlideContent(slide.text, frame, slide.from);
+    // Render content — currentDslId carries the last-declared DSL across === breaks.
+    currentDslId = await _renderSlideContent(slide.text, frame, slide.from, currentDslId);
   }
 
   // Scale slides to fit the container width (print-preview style — no reflow).
@@ -128,9 +133,9 @@ export function teardownSlides(container) {
 /**
  * Split the document body into individual slide objects with text and source offset.
  *
- * A bare `---` line (optional trailing whitespace, not inside a code fence)
- * acts as the slide separator.  The global front matter block (before
- * `bodyFrom`) is excluded.
+ * A bare `===` line (3+ equals, optional trailing whitespace, not inside a
+ * code fence) acts as the slide separator.  The global front matter block
+ * (before `bodyFrom`) is excluded.
  *
  * @param {string} content   Full document content
  * @param {number} bodyFrom  Offset where body starts (from parseGlobalFrontMatter)
@@ -159,7 +164,7 @@ function _splitSlides(content, bodyFrom) {
       }
     }
 
-    if (!inFence && /^---\s*$/.test(line)) {
+    if (!inFence && /^={3,}\s*$/.test(line)) {
       const raw = current.join('\n');
       const s   = raw.trim();
       if (s) {
@@ -201,45 +206,58 @@ function _splitSlides(content, bodyFrom) {
  * @param {HTMLElement} el         The `.uf-slide-frame` element
  */
 /**
- * @param {string}      slideText  Slide content (trimmed; position 0 = slideFrom)
- * @param {HTMLElement} el         The `.uf-slide-frame` element
- * @param {number}      slideFrom  Absolute document offset of slideText[0]
+ * Render one slide's content into `el`, returning the last DSL used.
+ *
+ * `defaultDslId` is the DSL inherited from the previous slide (or from
+ * `meta.dsl`).  It is used for any content that has no #!shebang — including
+ * the preamble before the first shebang within this slide.  The return value
+ * becomes the next slide's `defaultDslId`, so the active DSL carries across
+ * === breaks without requiring a repeated #!shebang on every slide.
+ *
+ * @param {string}      slideText    Slide content (trimmed; position 0 = slideFrom)
+ * @param {HTMLElement} el           The `.uf-slide-frame` element
+ * @param {number}      slideFrom    Absolute document offset of slideText[0]
+ * @param {string}      defaultDslId DSL to use when no shebang is present
+ * @returns {string}  The last DSL used in this slide (to carry forward)
  */
-async function _renderSlideContent(slideText, el, slideFrom) {
+async function _renderSlideContent(slideText, el, slideFrom, defaultDslId = 'markdown') {
   const sections = parseDocSections(slideText);
+  let outDslId = defaultDslId;
 
   if (!sections.length) {
-    // No shebangs — render the entire slide as markdown.
-    await _renderPart('markdown', slideText, el, slideFrom, slideFrom + slideText.length, slideFrom);
-    return;
+    // No shebangs — render the entire slide with the inherited DSL.
+    await _renderPart(defaultDslId, slideText, el, slideFrom, slideFrom + slideText.length, slideFrom);
+    return outDslId;
   }
 
-  // Content before the first shebang → markdown.
+  // Content before the first shebang → inherited DSL (not forced to markdown).
   const preambleRaw = slideText.slice(0, sections[0].from);
   const preamble    = preambleRaw.trim();
   if (preamble) {
     const lead = preambleRaw.search(/\S/);
     const pFrom = slideFrom + (lead >= 0 ? lead : 0);
-    await _renderPart('markdown', preamble, el,
+    await _renderPart(defaultDslId, preamble, el,
       pFrom,
       slideFrom + sections[0].from,
-      pFrom);  // contentFrom == docFrom for plain markdown (no shebang)
+      pFrom);
   }
 
-  // Each shebang section.
+  // Each shebang section — update outDslId so it carries to the next slide.
   for (let i = 0; i < sections.length; i++) {
     const sec  = sections[i];
     const raw  = slideText.slice(sec.contentFrom, sec.to);
     const text = raw.trim();
     if (text) {
-      // docFrom = shebang line; dslContentFrom = first content char after shebang.
       const lead = raw.search(/\S/);
       await _renderPart(sec.dslId, text, el,
         slideFrom + sec.from,
         slideFrom + sec.to,
         slideFrom + sec.contentFrom + (lead >= 0 ? lead : 0));
     }
+    outDslId = sec.dslId;
   }
+
+  return outDslId;
 }
 
 async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom) {

@@ -4,7 +4,7 @@
     {
       "name": "unifile-dev",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "dist"],
+      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "dist", "--bind", "127.0.0.1"],
       "port": 8765
     }
   ]

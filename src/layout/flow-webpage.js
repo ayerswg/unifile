@@ -1,12 +1,13 @@
 /**
  * Flow → Webpage layout renderer.
  *
- * Renders the full document body as a single flowing page.
- * `---` on its own line is a horizontal-rule separator — it becomes an <hr>
- * element in the rendered output (unlike slides/document where it is a
- * page/slide break).  Code-fenced `---` lines are preserved as-is.
+ * Renders the document as one or more flowing sections.  `===` on its own
+ * line (3+ equals, not inside a code fence) splits the content into distinct
+ * sections — think of each section as a separate "page" in a multi-page site.
+ * `---` inside any section is passed through to the DSL renderer (markdown
+ * renders it as a standard `<hr>`).
  *
- * All embedded `#!dslId` shebang sections are supported within each segment.
+ * All embedded `#!dslId` shebang sections are supported within each section.
  *
  * There are no fixed page dimensions — content reflows naturally with the
  * container width, just like a normal webpage.
@@ -23,7 +24,7 @@ import { getDSL }                   from '../dsl/registry.js';
 // ---------------------------------------------------------------------------
 
 export async function renderWebpage(content, container) {
-  const { bodyFrom } = parseGlobalFrontMatter(content);
+  const { meta, bodyFrom } = parseGlobalFrontMatter(content);
 
   container.innerHTML = '';
   container.classList.add('webpage-mode');
@@ -32,13 +33,25 @@ export async function renderWebpage(content, container) {
   page.className = 'uf-webpage';
   container.appendChild(page);
 
-  // Pre-split on bare `---` lines (fence-aware) so that `---` between any two
-  // DSL sections is treated as an <hr> rather than being swallowed into the
-  // preceding section's content by parseDocSections.
-  const segments = _splitOnHr(content, bodyFrom);
+  // Pre-split on bare `===` lines (fence-aware).  Each segment becomes a
+  // visually distinct section — like a separate page within a single site.
+  const segments = _splitOnPageBreak(content, bodyFrom);
+
+  // `dsl:` front matter sets the default DSL for sections without a #!shebang.
+  // Carries forward across === breaks so the active DSL persists.
+  let currentDslId = meta.dsl ?? 'markdown';
+
   for (let i = 0; i < segments.length; i++) {
-    if (i > 0) page.appendChild(document.createElement('hr'));
-    await _renderContent(segments[i].text, page, segments[i].from);
+    if (i > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'uf-webpage-section-break';
+      page.appendChild(sep);
+    }
+    const section = document.createElement('div');
+    section.className = 'uf-webpage-section';
+    section.dataset.docFrom = segments[i].from;
+    page.appendChild(section);
+    currentDslId = await _renderContent(segments[i].text, section, segments[i].from, currentDslId);
   }
 }
 
@@ -50,30 +63,35 @@ export function teardownWebpage(container) {
 // Content rendering
 // ---------------------------------------------------------------------------
 
-async function _renderContent(body, el, bodyFrom) {
-  if (!body.trim()) return;
+/**
+ * Render one section's content into `el`, returning the last DSL used.
+ * `defaultDslId` carries the active DSL across === section breaks.
+ */
+async function _renderContent(body, el, bodyFrom, defaultDslId = 'markdown') {
+  if (!body.trim()) return defaultDslId;
 
   const sections = parseDocSections(body);
+  let outDslId = defaultDslId;
 
   if (!sections.length) {
-    // Pure body — no shebang sections; render as markdown.
-    await _renderPart('markdown', body, el, bodyFrom, bodyFrom + body.length, bodyFrom);
-    return;
+    // No shebangs — render with the inherited DSL.
+    await _renderPart(defaultDslId, body, el, bodyFrom, bodyFrom + body.length, bodyFrom);
+    return outDslId;
   }
 
-  // Preamble before the first shebang → markdown
+  // Preamble before the first shebang → inherited DSL (not forced to markdown)
   const preambleRaw = body.slice(0, sections[0].from);
   const preamble    = preambleRaw.trim();
   if (preamble) {
     const lead = preambleRaw.search(/\S/);
     const pFrom = bodyFrom + (lead >= 0 ? lead : 0);
-    await _renderPart('markdown', preamble, el,
+    await _renderPart(defaultDslId, preamble, el,
       pFrom,
       bodyFrom + sections[0].from,
       pFrom);
   }
 
-  // Each shebang section
+  // Each shebang section — update outDslId so it carries to the next section.
   for (const sec of sections) {
     const raw  = body.slice(sec.contentFrom, sec.to);
     const text = raw.trim();
@@ -84,7 +102,10 @@ async function _renderContent(body, el, bodyFrom) {
         bodyFrom + sec.to,
         bodyFrom + sec.contentFrom + (lead >= 0 ? lead : 0));
     }
+    outDslId = sec.dslId;
   }
+
+  return outDslId;
 }
 
 async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom) {
@@ -97,28 +118,25 @@ async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom) {
   try {
     const dsl = getDSL(dslId);
     await dsl.render(text, wrap);
-    // Belt-and-suspenders: if any markdown page-break divs survive (e.g. `---`
-    // inside a code fence that marked still treats as hr), replace them with <hr>.
-    if (dslId === 'markdown') {
-      wrap.querySelectorAll('.page-break').forEach(pb => {
-        pb.replaceWith(document.createElement('hr'));
-      });
-    }
+    // In webpage layout, any markdown page-break divs (from `===` within DSL
+    // content that wasn't intercepted by the splitter, e.g. inside a shebang
+    // section) are rendered as-is — they'll show the visual page-break marker
+    // which is fine in a flowing context.
   } catch (err) {
     wrap.innerHTML = `<pre class="error">${_esc(dslId)} error: ${_esc(err.message)}</pre>`;
   }
 }
 
 // ---------------------------------------------------------------------------
-// HR splitting (fence-aware)
+// Page-break splitting (fence-aware)
 // ---------------------------------------------------------------------------
 
 /**
- * Split document body at bare `---` lines (not inside code fences).
+ * Split document body at bare `===` lines (3+ equals, not inside code fences).
  * Returns an array of { text, from } where `from` is the absolute char offset
  * of the first non-whitespace character of each segment.
  */
-function _splitOnHr(content, bodyFrom) {
+function _splitOnPageBreak(content, bodyFrom) {
   const body  = content.slice(bodyFrom);
   const lines = body.split('\n');
   const segs  = [];
@@ -136,7 +154,7 @@ function _splitOnHr(content, bodyFrom) {
       else if (ch === fenceChar && /^[`~]+\s*$/.test(line.trimStart())) inFence = false;
     }
 
-    if (!inFence && /^---\s*$/.test(line)) {
+    if (!inFence && /^={3,}\s*$/.test(line)) {
       const raw = current.join('\n');
       const s   = raw.trim();
       if (s) {

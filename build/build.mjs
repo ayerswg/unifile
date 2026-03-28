@@ -4,25 +4,19 @@
  * Every output is fully self-contained and works 100% offline.
  * All vendor libraries are bundled by esbuild — no CDN fetches at runtime.
  *
- * Outputs (quine + optional PWA for each)
- * ----------------------------------------
- *   dist/unifile.md.html    markdown quine  (~475 KB)
- *   dist/unifile.mer.html   mermaid quine   (~1.2 MB)  [elkjs stubbed — no ELK layout]
- *   dist/unifile.abc.html   abc notation    (~678 KB)
- *   dist/unifile.mar.html   MARP slides     (~1.7 MB)  [unused hljs languages stubbed]
- *   dist/pwa/               installable PWA (same DSL selection)
+ * Outputs
+ * -------
+ *   dist/unifile.html        universal quine  (markdown built-in; fountain/mermaid/abcjs via plugins)
+ *   dist/pwa/                installable PWA  (same)
+ *   dist/plugins/            drag-and-drop DSL plugin bundles
  *
  * npm scripts
  * -----------
- *   npm run build:markdown   markdown quine + PWA
- *   npm run build:mermaid    mermaid quine  + PWA
- *   npm run build:abcjs      abc notation   + PWA
- *   npm run build:marp       MARP slides    + PWA
- *   npm run build            alias for build:markdown
- *   npm run build:dev        markdown, unminified + inline source maps
+ *   npm run build            quine + PWA
+ *   npm run build:dev        quine + PWA, unminified + inline source maps
+ *   npm run build:plugins    all DSL plugin bundles
  *
- * The PWA build always accompanies the quine build.
- * Pass --no-pwa to skip it.
+ * Pass --no-pwa to skip the PWA build.
  */
 
 import * as esbuild from 'esbuild';
@@ -63,40 +57,6 @@ const elkjsStubPlugin = {
   },
 };
 
-/**
- * marp-core registers all 189+ highlight.js language grammars so that any
- * language tag in a Marp code fence can be highlighted.  Most of those grammars
- * are never used in practice and several individual files exceed 100 KB.
- *
- * This plugin intercepts `require("highlight.js/lib/languages/<name>")` calls
- * and returns an empty stub for every language NOT in the keep-list, shrinking
- * the Marp bundle by ~600–800 KB of raw JS.
- *
- * Languages in HLJS_KEEP are passed through to esbuild unchanged so they are
- * included and work normally.
- */
-const HLJS_KEEP = new Set([
-  'javascript', 'typescript', 'python', 'bash', 'shell',
-  'html', 'xml', 'css', 'json', 'markdown', 'yaml',
-  'java', 'cpp', 'c', 'csharp', 'go', 'rust', 'ruby', 'php', 'sql',
-  'swift', 'kotlin', 'scala', 'r', 'perl', 'lua',
-]);
-
-const hljsLanguageFilterPlugin = {
-  name: 'hljs-language-filter',
-  setup(build) {
-    build.onResolve({ filter: /highlight\.js\/lib\/languages\// }, args => {
-      const lang = args.path.split('/').pop().replace(/\.js$/, '');
-      if (HLJS_KEEP.has(lang)) return null; // keep — let esbuild resolve normally
-      return { path: args.path, namespace: 'hljs-lang-stub' };
-    });
-    build.onLoad({ filter: /.*/, namespace: 'hljs-lang-stub' }, () => ({
-      contents: 'module.exports = function() { return { name: "stub", contains: [] }; };',
-      loader: 'js',
-    }));
-  },
-};
-
 // ---------------------------------------------------------------------------
 // CLI flags
 // ---------------------------------------------------------------------------
@@ -105,35 +65,22 @@ const args      = process.argv.slice(2);
 const DEV       = args.includes('--dev');
 const BUILD_PWA = !args.includes('--no-pwa');
 
-const dslArg = (args.find(a => a.startsWith('--dsl='))?.split('=')[1] ?? 'markdown').toLowerCase();
-
-// DSL metadata — single source of truth shared by build + app (see also
-// src/dsl/registry.js which stores a superset of this at runtime).
-export const DSL_META = {
-  markdown:  { abbrev: 'md',  plugins: ['markdown'],            defaultDslType: 'markdown' },
-  mermaid:   { abbrev: 'mer', plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid'  },
-  abcjs:     { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs'    },
-  marp:      { abbrev: 'mar', plugins: ['marp'],                defaultDslType: 'marp'     },
-  // Universal: Markdown-only baseline; other DSLs installed at runtime via drag-drop
-  universal: { abbrev: 'uni', plugins: ['markdown'],            defaultDslType: 'markdown' },
-};
+// Baseline plugins always bundled into the app (markdown is the built-in DSL).
+// All other DSLs are loaded at runtime via drag-and-drop plugin bundles.
+const BASE_PLUGINS       = ['markdown'];
+const DEFAULT_DSL_TYPE   = 'markdown';
 
 // DSLs that can be built as standalone plugin bundles (drag-and-drop installation)
-const PLUGIN_DSLS = ['mermaid', 'abcjs', 'marp', 'fountain'];
-
-if (!DSL_META[dslArg]) {
-  console.error(`Unknown --dsl: "${dslArg}". Choose: ${Object.keys(DSL_META).join(' | ')}`);
-  process.exit(1);
-}
+const PLUGIN_DSLS = ['mermaid', 'abcjs', 'fountain'];
 
 // ---------------------------------------------------------------------------
 // Generate a temporary entry module for esbuild.
 // Only imports the DSL plugins needed — unused ones are never bundled.
 // ---------------------------------------------------------------------------
 
-async function generateEntry(plugins, mode) {
+async function generateEntry(mode) {
   const src = `// Auto-generated entry — do not edit (regenerated on every build)
-${plugins.map(p => `import './dsl/${p}.js';`).join('\n')}
+${BASE_PLUGINS.map(p => `import './dsl/${p}.js';`).join('\n')}
 import { App } from './ui/app.js';
 import { state as _state } from './ui/state.js';
 import * as _cmLanguage from '@codemirror/language';
@@ -163,7 +110,7 @@ if (document.readyState === 'loading') {
   main();
 }
 `;
-  const path = join(SRC, `_entry_${mode}_${dslArg}.js`);
+  const path = join(SRC, `_entry_${mode}.js`);
   await writeFile(path, src, 'utf8');
   return path;
 }
@@ -172,11 +119,11 @@ if (document.readyState === 'loading') {
 // Embedded initial data
 // ---------------------------------------------------------------------------
 
-function makeInitialData(meta) {
+function makeInitialData() {
   return {
     version: '0.1.0',
     title: 'Untitled Document',
-    dslType: meta.defaultDslType,
+    dslType: DEFAULT_DSL_TYPE,
     currentBranch: 'main',
     branches: { main: { name: 'main', head: null } },
     commits: {},
@@ -189,11 +136,7 @@ function makeInitialData(meta) {
 // Shared esbuild config
 // ---------------------------------------------------------------------------
 
-function buildOptions(entryPoint, unifileMode, dsl) {
-  const plugins = [];
-  if (dsl === 'mermaid') plugins.push(elkjsStubPlugin);
-  if (dsl === 'marp')    plugins.push(hljsLanguageFilterPlugin);
-
+function buildOptions(entryPoint, unifileMode) {
   return {
     entryPoints: [entryPoint],
     bundle: true,
@@ -211,7 +154,6 @@ function buildOptions(entryPoint, unifileMode, dsl) {
       'UNIFILE_MODE': `"${unifileMode}"`
     },
     logOverride: { 'indirect-require': 'silent' },
-    plugins,
   };
 }
 
@@ -227,13 +169,13 @@ async function bundleCSS() {
 // Build quine
 // ---------------------------------------------------------------------------
 
-async function buildQuine(dsl, meta) {
-  console.log(`\nBuilding quine [dsl=${dsl}, dev=${DEV}]…`);
+async function buildQuine() {
+  console.log(`\nBuilding quine [dev=${DEV}]…`);
 
-  const entryPath = await generateEntry(meta.plugins, 'quine');
+  const entryPath = await generateEntry('quine');
 
   const [jsResult, css] = await Promise.all([
-    esbuild.build({ ...buildOptions(entryPath, 'quine', dsl), write: false }),
+    esbuild.build({ ...buildOptions(entryPath, 'quine'), write: false }),
     bundleCSS()
   ]);
   await unlink(entryPath).catch(() => {});
@@ -252,10 +194,10 @@ async function buildQuine(dsl, meta) {
   const html = template
     .replace('/* UNIFILE_CSS */',  () => css)
     .replace('UNIFILE_BUNDLE_GZ',  () => bundleGz)
-    .replace('"UNIFILE_INITIAL_DATA"', () => JSON.stringify(makeInitialData(meta), null, 2));
+    .replace('"UNIFILE_INITIAL_DATA"', () => JSON.stringify(makeInitialData(), null, 2));
 
   await mkdir(DIST, { recursive: true });
-  const outPath = join(DIST, `unifile.${meta.abbrev}.html`);
+  const outPath = join(DIST, 'unifile.html');
   await writeFile(outPath, html, 'utf8');
   const rawKB  = Math.round(jsText.length    / 1024);
   const gzKB   = Math.round(bundleGz.length  / 1024);   // base64 size
@@ -267,16 +209,16 @@ async function buildQuine(dsl, meta) {
 // Build PWA
 // ---------------------------------------------------------------------------
 
-async function buildPWA(dsl, meta) {
-  console.log(`\nBuilding PWA [dsl=${dsl}]…`);
+async function buildPWA() {
+  console.log(`\nBuilding PWA…`);
 
   const pwaDir    = join(DIST, 'pwa');
   await mkdir(pwaDir, { recursive: true });
 
-  const entryPath = await generateEntry(meta.plugins, 'pwa');
+  const entryPath = await generateEntry('pwa');
 
   const [jsResult, css] = await Promise.all([
-    esbuild.build({ ...buildOptions(entryPath, 'pwa', dsl), write: false }),
+    esbuild.build({ ...buildOptions(entryPath, 'pwa'), write: false }),
     bundleCSS()
   ]);
   await unlink(entryPath).catch(() => {});
@@ -468,7 +410,6 @@ export const highlightTree = _l.highlightTree;
 
   const esbuildPlugins = [registryStubPlugin, hostApiStubPlugin];
   if (dslId === 'mermaid') esbuildPlugins.push(elkjsStubPlugin);
-  if (dslId === 'marp')    esbuildPlugins.push(hljsLanguageFilterPlugin);
 
   const result = await esbuild.build({
     entryPoints: [entryPath],
@@ -510,9 +451,7 @@ delete globalThis.__uf_pending_register;
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const meta = DSL_META[dslArg];
-
-  // Special mode: build all plugin bundles
+  // --plugins flag: build only plugin bundles (fast, no quine/PWA rebuild)
   if (args.includes('--plugins')) {
     try {
       for (const dslId of PLUGIN_DSLS) {
@@ -526,9 +465,15 @@ async function main() {
     return;
   }
 
+  // Default: build quine + PWA + all plugin bundles so dist/ is always coherent.
+  // Plugin source changes are picked up on every build — no separate step needed.
   try {
-    await buildQuine(dslArg, meta);
-    if (BUILD_PWA) await buildPWA(dslArg, meta);
+    await buildQuine();
+    if (BUILD_PWA) await buildPWA();
+    console.log('\nBuilding plugins…');
+    for (const dslId of PLUGIN_DSLS) {
+      await buildPlugin(dslId);
+    }
     console.log('\nBuild complete. All outputs are fully self-contained and offline.');
   } catch (err) {
     console.error('\nBuild failed:', err.message);
