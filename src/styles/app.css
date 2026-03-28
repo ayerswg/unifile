@@ -988,6 +988,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
    ============================================================== */
 
 .preview-pane {
+  position: relative;  /* anchor for .preview-rendering-badge */
   flex: 1;
   min-height: 0;       /* allow flex shrink past content height */
   overflow-y: auto;
@@ -1385,6 +1386,65 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .uf-doc-pagenum-left   { left: 12px; }
 .uf-doc-pagenum-center { left: 50%; transform: translateX(-50%); }
 .uf-doc-pagenum-right  { right: 12px; }
+
+/* Preview "Updating…" badge — floats over the top-right of the pane while a
+   render is in flight.  Hidden by default; shown via JS class toggle. */
+.preview-rendering-badge {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 20px;
+  background: rgba(40, 40, 64, 0.82);
+  color: rgba(205, 214, 244, 0.7);
+  font-size: 11px;
+  font-family: var(--font-ui, system-ui, sans-serif);
+  letter-spacing: .02em;
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.preview-rendering-badge--visible {
+  opacity: 1;
+}
+.preview-rendering-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: uf-render-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes uf-render-pulse {
+  from { opacity: 0.3; }
+  to   { opacity: 1;   }
+}
+
+/* Stub loading state — page body not yet populated by IntersectionObserver.
+   A subtle shimmer fills the content area while scrolling toward the page. */
+.uf-doc-page-stub::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(200, 200, 210, 0.18) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: uf-stub-shimmer 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes uf-stub-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 
 /* ==============================================================
    GRID MODEL  (model: grid)

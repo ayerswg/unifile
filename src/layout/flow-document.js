@@ -1,13 +1,30 @@
 /**
  * Flow → Document layout renderer.
  *
- * Renders content as a paginated print-preview. Content is first rendered
- * into an off-screen "tape" div (paper width, unconstrained height), then
- * measured and sliced across fixed-size page frames via CSS `top` offset +
- * `overflow:hidden`. This gives Word-style auto-pagination: content never
- * clips — it simply overflows onto the next physical page.
+ * Renders content as a paginated print-preview.  Content is first rendered
+ * into an off-screen "tape" div (paper width, unconstrained height), measured,
+ * and sliced across fixed-size page frames.
  *
- * `===` lines are explicit hard page breaks (fence-aware). Content between
+ * Performance model
+ * ─────────────────
+ * Rendering N pages of content naively requires N full clones of the tape —
+ * O(N × tape_size) DOM nodes.  For large documents this is prohibitive.
+ *
+ * Instead we use a two-phase approach:
+ *   1. Stub phase  (synchronous, fast): create N lightweight page frames that
+ *      hold correct dimensions, headers, footers, and page-number badges, but
+ *      no body content.  Yields every STUB_YIELD stubs so the editor stays
+ *      responsive.
+ *   2. Populate phase (lazy, on-demand): an IntersectionObserver fires when a
+ *      stub scrolls into the viewport ± IO_MARGIN_PX.  At that point the tape
+ *      is cloned and shifted into the stub's body div.  Once every stub in a
+ *      tape group has been populated the tape is removed from the DOM.
+ *
+ * The stale-while-revalidate pattern keeps the previous render visible during
+ * the stub phase.  The container is only updated (atomically) once all stubs
+ * are ready.
+ *
+ * `===` lines are explicit hard page breaks (fence-aware).  Content between
  * two `===` breaks is auto-paginated independently.
  *
  * Front matter keys consumed:
@@ -34,152 +51,457 @@ const PAGE_PX = {
   legal:  { w: 816,  h: 1344 },  // 8.5 × 14 in
 };
 
+// Yield the event loop every N stubs during the stub-creation loop so the
+// editor input doesn't stall while paginating large documents.
+const STUB_YIELD = 50;
+
+// IntersectionObserver root margin: how far outside the visible scroll area
+// we pre-populate stubs.  Two page-heights gives a comfortable scroll buffer.
+// (Overridden per-render using the actual cfg.pageH.)
+const IO_MARGIN_PAGES = 2;
+
+// Characters to render in the priority batch (first pass, shown to user immediately).
+// ~4-5 fountain pages.  The rest of the section renders in the background.
+const PRIORITY_CHARS = 15_000;
+
+// ---------------------------------------------------------------------------
+// Lazy-load metadata store
+// ---------------------------------------------------------------------------
+
+// Maps a page stub element → { tapeGroup, breakStart, bodyH, cfg }
+// WeakMap so entries are automatically collected when stubs leave the DOM.
+const _stubMeta = new WeakMap();
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function renderDocument(content, container) {
+/**
+ * @param {string}      content
+ * @param {HTMLElement} container
+ * @param {{ signal?: AbortSignal, cursorPos?: number }} [opts]
+ *
+ * Incremental rendering strategy
+ * ───────────────────────────────
+ * Edits can only push layout changes forward in the document.  Pages before
+ * the cursor are unchanged, so we keep their stub DOM nodes and skip
+ * re-rendering their tape sections entirely.
+ *
+ * State stored on container:
+ *   _ufDocSections  — array of { from, to, stubCount, tapeGroup }
+ *                     one entry per explicit section (=== break)
+ *   _ufDocObserver  — single IntersectionObserver covering all unpopulated stubs
+ */
+export async function renderDocument(content, container, { signal, cursorPos } = {}) {
   const { meta, bodyFrom } = parseGlobalFrontMatter(content);
   const cfg = _parseConfig(meta);
   const explicitSections = _splitPages(content, bodyFrom);
 
-  container.innerHTML = '';
-  container.classList.add('document-mode');
+  // ── Find incremental pivot ──────────────────────────────────────────────
+  // The pivot is the earliest position we need to re-render.
+  // Everything before it is kept in the DOM untouched.
+  //
+  // pivotPageNum    — number of existing page stubs to keep (0 = full re-render)
+  // pivotSectionIdx — index into explicitSections where re-rendering begins
+  // pivotCharFrom   — character offset within the pivot section to start the tape
+  //                   (null = render the section from its beginning)
 
-  const doc = document.createElement('div');
-  doc.className = 'uf-doc';
-  container.appendChild(doc);
+  const prevSections = container._ufDocSections ?? [];
+  let pivotSectionIdx = 0;
+  let pivotPageNum    = 0;
+  let pivotCharFrom   = null;
 
-  // `dsl:` front matter sets the default DSL; carries forward across === breaks.
-  let currentDslId = meta.dsl ?? 'markdown';
+  if (cursorPos != null && prevSections.length > 0) {
+    for (let si = 0; si < prevSections.length && si < explicitSections.length; si++) {
+      const prev = prevSections[si];
+      const next = explicitSections[si];
 
-  // Physical page counter — increments across explicit AND auto page breaks.
-  let globalPageNum = 0;
+      // If a section boundary moved (e.g. a new === was added before this
+      // point) the old cached layout is invalid — stop and re-render from here.
+      if (Math.abs(prev.from - next.from) > 5) break;
 
-  for (const section of explicitSections) {
-    // ── 1. Render section content into an off-screen measurement tape ──────
-    //    The tape has the same usable width as a page content area so that
-    //    word-wrap and column widths match the final layout exactly.
-    const tape = document.createElement('div');
-    // Include `uf-doc-page` so DSL renderers that inspect their DOM context
-    // (e.g. fountain's print-mode detection via .closest('.uf-doc-page')) see
-    // the correct context.  It also ensures font-family and CSS custom
-    // properties match the final page, giving accurate height measurements.
-    tape.className = 'uf-doc-tape uf-doc-page';
-    tape.style.cssText =
-      `position:fixed;left:-${cfg.pageW * 2 + 200}px;top:0;` +
-      `width:${cfg.usableW}px;` +
-      `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};` +
-      `box-sizing:border-box;`;
-    document.body.appendChild(tape);
+      if (prev.to < cursorPos) {
+        // Entire section is before cursor: keep its stubs.
+        pivotSectionIdx = si + 1;
+        pivotPageNum   += prev.stubCount;
+      } else {
+        // The cursor is somewhere inside this section.
+        // Walk its stubs to find the exact pivot page.
+        const secStubs = container.querySelectorAll(
+          `.uf-doc-page[data-section-idx="${si}"]`);
+        for (const stub of secStubs) {
+          const pageTo = parseInt(stub.dataset.pageContentTo, 10);
+          if (!isNaN(pageTo) && pageTo < cursorPos) {
+            // This entire page is before the cursor — keep it.
+            pivotPageNum++;
+          } else {
+            // The cursor is on this page (or after all pages in this section).
+            pivotCharFrom = parseInt(stub.dataset.pageContentFrom, 10) || null;
+            break;
+          }
+        }
+        // Re-render from pivotSectionIdx = si, starting at pivotCharFrom.
+        break;
+      }
+    }
+  }
 
-    currentDslId = await _renderPageContent(
-      section.text, tape, section.from, currentDslId);
+  const isFullRender = (pivotPageNum === 0 && pivotCharFrom === null
+                        && pivotSectionIdx === 0);
 
-    // Force layout so scrollHeight and getBoundingClientRect are accurate.
-    void tape.offsetHeight;
-    const breakStarts = _findPageBreaks(tape, cfg.usableH);
-    const numPhysical  = breakStarts.length;
+  // ── Disconnect the old IntersectionObserver ─────────────────────────────
+  // We will create a fresh one that covers both kept and new stubs.
+  container._ufDocObserver?.disconnect();
+  container._ufDocObserver = null;
 
-    // ── 2. Create one physical page per auto-slice ─────────────────────────
-    for (let i = 0; i < numPhysical; i++) {
-      globalPageNum++;
+  // ── DOM surgery ─────────────────────────────────────────────────────────
+  if (isFullRender) {
+    // Release all tapes, wipe DOM.
+    for (const sec of prevSections) {
+      for (const tg of sec.tapeGroups ?? []) tg.tape?.remove?.();
+    }
+    detachScaleObserver(container);
+    container.innerHTML = '';
+    container.classList.add('document-mode');
+    container._ufDocSections = null;
+  } else {
+    // Keep stubs 0..pivotPageNum-1.  Remove the rest, properly decrementing
+    // each stub's tapeGroup.remaining so tapes are freed when no longer needed.
+    const allStubs = [...container.querySelectorAll('.uf-doc-page')];
+    for (let i = pivotPageNum; i < allStubs.length; i++) {
+      const stub = allStubs[i];
+      const info = _stubMeta.get(stub);
+      if (info) {
+        _stubMeta.delete(stub);
+        info.tapeGroup.remaining--;
+        if (info.tapeGroup.remaining === 0) info.tapeGroup.tape.remove();
+      }
+      stub.remove();
+    }
+    // Release tapes for any sections that are fully re-rendered (> pivot section).
+    for (let si = pivotSectionIdx + 1; si < prevSections.length; si++) {
+      for (const tg of prevSections[si].tapeGroups ?? []) {
+        if (tg.tape?.isConnected) tg.tape.remove();
+      }
+    }
+  }
 
-      // How many tape-pixels of content live on this page.
-      // For non-final pages: exactly the distance to the next break point,
-      // which may be LESS than usableH when the break was snapped to a block
-      // boundary.  This ensures the body clips at the break point and the
-      // pushed block doesn't bleed visibly onto the previous page.
-      const bodyH = i < numPhysical - 1
-        ? breakStarts[i + 1] - breakStarts[i]
-        : Math.min(tape.scrollHeight - breakStarts[i], cfg.usableH);
+  // ── Build new stubs ─────────────────────────────────────────────────────
+  // Full render: initially build into a detached div; swap into DOM once the
+  // first priority batch is ready.
+  // Incremental: already in live DOM — just append.
+  const ufDoc = isFullRender
+    ? (() => { const d = document.createElement('div'); d.className = 'uf-doc'; return d; })()
+    : container.querySelector('.uf-doc');
 
-      const page = document.createElement('div');
-      page.className = 'uf-doc-page';
-      // Fixed paper dimensions; overflow:hidden clips anything outside the frame.
-      page.style.cssText =
-        `width:${cfg.pageW}px;height:${cfg.pageH}px;` +
-        `overflow:hidden;position:relative;box-sizing:border-box;`;
-      page.dataset.docFrom = section.from;
-      doc.appendChild(page);
+  let currentDslId  = meta.dsl ?? 'markdown';
+  let globalPageNum = pivotPageNum;
+  const newSectionRecords = [];
+  let domCommitted = !isFullRender; // incremental renders are already live
 
-      // Header overlay (sits in the top-margin band, above content area).
-      if (cfg.header) {
-        const hdr = document.createElement('div');
-        hdr.className = 'uf-doc-header';
-        hdr.style.cssText =
-          `position:absolute;` +
-          `top:0;left:${cfg.marginLeft}px;right:${cfg.marginRight}px;` +
-          `height:${cfg.marginTop}px;` +
-          `display:flex;align-items:flex-end;padding-bottom:6px;`;
-        hdr.innerHTML = _fillTokens(cfg.header,
-          { page: globalPageNum, total: null, title: meta.title ?? '' });
-        page.appendChild(hdr);
+  for (let si = pivotSectionIdx; si < explicitSections.length; si++) {
+    const section = explicitSections[si];
+    if (signal?.aborted) { _cleanupNewSections(newSectionRecords); return; }
+
+    const sectionRelativePivot = (si === pivotSectionIdx && pivotCharFrom != null)
+      ? Math.max(0, pivotCharFrom - section.from)
+      : 0;
+
+    const tapeFrom   = section.from + sectionRelativePivot;
+    const sectionEnd = section.from + section.text.length;
+
+    // One record per section; batches accumulate into it.
+    const sectionRecord = {
+      from:       section.from,
+      to:         sectionEnd,
+      stubCount:  0,
+      tapeGroups: [],
+    };
+
+    let batchFrom  = tapeFrom;
+    let firstBatch = true;
+
+    while (batchFrom < sectionEnd) {
+      if (signal?.aborted) {
+        _cleanupNewSections([...newSectionRecords, sectionRecord]);
+        return;
       }
 
-      // Content body: absolutely positioned in the usable area.
-      // Height = bodyH (≤ usableH) so overflow:hidden clips at the block
-      // boundary rather than at the full usableH mark.
-      const body = document.createElement('div');
-      body.className = 'uf-doc-body';
-      body.style.cssText =
-        `position:absolute;` +
-        `top:${cfg.marginTop}px;left:${cfg.marginLeft}px;` +
-        `width:${cfg.usableW}px;height:${bodyH}px;` +
-        `overflow:hidden;`;
-      page.appendChild(body);
+      // First batch = priority window (small, fast).
+      // Subsequent batches = larger chunks for background rendering.
+      const BATCH_LIMIT = firstBatch ? PRIORITY_CHARS : PRIORITY_CHARS * 4;
+      const batchEnd  = Math.min(batchFrom + BATCH_LIMIT, sectionEnd);
+      const batchText = content.slice(batchFrom, batchEnd);
+      const isLastBatch = (batchEnd >= sectionEnd);
 
-      // Clone the tape and shift it so page `i` shows the correct slice.
-      // breakStarts[i] is the tape-relative pixel offset of this page's top,
-      // snapped to a block boundary so no element is split mid-line.
-      const clone = tape.cloneNode(true);
-      // Strip the tape's own classes — the clone lives inside a real .uf-doc-page.
-      clone.className = 'uf-doc-content-clone';
-      clone.style.cssText =
-        `position:relative;top:${-breakStarts[i]}px;width:100%;` +
-        `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};`;
-      body.appendChild(clone);
+      // Build tape for this batch.
+      const tape = document.createElement('div');
+      tape.className = 'uf-doc-tape uf-doc-page';
+      tape.style.cssText =
+        `position:fixed;left:-${cfg.pageW * 2 + 200}px;top:0;` +
+        `width:${cfg.usableW}px;` +
+        `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};` +
+        `box-sizing:border-box;`;
+      document.body.appendChild(tape);
 
-      // Footer overlay (sits in the bottom-margin band, below content area).
-      if (cfg.footer) {
-        const ftr = document.createElement('div');
-        ftr.className = 'uf-doc-footer';
-        ftr.style.cssText =
-          `position:absolute;` +
-          `bottom:0;left:${cfg.marginLeft}px;right:${cfg.marginRight}px;` +
-          `height:${cfg.marginBottom}px;` +
-          `display:flex;align-items:flex-start;padding-top:6px;`;
-        ftr.innerHTML = _fillTokens(cfg.footer,
-          { page: globalPageNum, total: null, title: meta.title ?? '' });
-        page.appendChild(ftr);
+      currentDslId = await _renderPageContent(batchText, tape, batchFrom, currentDslId, signal);
+      if (signal?.aborted) {
+        tape.remove();
+        _cleanupNewSections([...newSectionRecords, sectionRecord]);
+        return;
       }
 
-      // Page-number badge (absolutely positioned overlay).
-      if (cfg.pageNumbers && cfg.pageNumbers !== 'none') {
-        page.appendChild(_pageNumEl(globalPageNum, cfg.pageNumbers));
+      void tape.offsetHeight;
+      const breakStarts = await _findPageBreaks(tape, cfg.usableH, signal);
+      if (signal?.aborted) {
+        tape.remove();
+        _cleanupNewSections([...newSectionRecords, sectionRecord]);
+        return;
+      }
+
+      const pageRanges = await _computePageContentRanges(tape, breakStarts, signal);
+      if (signal?.aborted) {
+        tape.remove();
+        _cleanupNewSections([...newSectionRecords, sectionRecord]);
+        return;
+      }
+
+      // For non-final batches: keep only complete pages (skip the last, possibly
+      // partial page — the next batch will pick up from the end of the last
+      // complete page).  If no complete pages yet, fall back to keeping all.
+      const numToCommit = isLastBatch
+        ? breakStarts.length
+        : Math.max(breakStarts.length - 1, breakStarts.length > 1 ? breakStarts.length - 1 : 0);
+      // Simpler: always skip the last page on non-final batches only if we have >1 page
+      const safeNum = (isLastBatch || breakStarts.length <= 1)
+        ? breakStarts.length
+        : breakStarts.length - 1;
+
+      if (safeNum === 0) {
+        // Edge case: the batch produced no layout yet (e.g. a single huge element).
+        // Keep the tape and treat as if this is the last batch.
+        tape.remove();
+        break;
+      }
+
+      const tapeGroup = { tape, remaining: safeNum };
+      sectionRecord.tapeGroups.push(tapeGroup);
+
+      for (let i = 0; i < safeNum; i++) {
+        if (signal?.aborted) {
+          _cleanupNewSections([...newSectionRecords, sectionRecord]);
+          return;
+        }
+        globalPageNum++;
+
+        const bodyH = i < safeNum - 1
+          ? breakStarts[i + 1] - breakStarts[i]
+          : Math.min(tape.scrollHeight - breakStarts[i], cfg.usableH);
+
+        const stub = _createStub(cfg, globalPageNum, section.from, meta.title ?? '',
+                                 pageRanges[i].from, pageRanges[i].to);
+        stub.dataset.sectionIdx = String(si);
+        _stubMeta.set(stub, { tapeGroup, breakStart: breakStarts[i], bodyH, cfg });
+        ufDoc.appendChild(stub);
+        sectionRecord.stubCount++;
+
+        if (i % STUB_YIELD === STUB_YIELD - 1) {
+          await new Promise(r => setTimeout(r, 0));
+          if (signal?.aborted) {
+            _cleanupNewSections([...newSectionRecords, sectionRecord]);
+            return;
+          }
+        }
+      }
+
+      // ── Commit priority pages to DOM as soon as they're ready ───────────
+      // For a full render this is the first time content appears in the
+      // container; for incremental the stubs are already live.
+      if (!domCommitted) {
+        container.innerHTML = '';
+        container.classList.add('document-mode');
+        container.appendChild(ufDoc);
+        attachScaleObserver(container, '.uf-doc-page', cfg.pageW);
+        domCommitted = true;
+      }
+
+      if (isLastBatch) break;
+
+      // Determine where to start the next batch.
+      // Begin right after the last complete page's content range ends.
+      const lastPageTo = pageRanges[safeNum - 1]?.to;
+      batchFrom = (lastPageTo != null && lastPageTo > batchFrom)
+        ? lastPageTo + 1
+        : batchEnd;
+
+      firstBatch = false;
+
+      // Yield between batches so the editor can process keystrokes.
+      await new Promise(r => setTimeout(r, 0));
+      if (signal?.aborted) {
+        _cleanupNewSections([...newSectionRecords, sectionRecord]);
+        return;
       }
     }
 
-    // Remove the off-screen tape now that all clones have been made.
-    document.body.removeChild(tape);
+    newSectionRecords.push(sectionRecord);
   }
 
-  // ── 3. Back-fill the total page count ─────────────────────────────────────
-  //    We didn't know the total until all sections were processed.
+  if (signal?.aborted) { _cleanupNewSections(newSectionRecords); return; }
+
+  // ── Back-fill total page count ──────────────────────────────────────────
   const total = globalPageNum;
-  doc.querySelectorAll('[data-uf-total]').forEach(
+  const pageRoot = isFullRender && !domCommitted ? ufDoc : container;
+  pageRoot.querySelectorAll('[data-uf-total]').forEach(
     el => { el.textContent = String(total); });
-  doc.querySelectorAll('[data-uf-pagenum]').forEach(el => {
+  pageRoot.querySelectorAll('[data-uf-pagenum]').forEach(el => {
     el.textContent = `${el.dataset.ufPagenum} / ${total}`;
   });
 
-  // Scale pages to fit the container width (print-preview zoom).
-  attachScaleObserver(container, '.uf-doc-page', cfg.pageW);
+  // ── Commit to DOM if nothing was committed yet (e.g. empty document) ───
+  if (!domCommitted) {
+    container.innerHTML = '';
+    container.classList.add('document-mode');
+    container.appendChild(ufDoc);
+    attachScaleObserver(container, '.uf-doc-page', cfg.pageW);
+  }
+
+  // ── Fresh IntersectionObserver covering ALL unpopulated stubs ───────────
+  const margin = cfg.pageH * IO_MARGIN_PAGES;
+  const observer = new IntersectionObserver((entries) => {
+    for (const { target, isIntersecting } of entries) {
+      if (!isIntersecting) continue;
+      const info = _stubMeta.get(target);
+      if (!info) continue;
+      _populateStub(target, info);
+      _stubMeta.delete(target);
+      observer.unobserve(target);
+      info.tapeGroup.remaining--;
+      if (info.tapeGroup.remaining === 0) info.tapeGroup.tape.remove();
+    }
+  }, { root: container, rootMargin: `${margin}px 0px` });
+
+  for (const stub of container.querySelectorAll('.uf-doc-page-stub')) {
+    observer.observe(stub);
+  }
+
+  container._ufDocObserver = observer;
+
+  const keptSections = isFullRender ? [] : (container._ufDocSections ?? []).slice(0, pivotSectionIdx);
+  container._ufDocSections = [...keptSections, ...newSectionRecords];
 }
 
 export function teardownDocument(container) {
+  _releasePrevRender(container);
   detachScaleObserver(container);
   container.classList.remove('document-mode');
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/** Disconnect IO + remove all tapes (full teardown or full re-render). */
+function _releasePrevRender(container) {
+  container._ufDocObserver?.disconnect();
+  container._ufDocObserver = null;
+  const sections = container._ufDocSections ?? [];
+  for (const sec of sections) {
+    for (const tg of sec.tapeGroups ?? []) tg.tape?.remove?.();
+  }
+  container._ufDocSections = null;
+}
+
+/** Remove tapes for a subset of new section records (called on abort). */
+function _cleanupNewSections(records) {
+  for (const rec of records) {
+    for (const tg of rec.tapeGroups ?? []) tg.tape?.remove?.();
+  }
+}
+
+/** Remove every tape from the document (safety cleanup). */
+function _removeTapes(tapes) {
+  for (const t of tapes) if (t?.isConnected) t.remove();
+}
+
+// ---------------------------------------------------------------------------
+// Stub creation
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a lightweight page frame with correct dimensions, header, footer, and
+ * page-number badge.  Body content is intentionally omitted — it will be added
+ * lazily by the IntersectionObserver once the stub scrolls into view.
+ *
+ * @param {number|null} contentFrom  First character offset of this page's content
+ * @param {number|null} contentTo    Last character offset  of this page's content
+ */
+function _createStub(cfg, pageNum, docFrom, title, contentFrom, contentTo) {
+  const page = document.createElement('div');
+  page.className = 'uf-doc-page uf-doc-page-stub';
+  page.style.cssText =
+    `width:${cfg.pageW}px;height:${cfg.pageH}px;` +
+    `overflow:hidden;position:relative;box-sizing:border-box;`;
+  page.dataset.docFrom = docFrom;
+  if (contentFrom != null) page.dataset.pageContentFrom = contentFrom;
+  if (contentTo   != null) page.dataset.pageContentTo   = contentTo;
+
+  if (cfg.header) {
+    const hdr = document.createElement('div');
+    hdr.className = 'uf-doc-header';
+    hdr.style.cssText =
+      `position:absolute;` +
+      `top:0;left:${cfg.marginLeft}px;right:${cfg.marginRight}px;` +
+      `height:${cfg.marginTop}px;` +
+      `display:flex;align-items:flex-end;padding-bottom:6px;`;
+    hdr.innerHTML = _fillTokens(cfg.header, { page: pageNum, total: null, title });
+    page.appendChild(hdr);
+  }
+
+  if (cfg.footer) {
+    const ftr = document.createElement('div');
+    ftr.className = 'uf-doc-footer';
+    ftr.style.cssText =
+      `position:absolute;` +
+      `bottom:0;left:${cfg.marginLeft}px;right:${cfg.marginRight}px;` +
+      `height:${cfg.marginBottom}px;` +
+      `display:flex;align-items:flex-start;padding-top:6px;`;
+    ftr.innerHTML = _fillTokens(cfg.footer, { page: pageNum, total: null, title });
+    page.appendChild(ftr);
+  }
+
+  if (cfg.pageNumbers && cfg.pageNumbers !== 'none') {
+    page.appendChild(_pageNumEl(pageNum, cfg.pageNumbers));
+  }
+
+  return page;
+}
+
+/**
+ * Populate a stub's body when it enters the viewport.
+ * Clones the relevant tape slice into the stub and promotes it from stub to
+ * a fully rendered page.
+ */
+function _populateStub(page, { tapeGroup, breakStart, bodyH, cfg }) {
+  page.classList.remove('uf-doc-page-stub');
+
+  const body = document.createElement('div');
+  body.className = 'uf-doc-body';
+  body.style.cssText =
+    `position:absolute;` +
+    `top:${cfg.marginTop}px;left:${cfg.marginLeft}px;` +
+    `width:${cfg.usableW}px;height:${bodyH}px;` +
+    `overflow:hidden;`;
+
+  const clone = tapeGroup.tape.cloneNode(true);
+  clone.className = 'uf-doc-content-clone';
+  clone.style.cssText =
+    `position:relative;top:${-breakStart}px;width:100%;` +
+    `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};`;
+  body.appendChild(clone);
+
+  // Insert body before the first absolute overlay (header is first child).
+  page.insertBefore(body, page.firstChild);
 }
 
 // ---------------------------------------------------------------------------
@@ -188,23 +510,23 @@ export function teardownDocument(container) {
 
 function _parseConfig(meta) {
   const px      = _parsePagePx(meta.page ?? 'letter');
-  const margin  = meta.margin ?? '72px 80px'; // ~0.75 in × ~0.83 in
+  const margin  = meta.margin ?? '72px 80px';
   const expanded = _expandMargin(margin);
   const margins  = _parseMarginPx(expanded);
   return {
-    pageW:       px.w,
-    pageH:       px.h,
-    marginTop:   margins.top,
-    marginRight: margins.right,
-    marginBottom:margins.bottom,
-    marginLeft:  margins.left,
-    usableW:     px.w - margins.left - margins.right,
-    usableH:     px.h - margins.top  - margins.bottom,
-    fontSize:    meta['font-size']    ?? '12px',
-    lineHeight:  meta['line-height']  ?? '1.6',
-    header:      meta.header   ?? null,
-    footer:      meta.footer   ?? null,
-    pageNumbers: meta['page-numbers'] ?? 'bottom-center',
+    pageW:        px.w,
+    pageH:        px.h,
+    marginTop:    margins.top,
+    marginRight:  margins.right,
+    marginBottom: margins.bottom,
+    marginLeft:   margins.left,
+    usableW:      px.w - margins.left - margins.right,
+    usableH:      px.h - margins.top  - margins.bottom,
+    fontSize:     meta['font-size']    ?? '12px',
+    lineHeight:   meta['line-height']  ?? '1.6',
+    header:       meta.header   ?? null,
+    footer:       meta.footer   ?? null,
+    pageNumbers:  meta['page-numbers'] ?? 'bottom-center',
   };
 }
 
@@ -223,17 +545,11 @@ function _expandMargin(m) {
   return parts.slice(0, 4).join(' ');
 }
 
-/** Parse an already-expanded "top right bottom left" px string into numbers. */
 function _parseMarginPx(expanded) {
   const vals = expanded.trim().split(/\s+/).map(v => parseFloat(v) || 0);
   return { top: vals[0], right: vals[1], bottom: vals[2], left: vals[3] };
 }
 
-/**
- * Fill {page}, {total}, {title}, {date} tokens in a header/footer template.
- * When `vars.total` is null a `<span data-uf-total>` placeholder is emitted
- * so the value can be back-filled once we know the real total page count.
- */
 function _fillTokens(template, vars) {
   const totalHtml = vars.total == null
     ? '<span data-uf-total></span>'
@@ -245,17 +561,13 @@ function _fillTokens(template, vars) {
     .replace(/\{date\}/g,  new Date().toLocaleDateString());
 }
 
-/**
- * Page-number badge element. Uses a `data-uf-pagenum` attribute so the total
- * can be back-filled after all pages are known.
- */
 function _pageNumEl(page, position) {
   const el = document.createElement('div');
   const align = position.split('-')[1] ?? 'center';
   el.className = `uf-doc-pagenum uf-doc-pagenum-${align}`;
   el.setAttribute('aria-hidden', 'true');
   el.dataset.ufPagenum = String(page);
-  el.textContent = `${page} / …`; // back-filled later
+  el.textContent = `${page} / …`;
   return el;
 }
 
@@ -263,11 +575,6 @@ function _pageNumEl(page, position) {
 // Explicit page-break splitting (===)
 // ---------------------------------------------------------------------------
 
-/**
- * Split document body at bare `===` lines (3+ equals, fence-aware).
- * Each segment is an explicit section; within each section content is
- * auto-paginated by the renderer.
- */
 function _splitPages(content, bodyFrom) {
   const body   = content.slice(bodyFrom);
   const lines  = body.split('\n');
@@ -316,17 +623,13 @@ function _splitPages(content, bodyFrom) {
 // Per-section rendering (DSL shebang dispatch)
 // ---------------------------------------------------------------------------
 
-/**
- * Render one section's content into `el`, returning the last DSL used.
- * `defaultDslId` carries the active DSL across === page breaks.
- */
-async function _renderPageContent(pageText, el, pageFrom, defaultDslId = 'markdown') {
+async function _renderPageContent(pageText, el, pageFrom, defaultDslId = 'markdown', signal) {
   if (!pageText) return defaultDslId;
   const sections = parseDocSections(pageText);
   let outDslId = defaultDslId;
 
   if (!sections.length) {
-    await _renderPart(defaultDslId, pageText, el, pageFrom, pageFrom + pageText.length, pageFrom);
+    await _renderPart(defaultDslId, pageText, el, pageFrom, pageFrom + pageText.length, pageFrom, signal);
     return outDslId;
   }
 
@@ -336,10 +639,11 @@ async function _renderPageContent(pageText, el, pageFrom, defaultDslId = 'markdo
     const lead = preambleRaw.search(/\S/);
     const pFrom = pageFrom + (lead >= 0 ? lead : 0);
     await _renderPart(defaultDslId, preamble, el,
-      pFrom, pageFrom + sections[0].from, pFrom);
+      pFrom, pageFrom + sections[0].from, pFrom, signal);
   }
 
   for (const sec of sections) {
+    if (signal?.aborted) return outDslId;
     const raw  = pageText.slice(sec.contentFrom, sec.to);
     const text = raw.trim();
     if (text) {
@@ -347,7 +651,8 @@ async function _renderPageContent(pageText, el, pageFrom, defaultDslId = 'markdo
       await _renderPart(sec.dslId, text, el,
         pageFrom + sec.from,
         pageFrom + sec.to,
-        pageFrom + sec.contentFrom + (lead >= 0 ? lead : 0));
+        pageFrom + sec.contentFrom + (lead >= 0 ? lead : 0),
+        signal);
     }
     outDslId = sec.dslId;
   }
@@ -355,7 +660,7 @@ async function _renderPageContent(pageText, el, pageFrom, defaultDslId = 'markdo
   return outDslId;
 }
 
-async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom) {
+async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom, signal) {
   const wrap = document.createElement('div');
   wrap.className = `uf-doc-part uf-dsl-${_safeClass(dslId)}`;
   if (docFrom     != null) wrap.dataset.docFrom        = docFrom;
@@ -364,8 +669,9 @@ async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom) {
   parentEl.appendChild(wrap);
   try {
     const dsl = getDSL(dslId);
-    await dsl.render(text, wrap);
+    await dsl.render(text, wrap, { signal });
   } catch (err) {
+    if (signal?.aborted) return;
     wrap.innerHTML = `<pre class="error">${_esc(dslId)} error: ${_esc(err.message)}</pre>`;
   }
 }
@@ -376,90 +682,135 @@ async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom) {
 
 /**
  * Find page-start offsets (tape-relative px) that avoid splitting block
- * elements mid-element.  Returns an array of Y offsets, one per physical page:
- * [0, breakAt_1, breakAt_2, ...].
+ * elements mid-line.  Returns [0, breakAt_1, breakAt_2, ...].
  *
  * Strategy: process block elements top-to-bottom.  If a block straddles a
- * page boundary AND fits entirely on one page, push the break to just before
- * that block so it starts cleanly at the top of the next page.  Blocks taller
- * than a full page are accepted as-is (unavoidable split).
+ * page boundary AND fits on one page, snap the break to just before that
+ * block.  Blocks taller than a full page are accepted as-is.
+ *
+ * Widow/orphan prevention: when snapping before a dialogue or parenthetical,
+ * also drag the immediately-preceding character cue onto the next page.
  */
-function _findPageBreaks(tape, usableH) {
-  // Selectors for paragraph-level content blocks that we try not to split.
+async function _findPageBreaks(tape, usableH, signal) {
   const BLOCK_SEL = [
-    // Fountain screenplay elements
     '.fountain-scene-heading', '.fountain-action',
     '.fountain-character',     '.fountain-dialogue',
     '.fountain-parenthetical', '.fountain-transition',
     '.fountain-centered',      '.fountain-lyrics',
-    // Markdown / generic HTML blocks
     'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
     'ul', 'ol', 'pre', 'blockquote', 'table',
   ].join(',');
 
   const blocks = Array.from(tape.querySelectorAll(BLOCK_SEL));
   if (!blocks.length) {
-    // No identifiable blocks — fall back to uniform breaks.
     const n = Math.max(1, Math.ceil(tape.scrollHeight / usableH));
     return Array.from({ length: n }, (_, i) => i * usableH);
   }
 
   const tapeTop = tape.getBoundingClientRect().top;
   const starts  = [0];
-  let pageEnd   = usableH; // bottom edge of the current page, tape-relative px
+  let pageEnd   = usableH;
 
   for (let idx = 0; idx < blocks.length; idx++) {
+    // Yield every 500 blocks to keep the editor responsive.
+    if (idx % 500 === 499) {
+      await new Promise(r => setTimeout(r, 0));
+      if (signal?.aborted) return starts;
+    }
+
     const block = blocks[idx];
     const r    = block.getBoundingClientRect();
     const bTop = r.top    - tapeTop;
     const bBot = r.bottom - tapeTop;
 
-    // Advance page pointer past any pages entirely before this block.
     while (bTop >= pageEnd) {
       starts.push(pageEnd);
       pageEnd += usableH;
     }
 
-    if (bBot <= pageEnd) continue; // block fits on the current page — no action needed
+    if (bBot <= pageEnd) continue;
 
-    // Block straddles the current page boundary.
     if (block.offsetHeight < usableH) {
-      // It fits on a single page — break just before it so it starts the next page.
-      // Widow/orphan prevention: if this is a dialogue (or parenthetical), also
-      // drag the immediately-preceding character cue onto the next page so it
-      // doesn't sit alone at the bottom of the previous page.
       let breakAt = bTop;
       const cls = block.className;
       if (cls.includes('fountain-dialogue') || cls.includes('fountain-parenthetical')) {
-        // Look back up to two blocks for a character cue to bring along.
         for (let back = 1; back <= 2 && idx - back >= 0; back++) {
           const prev = blocks[idx - back];
           const prevCls = prev.className;
           if (prevCls.includes('fountain-character')) {
             const prevTop = prev.getBoundingClientRect().top - tapeTop;
-            // Only move back if the character cue is still in the current page range
-            // (don't create an empty page).
             const pageStart = starts[starts.length - 1] ?? 0;
             if (prevTop > pageStart) breakAt = prevTop;
             break;
           }
-          // A parenthetical between character and dialogue — keep searching back.
           if (!prevCls.includes('fountain-parenthetical')) break;
         }
       }
       starts.push(breakAt);
       pageEnd = breakAt + usableH;
     }
-    // else: block is taller than usableH — accept the mid-block split.
   }
 
-  // Add trailing pages to cover any remaining content after the last block.
   const totalH = tape.scrollHeight;
   while ((starts[starts.length - 1] ?? 0) + usableH < totalH - 1) {
     starts.push((starts[starts.length - 1] ?? 0) + usableH);
   }
 
   return starts;
+}
+
+// ---------------------------------------------------------------------------
+// Page content range mapping
+// ---------------------------------------------------------------------------
+
+/**
+ * For each page (identified by its breakStart), find the character-offset
+ * range of the fountain/markdown elements that land on that page.
+ *
+ * Uses the data-doc-from / data-doc-to attributes emitted by DSL renderers so
+ * the mapping works for any DSL, not just Fountain.
+ *
+ * Returns an array parallel to breakStarts where each entry is { from, to }.
+ * Used to store data-page-content-from / data-page-content-to on stubs so
+ * the preview can scroll-sync to editor cursor position.
+ */
+async function _computePageContentRanges(tape, breakStarts, signal) {
+  const n      = breakStarts.length;
+  const ranges = Array.from({ length: n }, () => ({ from: null, to: null }));
+  const tapeTop = tape.getBoundingClientRect().top;
+
+  const blocks = Array.from(tape.querySelectorAll('[data-doc-from]'));
+  for (let bi = 0; bi < blocks.length; bi++) {
+    if (bi % 500 === 499) {
+      await new Promise(r => setTimeout(r, 0));
+      if (signal?.aborted) return ranges;
+    }
+
+    const block = blocks[bi];
+    const bTop    = block.getBoundingClientRect().top - tapeTop;
+    const docFrom = parseInt(block.dataset.docFrom, 10);
+    const docTo   = parseInt(block.dataset.docTo ?? block.dataset.docFrom, 10);
+    if (isNaN(docFrom)) continue;
+
+    let lo = 0, hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (breakStarts[mid] <= bTop) lo = mid; else hi = mid - 1;
+    }
+    const pi = lo;
+
+    if (ranges[pi].from === null || docFrom < ranges[pi].from) ranges[pi].from = docFrom;
+    if (ranges[pi].to   === null || docTo   > ranges[pi].to)   ranges[pi].to   = docTo;
+  }
+
+  let lastFrom = 0;
+  for (let i = 0; i < n; i++) {
+    if (ranges[i].from === null) ranges[i].from = lastFrom;
+    if (ranges[i].to   === null) ranges[i].to   = ranges[i].from;
+    lastFrom = ranges[i].from;
+  }
+
+  return ranges;
 }
 
 // ---------------------------------------------------------------------------

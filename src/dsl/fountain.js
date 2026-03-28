@@ -695,7 +695,11 @@ function _makeEl(tagName, className, htmlContent, elem, base) {
 // Public render / renderToString
 // ---------------------------------------------------------------------------
 
-async function render(content, el) {
+// Number of fountain elements to build into DOM before yielding the event loop.
+// Keeps main-thread frame time under ~16 ms even for very large scripts.
+const RENDER_CHUNK = 40;
+
+async function render(content, el, { signal } = {}) {
   el.innerHTML = '';
 
   if (!content.trim()) {
@@ -719,12 +723,23 @@ async function render(content, el) {
   const base = parseInt(el.dataset.dslContentFrom ?? el.dataset.docFrom ?? '0', 10);
 
   try {
+    // parseFountain is synchronous but fast (linear scan, no DOM ops).
     const elements = parseFountain(content);
+    if (signal?.aborted) return;
 
     const wrap = document.createElement('div');
     wrap.className = `fountain-screenplay ${modeClass}`;
 
-    for (const elem of elements) {
+    // Build DOM in chunks so the main thread yields regularly and the editor
+    // stays responsive even for very large fountain scripts.
+    for (let i = 0; i < elements.length; i++) {
+      // Yield every RENDER_CHUNK elements.
+      if (i > 0 && i % RENDER_CHUNK === 0) {
+        await new Promise(r => setTimeout(r, 0));
+        if (signal?.aborted) return;
+      }
+
+      const elem = elements[i];
       if (elem.type === 'title-page') {
         wrap.appendChild(_makeTitlePage(elem, base));
         continue;
@@ -780,8 +795,10 @@ async function render(content, el) {
       }
     }
 
+    if (signal?.aborted) return;
     el.appendChild(wrap);
   } catch (e) {
+    if (signal?.aborted) return;
     el.innerHTML = `<pre class="error">Fountain error:\n${_esc(e.message)}</pre>`;
   }
 }

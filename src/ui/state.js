@@ -164,12 +164,12 @@ class AppState extends EventBus {
     events.forEach(e => this.emit(e, this));
   }
 
-  setContent(content) {
+  setContent(content, { cursorPos } = {}) {
     const wasEmpty = this.currentContent === '';
     this.currentContent = content;
     const headContent = this.vcs?.headContent ?? '';
     this.isDirty = content !== headContent;
-    this.emit('content-change', { content, isDirty: this.isDirty });
+    this.emit('content-change', { content, isDirty: this.isDirty, cursorPos });
     if (wasEmpty !== (content === '')) this.emit('change', this);
   }
 

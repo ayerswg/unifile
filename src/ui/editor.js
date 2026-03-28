@@ -586,7 +586,11 @@ export class Editor {
         Promise.resolve().then(() => { if (this._view) this._view.dispatch({}); });
       }
 
-      if (update.docChanged) state.setContent(update.state.doc.toString());
+      if (update.docChanged) {
+        state.setContent(update.state.doc.toString(), {
+          cursorPos: update.state.selection.main.head,
+        });
+      }
 
       // Detect whether this update came from a DSL-element click (dsl-select event).
       // Used in two places below: to suppress editor-select, and to annotate

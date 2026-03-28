@@ -29,7 +29,20 @@ import { renderSpatial,  teardownSpatial  } from '../layout/spatial-canvas.js';
 import { renderTimeline, teardownTimeline } from '../layout/timeline-tracks.js';
 import { renderGraph,    teardownGraph    } from '../layout/graph-er.js';
 
-const DEBOUNCE_MS = 300;
+const DEBOUNCE_MS_BASE = 300;
+const DEBOUNCE_MS_MAX  = 1500;
+
+/**
+ * Scale debounce delay with document size so large scripts don't trigger
+ * repeated full re-renders while the user is still typing.
+ * Returns DEBOUNCE_MS_BASE for small docs, scaling up to DEBOUNCE_MS_MAX.
+ */
+function _debounceMs(content) {
+  const len = content?.length ?? 0;
+  // Start scaling at 20 kB; reach max at 500 kB.
+  const t = Math.min(1, Math.max(0, (len - 20_000) / (500_000 - 20_000)));
+  return Math.round(DEBOUNCE_MS_BASE + t * (DEBOUNCE_MS_MAX - DEBOUNCE_MS_BASE));
+}
 
 export class Preview {
   /**
@@ -39,16 +52,28 @@ export class Preview {
     this.el = container;
     this._unsub = [];
     this._renderTimer = null;
+    this._renderAbort  = null; // AbortController for the in-flight async render
     this._lastContent = null;
     this._lastDsl     = null;
     this._lastModel   = null;
     this._lastRenderer = null; // key into _MODEL_RENDERERS or _FLOW_LAYOUT_RENDERERS
     this._activeSectionVersion = null;
+    this._scrollSyncEnabled = true; // user scroll disables sync temporarily
 
     this._build();
     this._bindClickBack();
+    this._bindScrollSync();
 
-    this._unsub.push(state.on('content-change', ({ content }) => {
+    this._unsub.push(state.on('content-change', ({ content, cursorPos }) => {
+      if (cursorPos != null) {
+        this._cursorPos = cursorPos;
+        // Scroll immediately to cursor in the existing render (before debounce fires).
+        // This keeps the preview pane synced while the user types without waiting
+        // for the re-render to complete.
+        if (this._scrollSyncEnabled !== false && this._lastRenderer) {
+          this._scrollToOffset(cursorPos);
+        }
+      }
       this._scheduleRender(content);
     }));
     this._unsub.push(state.on('change', () => {
@@ -75,11 +100,18 @@ export class Preview {
       // Standalone mode: render immediately so the section switches without lag.
       this._scheduleRender(state.currentContent, true);
     }));
+
+    // Scroll-sync: when the editor cursor moves (without a doc change), scroll
+    // the preview pane so the corresponding page is visible.
+    this._unsub.push(state.on('editor-select', ({ from }) => {
+      if (this._scrollSyncEnabled) this._scrollToOffset(from);
+    }));
   }
 
   destroy() {
     this._unsub.forEach(fn => fn());
     clearTimeout(this._renderTimer);
+    this._renderAbort?.abort();
   }
 
   // ---------------------------------------------------------------------------
@@ -111,12 +143,71 @@ export class Preview {
   }
 
   // ---------------------------------------------------------------------------
+  // Scroll sync: editor cursor → preview page
+  // ---------------------------------------------------------------------------
+
+  /**
+   * When the user scrolls the preview manually, disable auto scroll-sync for a
+   * short window so we don't fight their scroll intention.  Re-enable once they
+   * stop scrolling.
+   */
+  _bindScrollSync() {
+    let resetTimer = null;
+    // We can only bind once `this.pane` exists, so call from _build().
+    // Stored as a pending bind here; _build calls it after DOM creation.
+    this._bindScrollSyncToPane = () => {
+      this.pane.addEventListener('scroll', () => {
+        this._scrollSyncEnabled = false;
+        clearTimeout(resetTimer);
+        resetTimer = setTimeout(() => { this._scrollSyncEnabled = true; }, 2000);
+      }, { passive: true });
+    };
+  }
+
+  /**
+   * Scroll the preview pane so the page whose content includes `offset` (a
+   * character index into the document) is visible.  Falls back to the nearest
+   * page when no stub exactly covers the offset.
+   */
+  _scrollToOffset(offset) {
+    // Only makes sense in document layout mode where stubs carry content ranges.
+    const stubs = this.content.querySelectorAll('[data-page-content-from]');
+    if (!stubs.length) return;
+
+    let best = null;
+    let bestDist = Infinity;
+
+    for (const stub of stubs) {
+      const from = parseInt(stub.dataset.pageContentFrom, 10);
+      const to   = parseInt(stub.dataset.pageContentTo,   10);
+
+      // Exact match — cursor is on this page.
+      if (from <= offset && offset <= to) { best = stub; break; }
+
+      // Nearest-page fallback.
+      const dist = Math.min(Math.abs(from - offset), Math.abs(to - offset));
+      if (dist < bestDist) { bestDist = dist; best = stub; }
+    }
+
+    if (best) {
+      // Temporarily suppress the scroll handler so scrolling programmatically
+      // doesn't disable sync for the next 2 s.
+      this._scrollSyncEnabled = false;
+      best.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      setTimeout(() => { this._scrollSyncEnabled = true; }, 600);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // DOM
   // ---------------------------------------------------------------------------
 
   _build() {
     this.el.innerHTML = `
       <div class="preview-pane" id="preview-pane">
+        <div class="preview-rendering-badge" id="preview-rendering-badge" aria-live="polite" aria-label="Preview updating">
+          <span class="preview-rendering-dot"></span>Updating…
+        </div>
         <div class="preview-content" id="preview-content" aria-live="polite">
           <p class="preview-empty">Start writing to see a preview.</p>
         </div>
@@ -125,9 +216,18 @@ export class Preview {
 
     this.pane    = this.el.querySelector('#preview-pane');
     this.content = this.el.querySelector('#preview-content');
+    this._badge  = this.el.querySelector('#preview-rendering-badge');
+
+    // Bind the scroll-sync suppression now that the pane exists.
+    this._bindScrollSyncToPane?.();
 
     this._updateVisibility();
     this._scheduleRender(state.currentContent, true);
+  }
+
+  /** Show / hide the "Updating…" badge. */
+  _setRendering(active) {
+    this._badge?.classList.toggle('preview-rendering-badge--visible', active);
   }
 
   // ---------------------------------------------------------------------------
@@ -135,15 +235,39 @@ export class Preview {
   // ---------------------------------------------------------------------------
 
   _scheduleRender(content, immediate = false) {
+    // Cancel any in-flight async render immediately so large-doc renders
+    // don't keep running while the user is actively typing.
+    this._renderAbort?.abort();
+    this._renderAbort = null;
+
     clearTimeout(this._renderTimer);
     if (immediate) {
       this._render(content);
     } else {
-      this._renderTimer = setTimeout(() => this._render(content), DEBOUNCE_MS);
+      const delay = _debounceMs(content);
+      this._renderTimer = setTimeout(() => this._render(content), delay);
     }
   }
 
   async _render(content) {
+    // Create a fresh abort controller for this render.  Any concurrent render
+    // that started before us has already been aborted by _scheduleRender.
+    const ac = new AbortController();
+    this._renderAbort = ac;
+    this._setRendering(true);
+
+    try {
+      await this._renderInner(content, ac);
+    } finally {
+      // Only clear the badge when this render finishes without being superseded.
+      if (this._renderAbort === ac) {
+        this._setRendering(false);
+        this._renderAbort = null;
+      }
+    }
+  }
+
+  async _renderInner(content, ac) {
     const { meta, bodyFrom } = parseGlobalFrontMatter(content ?? '');
     const model  = meta.model ?? state.primaryModel ?? 'flow';
     // Webpage is the default layout for the flow model — it renders the full
@@ -172,8 +296,10 @@ export class Preview {
         }, 300);
 
         try {
-          await renderer.render(content, this.content);
+          await renderer.render(content, this.content, { signal: ac.signal });
+          if (ac.signal.aborted) return;
         } catch (err) {
+          if (ac.signal.aborted) return;
           renderer.teardown(this.content);
           this.content.innerHTML = `<pre class="error">${model} render error:\n${_esc(err.message)}</pre>`;
         } finally {
@@ -206,8 +332,12 @@ export class Preview {
         }, 300);
 
         try {
-          await renderer.render(content, this.content);
+          await renderer.render(content, this.content, { signal: ac.signal, cursorPos: this._cursorPos });
+          if (ac.signal.aborted) return;
+          // Restore scroll to where the user was editing instead of jumping to top.
+          this._scrollToOffset(this._cursorPos ?? 0);
         } catch (err) {
+          if (ac.signal.aborted) return;
           renderer.teardown(this.content);
           this.content.innerHTML = `<pre class="error">${_esc(layout)} render error:\n${_esc(err.message)}</pre>`;
         } finally {
@@ -259,9 +389,11 @@ export class Preview {
     }, 200);
 
     try {
-      await dsl.render(renderContent, this.content);
+      await dsl.render(renderContent, this.content, { signal: ac.signal });
+      if (ac.signal.aborted) return;
       if (versionBanner) this.content.insertAdjacentHTML('afterbegin', versionBanner);
     } catch (err) {
+      if (ac.signal.aborted) return;
       this.content.innerHTML = `${versionBanner}<pre class="error">Render error:\n${_esc(err.message)}</pre>`;
     } finally {
       clearTimeout(spinnerTimer);
