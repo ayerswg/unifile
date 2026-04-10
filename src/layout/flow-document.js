@@ -60,9 +60,6 @@ const STUB_YIELD = 50;
 // (Overridden per-render using the actual cfg.pageH.)
 const IO_MARGIN_PAGES = 2;
 
-// Characters to render in the priority batch (first pass, shown to user immediately).
-// ~4-5 fountain pages.  The rest of the section renders in the background.
-const PRIORITY_CHARS = 15_000;
 
 // ---------------------------------------------------------------------------
 // Lazy-load metadata store
@@ -71,6 +68,12 @@ const PRIORITY_CHARS = 15_000;
 // Maps a page stub element → { tapeGroup, breakStart, bodyH, cfg }
 // WeakMap so entries are automatically collected when stubs leave the DOM.
 const _stubMeta = new WeakMap();
+
+// Maps tape-part wrapper elements → { dslId, text } for DSLs that register
+// their own click handlers (data-dsl-handled).  Used by _populateStub to
+// re-render those parts in the live clone so their event listeners are
+// restored (cloneNode copies attributes but not listeners).
+const _tapePartData = new WeakMap();
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -92,7 +95,7 @@ const _stubMeta = new WeakMap();
  *                     one entry per explicit section (=== break)
  *   _ufDocObserver  — single IntersectionObserver covering all unpopulated stubs
  */
-export async function renderDocument(content, container, { signal, cursorPos } = {}) {
+export async function renderDocument(content, container, { signal, cursorPos, defaultDsl, commitHash, isDirty } = {}) {
   const { meta, bodyFrom } = parseGlobalFrontMatter(content);
   const cfg = _parseConfig(meta);
   const explicitSections = _splitPages(content, bodyFrom);
@@ -150,20 +153,36 @@ export async function renderDocument(content, container, { signal, cursorPos } =
                         && pivotSectionIdx === 0);
 
   // ── Disconnect the old IntersectionObserver ─────────────────────────────
-  // We will create a fresh one that covers both kept and new stubs.
+  // We create a fresh one immediately so new stubs can be registered the
+  // moment they enter the live DOM, rather than waiting for all batches.
   container._ufDocObserver?.disconnect();
-  container._ufDocObserver = null;
+
+  const margin = cfg.pageH * IO_MARGIN_PAGES;
+  const observer = new IntersectionObserver((entries) => {
+    for (const { target, isIntersecting } of entries) {
+      if (!isIntersecting) continue;
+      const info = _stubMeta.get(target);
+      if (!info) continue;
+      _populateStub(target, info);
+      _stubMeta.delete(target);
+      observer.unobserve(target);
+      info.tapeGroup.remaining--;
+      if (info.tapeGroup.remaining === 0) info.tapeGroup.tape.remove();
+    }
+  }, { root: null, rootMargin: `${margin}px 0px` });
+  container._ufDocObserver = observer;
 
   // ── DOM surgery ─────────────────────────────────────────────────────────
   if (isFullRender) {
-    // Release all tapes, wipe DOM.
+    // Release old tapes but keep the existing stub DOM visible until the
+    // first new-page batch is committed (stale-while-revalidate).  This
+    // avoids a flash of empty content AND ensures that if this render is
+    // aborted before committing, the next render can still use incremental
+    // mode (container._ufDocSections is still valid).
     for (const sec of prevSections) {
       for (const tg of sec.tapeGroups ?? []) tg.tape?.remove?.();
     }
     detachScaleObserver(container);
-    container.innerHTML = '';
-    container.classList.add('document-mode');
-    container._ufDocSections = null;
   } else {
     // Keep stubs 0..pivotPageNum-1.  Remove the rest, properly decrementing
     // each stub's tapeGroup.remaining so tapes are freed when no longer needed.
@@ -184,6 +203,10 @@ export async function renderDocument(content, container, { signal, cursorPos } =
         if (tg.tape?.isConnected) tg.tape.remove();
       }
     }
+    // Re-register surviving stubs with the new observer.
+    for (const stub of container.querySelectorAll('.uf-doc-page-stub')) {
+      observer.observe(stub);
+    }
   }
 
   // ── Build new stubs ─────────────────────────────────────────────────────
@@ -194,7 +217,12 @@ export async function renderDocument(content, container, { signal, cursorPos } =
     ? (() => { const d = document.createElement('div'); d.className = 'uf-doc'; return d; })()
     : container.querySelector('.uf-doc');
 
-  let currentDslId  = meta.dsl ?? 'markdown';
+  // meta.dsl (front-matter key) takes priority.  Fallback to the caller-
+  // supplied defaultDsl (state.data.dslType from preview.js) so that a
+  // pure fountain document with only `layout: document` in its front matter
+  // — and no explicit `dsl: fountain` key — still renders with fountain.
+  let currentDslId  = meta.dsl ?? defaultDsl ?? 'markdown';
+  console.log(`[doc] starting render: meta.dsl=${meta.dsl} defaultDsl=${defaultDsl} effectiveDsl=${currentDslId} sections=${explicitSections.length}`);
   let globalPageNum = pivotPageNum;
   const newSectionRecords = [];
   let domCommitted = !isFullRender; // incremental renders are already live
@@ -210,7 +238,7 @@ export async function renderDocument(content, container, { signal, cursorPos } =
     const tapeFrom   = section.from + sectionRelativePivot;
     const sectionEnd = section.from + section.text.length;
 
-    // One record per section; batches accumulate into it.
+    // One record per section.
     const sectionRecord = {
       from:       section.from,
       to:         sectionEnd,
@@ -218,129 +246,102 @@ export async function renderDocument(content, container, { signal, cursorPos } =
       tapeGroups: [],
     };
 
-    let batchFrom  = tapeFrom;
-    let firstBatch = true;
+    // Render the entire section as a single tape.
+    const sectionText = content.slice(tapeFrom, sectionEnd);
 
-    while (batchFrom < sectionEnd) {
+    const tape = document.createElement('div');
+    tape.className = 'uf-doc-tape uf-doc-page';
+    tape.style.cssText =
+      `position:fixed;left:-${cfg.pageW * 2 + 200}px;top:0;` +
+      `width:${cfg.usableW}px;` +
+      `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};` +
+      `box-sizing:border-box;`;
+    document.body.appendChild(tape);
+
+    console.log(`[doc] rendering section si=${si} dsl=${currentDslId} len=${sectionText.length}`);
+    // Pass null signal to _renderPageContent so the DSL render (e.g. fountain)
+    // always completes and fully populates the tape.  Fountain checks signal
+    // at every yield and exits without appending content if aborted — leaving
+    // an empty tape that produces 0 pages.  The outer signal is still checked
+    // immediately after the tape is built, so aborted renders are discarded
+    // before the expensive page-break scan runs.
+    currentDslId = await _renderPageContent(sectionText, tape, tapeFrom, currentDslId, null);
+    if (signal?.aborted) {
+      console.log('[doc] aborted after _renderPageContent');
+      tape.remove();
+      _cleanupNewSections([...newSectionRecords, sectionRecord]);
+      return;
+    }
+
+    void tape.offsetHeight;
+    const breakStarts = await _findPageBreaks(tape, cfg.usableH, signal);
+    console.log(`[doc] breakStarts.length=${breakStarts.length} aborted=${signal?.aborted}`);
+    if (signal?.aborted) {
+      console.log('[doc] aborted after _findPageBreaks');
+      tape.remove();
+      _cleanupNewSections([...newSectionRecords, sectionRecord]);
+      return;
+    }
+
+    const pageRanges = await _computePageContentRanges(tape, breakStarts, signal);
+    if (signal?.aborted) {
+      console.log('[doc] aborted after _computePageContentRanges');
+      tape.remove();
+      _cleanupNewSections([...newSectionRecords, sectionRecord]);
+      return;
+    }
+
+    if (breakStarts.length === 0) {
+      tape.remove();
+      newSectionRecords.push(sectionRecord);
+      continue;
+    }
+
+    const tapeGroup = { tape, remaining: breakStarts.length };
+    sectionRecord.tapeGroups.push(tapeGroup);
+
+    for (let i = 0; i < breakStarts.length; i++) {
       if (signal?.aborted) {
         _cleanupNewSections([...newSectionRecords, sectionRecord]);
         return;
       }
+      globalPageNum++;
 
-      // First batch = priority window (small, fast).
-      // Subsequent batches = larger chunks for background rendering.
-      const BATCH_LIMIT = firstBatch ? PRIORITY_CHARS : PRIORITY_CHARS * 4;
-      const batchEnd  = Math.min(batchFrom + BATCH_LIMIT, sectionEnd);
-      const batchText = content.slice(batchFrom, batchEnd);
-      const isLastBatch = (batchEnd >= sectionEnd);
+      const bodyH = i < breakStarts.length - 1
+        ? breakStarts[i + 1] - breakStarts[i]
+        : Math.min(tape.scrollHeight - breakStarts[i], cfg.usableH);
 
-      // Build tape for this batch.
-      const tape = document.createElement('div');
-      tape.className = 'uf-doc-tape uf-doc-page';
-      tape.style.cssText =
-        `position:fixed;left:-${cfg.pageW * 2 + 200}px;top:0;` +
-        `width:${cfg.usableW}px;` +
-        `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};` +
-        `box-sizing:border-box;`;
-      document.body.appendChild(tape);
+      const stub = _createStub(cfg, globalPageNum, section.from, meta.title ?? '',
+                               pageRanges[i].from, pageRanges[i].to,
+                               { commitHash, isDirty });
+      stub.dataset.sectionIdx = String(si);
+      _stubMeta.set(stub, { tapeGroup, breakStart: breakStarts[i], bodyH, cfg });
+      ufDoc.appendChild(stub);
+      sectionRecord.stubCount++;
+      if (domCommitted) observer.observe(stub);
 
-      currentDslId = await _renderPageContent(batchText, tape, batchFrom, currentDslId, signal);
-      if (signal?.aborted) {
-        tape.remove();
-        _cleanupNewSections([...newSectionRecords, sectionRecord]);
-        return;
-      }
-
-      void tape.offsetHeight;
-      const breakStarts = await _findPageBreaks(tape, cfg.usableH, signal);
-      if (signal?.aborted) {
-        tape.remove();
-        _cleanupNewSections([...newSectionRecords, sectionRecord]);
-        return;
-      }
-
-      const pageRanges = await _computePageContentRanges(tape, breakStarts, signal);
-      if (signal?.aborted) {
-        tape.remove();
-        _cleanupNewSections([...newSectionRecords, sectionRecord]);
-        return;
-      }
-
-      // For non-final batches: keep only complete pages (skip the last, possibly
-      // partial page — the next batch will pick up from the end of the last
-      // complete page).  If no complete pages yet, fall back to keeping all.
-      const numToCommit = isLastBatch
-        ? breakStarts.length
-        : Math.max(breakStarts.length - 1, breakStarts.length > 1 ? breakStarts.length - 1 : 0);
-      // Simpler: always skip the last page on non-final batches only if we have >1 page
-      const safeNum = (isLastBatch || breakStarts.length <= 1)
-        ? breakStarts.length
-        : breakStarts.length - 1;
-
-      if (safeNum === 0) {
-        // Edge case: the batch produced no layout yet (e.g. a single huge element).
-        // Keep the tape and treat as if this is the last batch.
-        tape.remove();
-        break;
-      }
-
-      const tapeGroup = { tape, remaining: safeNum };
-      sectionRecord.tapeGroups.push(tapeGroup);
-
-      for (let i = 0; i < safeNum; i++) {
+      if (i % STUB_YIELD === STUB_YIELD - 1) {
+        await new Promise(r => setTimeout(r, 0));
         if (signal?.aborted) {
           _cleanupNewSections([...newSectionRecords, sectionRecord]);
           return;
         }
-        globalPageNum++;
-
-        const bodyH = i < safeNum - 1
-          ? breakStarts[i + 1] - breakStarts[i]
-          : Math.min(tape.scrollHeight - breakStarts[i], cfg.usableH);
-
-        const stub = _createStub(cfg, globalPageNum, section.from, meta.title ?? '',
-                                 pageRanges[i].from, pageRanges[i].to);
-        stub.dataset.sectionIdx = String(si);
-        _stubMeta.set(stub, { tapeGroup, breakStart: breakStarts[i], bodyH, cfg });
-        ufDoc.appendChild(stub);
-        sectionRecord.stubCount++;
-
-        if (i % STUB_YIELD === STUB_YIELD - 1) {
-          await new Promise(r => setTimeout(r, 0));
-          if (signal?.aborted) {
-            _cleanupNewSections([...newSectionRecords, sectionRecord]);
-            return;
-          }
-        }
       }
+    }
 
-      // ── Commit priority pages to DOM as soon as they're ready ───────────
-      // For a full render this is the first time content appears in the
-      // container; for incremental the stubs are already live.
-      if (!domCommitted) {
-        container.innerHTML = '';
-        container.classList.add('document-mode');
-        container.appendChild(ufDoc);
-        attachScaleObserver(container, '.uf-doc-page', cfg.pageW);
-        domCommitted = true;
-      }
-
-      if (isLastBatch) break;
-
-      // Determine where to start the next batch.
-      // Begin right after the last complete page's content range ends.
-      const lastPageTo = pageRanges[safeNum - 1]?.to;
-      batchFrom = (lastPageTo != null && lastPageTo > batchFrom)
-        ? lastPageTo + 1
-        : batchEnd;
-
-      firstBatch = false;
-
-      // Yield between batches so the editor can process keystrokes.
-      await new Promise(r => setTimeout(r, 0));
-      if (signal?.aborted) {
-        _cleanupNewSections([...newSectionRecords, sectionRecord]);
-        return;
+    // Commit to DOM once all stubs for this section are ready.
+    if (!domCommitted) {
+      // Atomically replace old content (including any stale stubs kept for
+      // stale-while-revalidate) with the new page batch.
+      container.innerHTML = '';
+      container.classList.add('document-mode');
+      container._ufDocSections = null;
+      container.appendChild(ufDoc);
+      container._ufIntrinsicW = cfg.pageW;
+      attachScaleObserver(container, '.uf-doc-page', cfg.pageW);
+      domCommitted = true;
+      for (const stub of container.querySelectorAll('.uf-doc-page-stub')) {
+        observer.observe(stub);
       }
     }
 
@@ -349,52 +350,86 @@ export async function renderDocument(content, container, { signal, cursorPos } =
 
   if (signal?.aborted) { _cleanupNewSections(newSectionRecords); return; }
 
-  // ── Back-fill total page count ──────────────────────────────────────────
+  // ── Back-fill total page count in header/footer templates ───────────────
   const total = globalPageNum;
   const pageRoot = isFullRender && !domCommitted ? ufDoc : container;
   pageRoot.querySelectorAll('[data-uf-total]').forEach(
     el => { el.textContent = String(total); });
-  pageRoot.querySelectorAll('[data-uf-pagenum]').forEach(el => {
-    el.textContent = `${el.dataset.ufPagenum} / ${total}`;
-  });
 
   // ── Commit to DOM if nothing was committed yet (e.g. empty document) ───
   if (!domCommitted) {
     container.innerHTML = '';
     container.classList.add('document-mode');
+    container._ufDocSections = null;
     container.appendChild(ufDoc);
+    container._ufIntrinsicW = cfg.pageW;
     attachScaleObserver(container, '.uf-doc-page', cfg.pageW);
   }
 
-  // ── Fresh IntersectionObserver covering ALL unpopulated stubs ───────────
-  const margin = cfg.pageH * IO_MARGIN_PAGES;
-  const observer = new IntersectionObserver((entries) => {
-    for (const { target, isIntersecting } of entries) {
-      if (!isIntersecting) continue;
-      const info = _stubMeta.get(target);
-      if (!info) continue;
-      _populateStub(target, info);
-      _stubMeta.delete(target);
-      observer.unobserve(target);
-      info.tapeGroup.remaining--;
-      if (info.tapeGroup.remaining === 0) info.tapeGroup.tape.remove();
-    }
-  }, { root: container, rootMargin: `${margin}px 0px` });
-
-  for (const stub of container.querySelectorAll('.uf-doc-page-stub')) {
-    observer.observe(stub);
-  }
-
-  container._ufDocObserver = observer;
-
   const keptSections = isFullRender ? [] : (container._ufDocSections ?? []).slice(0, pivotSectionIdx);
   container._ufDocSections = [...keptSections, ...newSectionRecords];
+  return isFullRender;
 }
 
 export function teardownDocument(container) {
   _releasePrevRender(container);
   detachScaleObserver(container);
   container.classList.remove('document-mode');
+}
+
+/**
+ * Force-populate all lazy page stubs so every page has real content, then
+ * trigger the browser print dialog.  After the user dismisses it the CSS zoom
+ * is restored via the afterprint event.
+ */
+export function printDocument(container) {
+  // Populate every stub that hasn't been lazy-loaded yet.
+  const obs = container._ufDocObserver;
+  for (const stub of [...container.querySelectorAll('.uf-doc-page-stub')]) {
+    const info = _stubMeta.get(stub);
+    if (!info) continue;
+    _populateStub(stub, info);
+    _stubMeta.delete(stub);
+    obs?.unobserve(stub);
+    info.tapeGroup.remaining--;
+    if (info.tapeGroup.remaining === 0) info.tapeGroup.tape.remove();
+  }
+
+  // Temporarily reset CSS zoom so each page prints at its natural size.
+  container.querySelectorAll('.uf-doc-page').forEach(el => {
+    el.dataset.printZoom = el.style.zoom || '';
+    el.style.zoom = '1';
+  });
+
+  // Inject @page rule so the browser prints exactly the page size used in the
+  // preview (no default margins/headers).  Read dimensions from the first page's
+  // inline style (set by _createPageStub).
+  const firstPage = container.querySelector('.uf-doc-page');
+  const pageW = firstPage ? parseInt(firstPage.style.width)  : 816;
+  const pageH = firstPage ? parseInt(firstPage.style.height) : 1056;
+  let printStyle = document.getElementById('uf-print-page');
+  if (!printStyle) {
+    printStyle = document.createElement('style');
+    printStyle.id = 'uf-print-page';
+    document.head.appendChild(printStyle);
+  }
+  printStyle.textContent = `@page { size: ${pageW}px ${pageH}px; margin: 0; }`;
+
+  window.addEventListener('afterprint', () => {
+    printStyle.remove();
+    // Restore zoomed layout.
+    container.querySelectorAll('.uf-doc-page').forEach(el => {
+      el.style.zoom = el.dataset.printZoom || '';
+      delete el.dataset.printZoom;
+    });
+    // Re-seed the ResizeObserver so newly-visible size changes are tracked.
+    if (container._ufIntrinsicW) {
+      detachScaleObserver(container);
+      attachScaleObserver(container, '.uf-doc-page', container._ufIntrinsicW);
+    }
+  }, { once: true });
+
+  window.print();
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +471,7 @@ function _removeTapes(tapes) {
  * @param {number|null} contentFrom  First character offset of this page's content
  * @param {number|null} contentTo    Last character offset  of this page's content
  */
-function _createStub(cfg, pageNum, docFrom, title, contentFrom, contentTo) {
+function _createStub(cfg, pageNum, docFrom, title, contentFrom, contentTo, { commitHash, isDirty } = {}) {
   const page = document.createElement('div');
   page.className = 'uf-doc-page uf-doc-page-stub';
   page.style.cssText =
@@ -474,6 +509,13 @@ function _createStub(cfg, pageNum, docFrom, title, contentFrom, contentTo) {
     page.appendChild(_pageNumEl(pageNum, cfg.pageNumbers));
   }
 
+  if (commitHash) {
+    const hashEl = document.createElement('div');
+    hashEl.className = 'uf-doc-commit';
+    hashEl.textContent = commitHash + (isDirty ? '*' : '');
+    page.appendChild(hashEl);
+  }
+
   return page;
 }
 
@@ -498,10 +540,31 @@ function _populateStub(page, { tapeGroup, breakStart, bodyH, cfg }) {
   clone.style.cssText =
     `position:relative;top:${-breakStart}px;width:100%;` +
     `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};`;
+
   body.appendChild(clone);
 
   // Insert body before the first absolute overlay (header is first child).
   page.insertBefore(body, page.firstChild);
+
+  // Re-render interactive DSL parts now that the clone is in the live DOM.
+  // cloneNode copies data attributes but not event listeners, so DSLs that
+  // register their own note/element click handlers (e.g. abcjs) would
+  // silently lose interactivity.  We stored { dslId, text } for each such
+  // part in _tapePartData during tape rendering; replay those renders now
+  // so handlers are re-registered against live DOM nodes.
+  // Parts are in document order in both the tape and the clone so we can
+  // zip them by index.
+  const tapeParts  = tapeGroup.tape.querySelectorAll('.uf-doc-part[data-dsl-handled]');
+  const cloneParts = clone.querySelectorAll('.uf-doc-part[data-dsl-handled]');
+  tapeParts.forEach((tapePart, i) => {
+    const data      = _tapePartData.get(tapePart);
+    const clonePart = cloneParts[i];
+    if (!data || !clonePart) return;
+    clonePart.innerHTML = '';
+    // Fire-and-forget: abcjs.renderAbc is synchronous for typical scores;
+    // async DSLs will populate momentarily after the stub becomes visible.
+    getDSL(data.dslId).render(data.text, clonePart).catch(() => {});
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +589,7 @@ function _parseConfig(meta) {
     lineHeight:   meta['line-height']  ?? '1.6',
     header:       meta.header   ?? null,
     footer:       meta.footer   ?? null,
-    pageNumbers:  meta['page-numbers'] ?? 'bottom-center',
+    pageNumbers:  meta['page-numbers'] ?? 'bottom-right',
   };
 }
 
@@ -563,11 +626,10 @@ function _fillTokens(template, vars) {
 
 function _pageNumEl(page, position) {
   const el = document.createElement('div');
-  const align = position.split('-')[1] ?? 'center';
+  const align = position.split('-')[1] ?? 'right';
   el.className = `uf-doc-pagenum uf-doc-pagenum-${align}`;
   el.setAttribute('aria-hidden', 'true');
-  el.dataset.ufPagenum = String(page);
-  el.textContent = `${page} / …`;
+  el.textContent = String(page);
   return el;
 }
 
@@ -670,6 +732,13 @@ async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom, s
   try {
     const dsl = getDSL(dslId);
     await dsl.render(text, wrap, { signal });
+    // If the DSL registered its own click handler it sets data-dsl-handled on
+    // the wrapper.  Store the source text so _populateStub can re-render the
+    // part in page clones — cloneNode copies attributes but not listeners, so
+    // interactive DSLs (e.g. abcjs) would silently lose their note handlers.
+    if (wrap.dataset.dslHandled) {
+      _tapePartData.set(wrap, { dslId, text });
+    }
   } catch (err) {
     if (signal?.aborted) return;
     wrap.innerHTML = `<pre class="error">${_esc(dslId)} error: ${_esc(err.message)}</pre>`;

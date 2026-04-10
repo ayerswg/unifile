@@ -254,6 +254,52 @@ export function saveUserPrefs(prefs) {
 }
 
 // ---------------------------------------------------------------------------
+// Draft auto-save (crash recovery)
+// ---------------------------------------------------------------------------
+
+// Key includes the page URL so each quine file gets its own draft slot,
+// supporting multiple open unifile tabs without collisions.
+const DRAFT_KEY_PREFIX = 'unifile_draft:';
+
+function _draftKey() {
+  return DRAFT_KEY_PREFIX + location.href;
+}
+
+/**
+ * Persist the current editor content as a recoverable draft.
+ * Called on every content-change (debounced by the caller).
+ * Silently swallows storage errors (quota exceeded, private browsing, etc.).
+ *
+ * @param {string} content   Current editor content
+ * @param {string} headHash  Current VCS head hash (to detect stale drafts)
+ */
+export function saveDraft(content, headHash) {
+  try {
+    localStorage.setItem(_draftKey(), JSON.stringify({ content, headHash, savedAt: Date.now() }));
+  } catch { /* storage full or unavailable */ }
+}
+
+/**
+ * Load the previously saved draft for this file.
+ * @returns {{ content: string, headHash: string, savedAt: number } | null}
+ */
+export function loadDraft() {
+  try {
+    const raw = localStorage.getItem(_draftKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove the draft for this file (called after a successful commit or save).
+ */
+export function clearDraft() {
+  try { localStorage.removeItem(_draftKey()); } catch { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

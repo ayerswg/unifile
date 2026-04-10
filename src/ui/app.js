@@ -13,7 +13,10 @@ import {
   generateQuine,
   downloadFile,
   loadUserPrefs,
-  IS_QUINE
+  IS_QUINE,
+  saveDraft,
+  loadDraft,
+  clearDraft,
 } from '../core/storage.js';
 import { isEncrypted, decryptData } from '../core/crypto.js';
 import { getDSL, registerDSL, deregisterDSL } from '../dsl/registry.js';
@@ -94,6 +97,22 @@ export class App {
       secondaryModel: fmMeta.model2 ?? null,
     });
 
+    // 5b. Restore draft if the user left unsaved changes (crash / accidental close)
+    const draft = loadDraft();
+    if (draft && draft.content !== currentContent) {
+      // Restore the draft as the live content; the committed head is unchanged.
+      state.update({ currentContent: draft.content, isDirty: true });
+      // Show the recovery banner once components are mounted (deferred below).
+      this._pendingDraftSavedAt = draft.savedAt;
+    }
+
+    // 5c. Auto-save draft on every content-change (debounced 2 s).
+    let _draftTimer = null;
+    state.on('content-change', ({ content }) => {
+      clearTimeout(_draftTimer);
+      _draftTimer = setTimeout(() => saveDraft(content, state.headHash), 2000);
+    });
+
     // 6. Expose host APIs for plugins (must run before plugins are loaded so that
     //    plugins can use the host's CM6 + state instances instead of bundling copies)
     this._exposeHostAPIs();
@@ -113,6 +132,12 @@ export class App {
 
     // 10b. Bind model-related handlers (needs editor component from step 10)
     this._bindModelHandlers();
+
+    // 10c. Show draft-restored banner if we recovered unsaved content
+    if (this._pendingDraftSavedAt) {
+      this._showDraftBanner(this._pendingDraftSavedAt);
+      this._pendingDraftSavedAt = null;
+    }
 
     // 11. Global keyboard shortcuts
     this._bindGlobalKeys();
@@ -216,7 +241,7 @@ export class App {
 
     this._components.export = new ExportDialog(
       document.getElementById('uf-export-panel'),
-      { renderPreview: handlers.renderPreview }
+      { renderPreview: handlers.renderPreview, print: handlers.print }
     );
 
     this._components.settings = new SettingsPanel(
@@ -258,6 +283,9 @@ export class App {
           isDirty: false
         });
 
+        // Draft is now committed — drop the crash-recovery copy.
+        clearDraft();
+
         // Auto-save quine
         await this._saveQuine(newData);
       },
@@ -293,6 +321,10 @@ export class App {
         const preview = this._components.preview;
         if (!preview) return '';
         return preview.renderToString(state.currentContent, state.data?.dslType);
+      },
+
+      print: () => {
+        this._components.preview?.print();
       },
 
       /**
@@ -365,6 +397,38 @@ export class App {
     }
 
     // Quine: auto-save to browser storage as backup; main save is manual (export)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Draft recovery banner
+  // ---------------------------------------------------------------------------
+
+  _showDraftBanner(savedAt) {
+    const existing = document.getElementById('uf-draft-banner');
+    if (existing) existing.remove();
+
+    const age   = _formatAge(savedAt);
+    const el    = document.createElement('div');
+    el.id       = 'uf-draft-banner';
+    el.className = 'draft-banner';
+    el.innerHTML = `
+      <span class="draft-banner-msg">Unsaved draft restored from ${age} ago.</span>
+      <button class="draft-banner-btn draft-banner-discard" type="button">Discard</button>
+      <button class="draft-banner-btn draft-banner-close" type="button" aria-label="Dismiss">×</button>
+    `;
+
+    el.querySelector('.draft-banner-discard').addEventListener('click', () => {
+      // Revert to the last committed content and wipe the draft.
+      state.setContent(state.vcs.headContent);
+      clearDraft();
+      el.remove();
+    });
+
+    el.querySelector('.draft-banner-close').addEventListener('click', () => el.remove());
+
+    // Insert just below the topbar.
+    const main = document.getElementById('uf-main');
+    main?.parentElement?.insertBefore(el, main);
   }
 
   // ---------------------------------------------------------------------------
@@ -710,6 +774,16 @@ const _isMobile = () => _mql.matches;
 
 /** Single right-pointing chevron — used for divider-to-split in PREVIEW mode.
  *  CSS flips it (scaleX(-1)) when data-mode="editor". */
+/** Format a timestamp as a human-readable age string (e.g. "5 minutes"). */
+function _formatAge(ts) {
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 90)   return `${s} second${s !== 1 ? 's' : ''}`;
+  const m = Math.round(s / 60);
+  if (m < 90)   return `${m} minute${m !== 1 ? 's' : ''}`;
+  const h = Math.round(m / 60);
+  return `${h} hour${h !== 1 ? 's' : ''}`;
+}
+
 function _chevronRight() {
   return `<svg width="8" height="12" viewBox="0 0 8 12" fill="none"
       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"

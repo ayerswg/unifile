@@ -19,8 +19,8 @@ import { getDSL } from '../dsl/registry.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 
 // Flow model layouts
-import { renderSlides,   teardownSlides   } from '../layout/flow-slides.js';
-import { renderDocument, teardownDocument } from '../layout/flow-document.js';
+import { renderSlides,   teardownSlides,  printSlides   } from '../layout/flow-slides.js';
+import { renderDocument, teardownDocument, printDocument } from '../layout/flow-document.js';
 import { renderWebpage,  teardownWebpage  } from '../layout/flow-webpage.js';
 
 // Primary model renderers
@@ -59,6 +59,10 @@ export class Preview {
     this._lastRenderer = null; // key into _MODEL_RENDERERS or _FLOW_LAYOUT_RENDERERS
     this._activeSectionVersion = null;
     this._scrollSyncEnabled = true; // user scroll disables sync temporarily
+    // Set true by the content-change handler when in layout mode so that the
+    // post-render scroll-to-cursor call is suppressed; the incremental render
+    // updates pages in-place and the scroll position is preserved naturally.
+    this._suppressScrollAfterRender = false;
 
     this._build();
     this._bindClickBack();
@@ -67,10 +71,14 @@ export class Preview {
     this._unsub.push(state.on('content-change', ({ content, cursorPos }) => {
       if (cursorPos != null) {
         this._cursorPos = cursorPos;
-        // Scroll immediately to cursor in the existing render (before debounce fires).
-        // This keeps the preview pane synced while the user types without waiting
-        // for the re-render to complete.
-        if (this._scrollSyncEnabled !== false && this._lastRenderer) {
+        if (this._lastRenderer) {
+          // Layout mode (document / slides / webpage): do NOT scroll immediately
+          // on every keystroke — the page updates in-place after the debounce.
+          // Also suppress the scroll call that fires after the render completes
+          // so the pane doesn't jump while the user is actively editing.
+          this._suppressScrollAfterRender = true;
+        } else if (this._scrollSyncEnabled !== false) {
+          // Standalone DSL mode: keep the preview pane in sync as the user types.
           this._scrollToOffset(cursorPos);
         }
       }
@@ -78,14 +86,19 @@ export class Preview {
     }));
     this._unsub.push(state.on('change', () => {
       this._updateVisibility();
-      if (state.data?.dslType !== this._lastDsl || state.primaryModel !== this._lastModel) {
+      // In layout/model mode _lastDsl is null; only re-render on model changes.
+      // In per-section DSL mode, also re-render on DSL type changes.
+      const dslChanged = !this._lastRenderer && state.data?.dslType !== this._lastDsl;
+      if (dslChanged || state.primaryModel !== this._lastModel) {
         this._scheduleRender(state.currentContent, true);
       }
     }));
     this._unsub.push(state.on('checkout', ({ content }) => {
+      this._suppressScrollAfterRender = false;
       this._scheduleRender(content, true);
     }));
     this._unsub.push(state.on('branch-switch', ({ content }) => {
+      this._suppressScrollAfterRender = false;
       this._scheduleRender(content, true);
     }));
     this._unsub.push(state.on('active-section-change', ({ version }) => {
@@ -102,9 +115,9 @@ export class Preview {
     }));
 
     // Scroll-sync: when the editor cursor moves (without a doc change), scroll
-    // the preview pane so the corresponding page is visible.
+    // the preview pane so the corresponding page is centred on screen.
     this._unsub.push(state.on('editor-select', ({ from }) => {
-      if (this._scrollSyncEnabled) this._scrollToOffset(from);
+      if (this._scrollSyncEnabled) this._scrollToOffset(from, 'center');
     }));
   }
 
@@ -169,7 +182,7 @@ export class Preview {
    * character index into the document) is visible.  Falls back to the nearest
    * page when no stub exactly covers the offset.
    */
-  _scrollToOffset(offset) {
+  _scrollToOffset(offset, block = 'nearest') {
     // Only makes sense in document layout mode where stubs carry content ranges.
     const stubs = this.content.querySelectorAll('[data-page-content-from]');
     if (!stubs.length) return;
@@ -193,7 +206,7 @@ export class Preview {
       // Temporarily suppress the scroll handler so scrolling programmatically
       // doesn't disable sync for the next 2 s.
       this._scrollSyncEnabled = false;
-      best.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      best.scrollIntoView({ behavior: 'smooth', block });
       setTimeout(() => { this._scrollSyncEnabled = true; }, 600);
     }
   }
@@ -237,6 +250,9 @@ export class Preview {
   _scheduleRender(content, immediate = false) {
     // Cancel any in-flight async render immediately so large-doc renders
     // don't keep running while the user is actively typing.
+    if (this._renderAbort) {
+      console.log('[preview] aborting render, immediate=', immediate, 'stack=', new Error().stack.split('\n')[2]?.trim());
+    }
     this._renderAbort?.abort();
     this._renderAbort = null;
 
@@ -332,10 +348,16 @@ export class Preview {
         }, 300);
 
         try {
-          await renderer.render(content, this.content, { signal: ac.signal, cursorPos: this._cursorPos });
+          const wasFullRender = await renderer.render(content, this.content, { signal: ac.signal, cursorPos: this._cursorPos, defaultDsl: state.data?.dslType, commitHash: state.shortHeadHash, isDirty: state.isDirty });
           if (ac.signal.aborted) return;
-          // Restore scroll to where the user was editing instead of jumping to top.
-          this._scrollToOffset(this._cursorPos ?? 0);
+          // Suppress scroll during typing so the view doesn't jump (incremental
+          // renders update pages in-place and the scroll position is preserved).
+          // But after a full re-render the DOM was replaced, so we must restore
+          // the view to the cursor page regardless of _suppressScrollAfterRender.
+          if (!this._suppressScrollAfterRender || wasFullRender) {
+            this._scrollToOffset(this._cursorPos ?? 0);
+          }
+          this._suppressScrollAfterRender = false;
         } catch (err) {
           if (ac.signal.aborted) return;
           renderer.teardown(this.content);
@@ -411,6 +433,24 @@ export class Preview {
       _MODEL_RENDERERS[key]?.teardown(this.content);
     }
     this._lastRenderer = null;
+  }
+
+  /**
+   * Print the current layout via the browser print dialog.
+   * For document layout: force-populates all lazy stubs first so every page
+   * appears fully rendered in the printout.
+   */
+  print() {
+    const layout = this._lastRenderer?.startsWith('flow:')
+      ? this._lastRenderer.slice(5)
+      : null;
+    if (layout === 'document') {
+      printDocument(this.content);
+    } else if (layout === 'slides') {
+      printSlides(this.content);
+    } else {
+      window.print();
+    }
   }
 
   /**

@@ -126,6 +126,53 @@ export function teardownSlides(container) {
   container.classList.remove('slides-mode');
 }
 
+/**
+ * Trigger a print/PDF export that matches the preview exactly.
+ *
+ * Resets CSS zoom to 1 on every slide (the preview uses zoom to fit the pane),
+ * injects an @page rule that matches the slide's intrinsic dimensions, triggers
+ * window.print(), then restores everything via the afterprint event.
+ *
+ * @param {HTMLElement} container  The `.preview-content` element in slides-mode
+ */
+export function printSlides(container) {
+  const slides = [...container.querySelectorAll('.uf-slide')];
+  if (!slides.length) { window.print(); return; }
+
+  // Reset zoom so slides render at their intrinsic size for printing.
+  slides.forEach(el => {
+    el.dataset.printZoom = el.style.zoom || '';
+    el.style.zoom = '1';
+  });
+
+  // Read intrinsic dimensions from the first slide after zoom reset.
+  const first  = slides[0];
+  const slideW = first.offsetWidth  || SLIDE_INTRINSIC_W;
+  const slideH = first.offsetHeight || Math.round(SLIDE_INTRINSIC_W * 9 / 16);
+
+  // Inject @page rule so the browser matches the slide canvas exactly.
+  let printStyle = document.getElementById('uf-print-page');
+  if (!printStyle) {
+    printStyle = document.createElement('style');
+    printStyle.id = 'uf-print-page';
+    document.head.appendChild(printStyle);
+  }
+  printStyle.textContent = `@page { size: ${slideW}px ${slideH}px; margin: 0; }`;
+
+  window.addEventListener('afterprint', () => {
+    printStyle.remove();
+    slides.forEach(el => {
+      el.style.zoom = el.dataset.printZoom || '';
+      delete el.dataset.printZoom;
+    });
+    // Re-attach scale observer so the preview returns to fit-width display.
+    detachScaleObserver(container);
+    attachScaleObserver(container, '.uf-slide', SLIDE_INTRINSIC_W);
+  }, { once: true });
+
+  window.print();
+}
+
 // ---------------------------------------------------------------------------
 // Slide splitting
 // ---------------------------------------------------------------------------

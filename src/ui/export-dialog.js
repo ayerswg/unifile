@@ -13,6 +13,7 @@
 import { state, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
 import { generateQuine, downloadFile, downloadBlob } from '../core/storage.js';
+import { parseGlobalFrontMatter } from '../core/front-matter.js';
 
 export class ExportDialog {
   constructor(container, handlers = {}) {
@@ -39,6 +40,10 @@ export class ExportDialog {
 
     let exporters = {};
     try { exporters = getDSL(dslId).exporters ?? {}; } catch {}
+
+    const { meta } = parseGlobalFrontMatter(state.currentContent ?? '');
+    const layout = meta.layout;
+    const isPrintableLayout = layout === 'document' || layout === 'slides';
 
     this.el.innerHTML = `
       <div class="dialog-overlay" id="export-overlay">
@@ -83,7 +88,16 @@ export class ExportDialog {
                 Export the document content in another format.
                 Version history is not included.
               </p>
-              ${Object.entries(exporters).length === 0
+              ${isPrintableLayout ? `
+                <div class="export-option-row">
+                  <div class="export-option-info">
+                    <strong>Print / PDF</strong>
+                    <span class="export-option-sub">Exactly as rendered — uses browser print dialog</span>
+                  </div>
+                  <button class="btn btn-secondary" id="export-print">Print</button>
+                </div>
+              ` : ''}
+              ${Object.entries(exporters).length === 0 && !isPrintableLayout
                 ? '<p class="export-empty">No format exporters available for this DSL.</p>'
                 : Object.entries(exporters).map(([key, exp]) => `
                     <div class="export-option-row">
@@ -121,6 +135,12 @@ export class ExportDialog {
     this.el.querySelector('#export-cancel')?.addEventListener('click', () => state.closePanel());
     this.el.querySelector('#export-overlay')?.addEventListener('click', e => {
       if (e.target.id === 'export-overlay') state.closePanel();
+    });
+
+    this.el.querySelector('#export-print')?.addEventListener('click', () => {
+      state.closePanel();
+      // Close panel first, then print so the dialog doesn't appear in the printout.
+      setTimeout(() => this.handlers.print?.(), 100);
     });
 
     // Quine export (only fires when button is not disabled)

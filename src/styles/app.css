@@ -1387,6 +1387,20 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .uf-doc-pagenum-center { left: 50%; transform: translateX(-50%); }
 .uf-doc-pagenum-right  { right: 12px; }
 
+/* Commit hash badge — always bottom-center, shows hash + * when dirty */
+.uf-doc-commit {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-family: var(--font-mono, monospace);
+  color: rgba(0,0,0,.2);
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
 /* Preview "Updating…" badge — floats over the top-right of the pane while a
    render is in flight.  Hidden by default; shown via JS class toggle. */
 .preview-rendering-badge {
@@ -2678,9 +2692,69 @@ noscript .noscript-wrap {
 }
 
 @media print {
-  #uf-topbar, .pane-divider, #uf-panels { display: none !important; }
-  .editor-pane { display: none !important; }
-  .preview-pane { border: none !important; }
+  #uf-topbar, #uf-divider, #uf-panels { display: none !important; }
+  #uf-editor-wrap { display: none !important; }
+  #uf-main { display: block !important; }
+  #uf-preview-wrap { width: 100% !important; flex: none !important; }
+  .preview-pane { border: none !important; overflow: visible !important; }
+
+  /* Document layout: each page stub fills exactly one print sheet.
+     printDocument() sets zoom:1 before window.print() so pages render at
+     their natural size (816 px = 8.5 in at 96 dpi). */
+  .preview-content.document-mode {
+    overflow: visible !important;
+    height: auto !important;
+    background: none !important;
+    padding: 0 !important;
+  }
+  .preview-content.document-mode .uf-doc {
+    display: block !important;
+    gap: 0 !important;
+    padding: 0 !important;
+  }
+  .uf-doc-page {
+    break-after: page !important;
+    page-break-after: always !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+  }
+  .uf-doc-page:last-child {
+    break-after: auto !important;
+    page-break-after: auto !important;
+  }
+  /* Hide loading shimmer on un-populated stubs */
+  .uf-doc-page-stub::after { display: none !important; }
+  /* Hide commit hash and page numbers in printout if desired */
+  .uf-doc-commit { display: none !important; }
+
+  /* Slides layout: each slide fills exactly one print sheet.
+     printSlides() resets zoom to 1 and injects @page size before window.print(). */
+  .preview-content.slides-mode {
+    overflow: visible !important;
+    height: auto !important;
+    background: none !important;
+    padding: 0 !important;
+  }
+  .uf-slide-deck {
+    display: block !important;
+    gap: 0 !important;
+    padding: 0 !important;
+  }
+  .uf-slide {
+    break-after: page !important;
+    page-break-after: always !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+  }
+  .uf-slide:last-child {
+    break-after: auto !important;
+    page-break-after: auto !important;
+  }
+  .uf-slide-num { display: none !important; }
+
+  /* Preserve background colors and images in print output */
+  .preview-content { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
 
 /* ==============================================================
@@ -2831,4 +2905,51 @@ noscript .noscript-wrap {
 .dsl-help-docs-link:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+   Draft recovery banner
+   --------------------------------------------------------------------------- */
+
+.draft-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-secondary));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  font-size: 13px;
+  color: var(--text-primary);
+  z-index: 10;
+}
+
+.draft-banner-msg {
+  flex: 1;
+}
+
+.draft-banner-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  transition: background .1s, color .1s;
+}
+
+.draft-banner-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.draft-banner-discard {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.draft-banner-close {
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
 }
