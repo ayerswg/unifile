@@ -241,7 +241,7 @@ export class App {
 
     this._components.export = new ExportDialog(
       document.getElementById('uf-export-panel'),
-      { renderPreview: handlers.renderPreview, print: handlers.print }
+      { renderPreview: handlers.renderPreview, print: handlers.print, exportSlidesPptx: handlers.exportSlidesPptx }
     );
 
     this._components.settings = new SettingsPanel(
@@ -325,6 +325,10 @@ export class App {
 
       print: () => {
         this._components.preview?.print();
+      },
+
+      exportSlidesPptx: async () => {
+        return this._components.preview?.exportSlidesPptx();
       },
 
       /**

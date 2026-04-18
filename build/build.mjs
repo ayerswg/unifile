@@ -447,6 +447,19 @@ delete globalThis.__uf_pending_register;
 }
 
 // ---------------------------------------------------------------------------
+// Build site landing page
+// ---------------------------------------------------------------------------
+
+async function buildSite() {
+  console.log(`\nBuilding site…`);
+  const html = await readFile(join(TEMPLATES, 'site.html'), 'utf8');
+  await mkdir(DIST, { recursive: true });
+  const outPath = join(DIST, 'index.html');
+  await writeFile(outPath, html, 'utf8');
+  console.log(`  ✓ ${outPath}`);
+}
+
+// ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
 
@@ -468,6 +481,7 @@ async function main() {
   // Default: build quine + PWA + all plugin bundles so dist/ is always coherent.
   // Plugin source changes are picked up on every build — no separate step needed.
   try {
+    await buildSite();
     await buildQuine();
     if (BUILD_PWA) await buildPWA();
     console.log('\nBuilding plugins…');

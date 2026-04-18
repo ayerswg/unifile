@@ -19,7 +19,7 @@ import { getDSL } from '../dsl/registry.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 
 // Flow model layouts
-import { renderSlides,   teardownSlides,  printSlides   } from '../layout/flow-slides.js';
+import { renderSlides,   teardownSlides,  printSlides, exportSlidesPptx } from '../layout/flow-slides.js';
 import { renderDocument, teardownDocument, printDocument } from '../layout/flow-document.js';
 import { renderWebpage,  teardownWebpage  } from '../layout/flow-webpage.js';
 
@@ -451,6 +451,11 @@ export class Preview {
     } else {
       window.print();
     }
+  }
+
+  /** Export the current slides as a .pptx Blob. */
+  exportSlidesPptx() {
+    return exportSlidesPptx(this.content);
   }
 
   /**

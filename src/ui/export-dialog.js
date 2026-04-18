@@ -45,6 +45,25 @@ export class ExportDialog {
     const layout = meta.layout;
     const isPrintableLayout = layout === 'document' || layout === 'slides';
 
+    // In slides mode, DSL-level exporters (HTML, PDF, DOCX, text) don't apply —
+    // the slide deck is the document, not a flat text stream.  Replace them with
+    // a layout-level PPTX exporter (if the handler is available).
+    if (layout === 'slides') {
+      exporters = {};
+      if (this.handlers.exportSlidesPptx) {
+        const handler = this.handlers.exportSlidesPptx;
+        exporters = {
+          pptx: {
+            label: 'PowerPoint',
+            mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            ext: '.pptx',
+            binary: true,
+            export: async (_content) => handler(),
+          },
+        };
+      }
+    }
+
     this.el.innerHTML = `
       <div class="dialog-overlay" id="export-overlay">
         <div class="dialog" role="dialog" aria-modal="true">

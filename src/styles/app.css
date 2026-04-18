@@ -1173,9 +1173,55 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .uf-slide-frame th,
 .uf-slide-frame td      { border: 1px solid #ddd; padding: .4em .6em; }
 .uf-slide-frame th      { background: #f0f0f0; font-weight: 600; }
+/* Images inside slides — always block-level and never overflow horizontally. */
+.uf-slide-frame img {
+  display: block;
+  max-width: 100%;
+}
+/* Images with NO explicit {width=}/{height=} attrs (no inline style):
+   also cap height so an oversized image doesn't overflow the slide frame. */
+.uf-slide-frame img:not([style]) {
+  max-height: 380px;
+  object-fit: contain;
+}
+/* Title slides — only-child markdown part whose first element is an h1:
+   fill the frame and center content (classic cover/title slide look). */
+.uf-slide-frame .uf-slide-part.uf-dsl-markdown:only-child:has(> h1:first-child) {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.uf-slide-frame .uf-slide-part.uf-dsl-markdown:only-child:has(> h1:first-child) img:not([style]) {
+  max-height: 100%;
+}
+
+/* Image-centric slides — only-child markdown part with no headings at all:
+   fill the frame and center the image. */
+.uf-slide-frame .uf-slide-part.uf-dsl-markdown:only-child:not(:has(h1, h2, h3, h4)) {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.uf-slide-frame .uf-slide-part.uf-dsl-markdown:only-child:not(:has(h1, h2, h3, h4)) img:not([style]) {
+  max-height: 100%;
+}
+
+/* Content slides (h2+ header) — no special layout, content flows from top.
+   Give h2 a subtle bottom border to mark it clearly as the slide header. */
+.uf-slide-frame h2:first-child {
+  padding-bottom: .3em;
+  border-bottom: 2px solid currentColor;
+  opacity: 0.85;
+  margin-bottom: .5em;
+}
 
 /* DSL blocks (mermaid, abcjs, etc.) within a slide */
-.uf-slide-part { margin: .6em 0; flex: 0 0 auto; }
+.uf-slide-part { margin: .6em 0; flex: 0 1 auto; min-height: 0; }
 .uf-slide-part:first-child { margin-top: 0; }
 .uf-slide-part:last-child  { margin-bottom: 0; }
 
@@ -1279,6 +1325,87 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   pointer-events: none;
   user-select: none;
 }
+
+/* ==============================================================
+   SLIDE THEMES
+   theme: dark | ocean | warm  (set via front matter; applied as
+   a class on .uf-slide-deck by the flow-slides renderer)
+   ============================================================== */
+
+/* ── dark ── */
+.uf-slide-deck.theme-dark .uf-slide {
+  background: #1e1e2e;
+  color: #cdd6f4;
+}
+.uf-slide-deck.theme-dark .uf-slide-frame h1,
+.uf-slide-deck.theme-dark .uf-slide-frame h2,
+.uf-slide-deck.theme-dark .uf-slide-frame h3,
+.uf-slide-deck.theme-dark .uf-slide-frame h4 { color: #cdd6f4; }
+.uf-slide-deck.theme-dark .uf-slide-frame p,
+.uf-slide-deck.theme-dark .uf-slide-frame li  { color: #a6adc8; }
+.uf-slide-deck.theme-dark .uf-slide-frame a   { color: #89b4fa; }
+.uf-slide-deck.theme-dark .uf-slide-frame code {
+  background: #313244; color: #cdd6f4;
+}
+.uf-slide-deck.theme-dark .uf-slide-frame pre {
+  background: #181825; border-color: #45475a;
+}
+.uf-slide-deck.theme-dark .uf-slide-frame blockquote {
+  border-left-color: #89b4fa; color: #a6adc8;
+}
+.uf-slide-deck.theme-dark .uf-slide-frame th { background: #313244; color: #cdd6f4; }
+.uf-slide-deck.theme-dark .uf-slide-frame td { border-color: #45475a; }
+.uf-slide-deck.theme-dark .uf-slide-num { color: rgba(255,255,255,.25); }
+/* Override light-mode lock for dark theme */
+.uf-slide-deck.theme-dark .uf-slide { color-scheme: dark; }
+
+/* ── ocean ── */
+.uf-slide-deck.theme-ocean .uf-slide {
+  background: #eff6ff;
+  color: #1e3a5f;
+}
+.uf-slide-deck.theme-ocean .uf-slide-frame h1,
+.uf-slide-deck.theme-ocean .uf-slide-frame h2,
+.uf-slide-deck.theme-ocean .uf-slide-frame h3,
+.uf-slide-deck.theme-ocean .uf-slide-frame h4 { color: #1e40af; }
+.uf-slide-deck.theme-ocean .uf-slide-frame p,
+.uf-slide-deck.theme-ocean .uf-slide-frame li  { color: #1e3a5f; }
+.uf-slide-deck.theme-ocean .uf-slide-frame a   { color: #2563eb; }
+.uf-slide-deck.theme-ocean .uf-slide-frame code {
+  background: #dbeafe; color: #1e40af;
+}
+.uf-slide-deck.theme-ocean .uf-slide-frame pre {
+  background: #dbeafe; border-color: #93c5fd;
+}
+.uf-slide-deck.theme-ocean .uf-slide-frame blockquote {
+  border-left-color: #3b82f6; color: #1e40af;
+}
+.uf-slide-deck.theme-ocean .uf-slide-frame th { background: #bfdbfe; color: #1e3a8a; }
+.uf-slide-deck.theme-ocean .uf-slide-frame td { border-color: #93c5fd; }
+
+/* ── warm ── */
+.uf-slide-deck.theme-warm .uf-slide {
+  background: #fffbeb;
+  color: #451a03;
+}
+.uf-slide-deck.theme-warm .uf-slide-frame h1,
+.uf-slide-deck.theme-warm .uf-slide-frame h2,
+.uf-slide-deck.theme-warm .uf-slide-frame h3,
+.uf-slide-deck.theme-warm .uf-slide-frame h4 { color: #92400e; }
+.uf-slide-deck.theme-warm .uf-slide-frame p,
+.uf-slide-deck.theme-warm .uf-slide-frame li  { color: #451a03; }
+.uf-slide-deck.theme-warm .uf-slide-frame a   { color: #b45309; }
+.uf-slide-deck.theme-warm .uf-slide-frame code {
+  background: #fef3c7; color: #92400e;
+}
+.uf-slide-deck.theme-warm .uf-slide-frame pre {
+  background: #fef3c7; border-color: #fcd34d;
+}
+.uf-slide-deck.theme-warm .uf-slide-frame blockquote {
+  border-left-color: #f59e0b; color: #92400e;
+}
+.uf-slide-deck.theme-warm .uf-slide-frame th { background: #fde68a; color: #78350f; }
+.uf-slide-deck.theme-warm .uf-slide-frame td { border-color: #fcd34d; }
 
 /* ==============================================================
    FLOW → DOCUMENT LAYOUT
