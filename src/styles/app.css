@@ -1444,15 +1444,20 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .uf-doc-header { border-bottom: 1px solid #ddd; }
 .uf-doc-footer { border-top:    1px solid #ddd; }
 .uf-doc-body { color: #1e1e2e; }
-.uf-doc-body h1, .uf-doc-body h2, .uf-doc-body h3 { color: #1e1e2e; margin-top: 1em; }
-.uf-doc-body p   { margin: .6em 0; line-height: inherit; }
-.uf-doc-body a   { color: #4a86e8; }
-.uf-doc-body ul, .uf-doc-body ol { padding-left: 1.4em; }
-.uf-doc-body code { background: #f5f5f5; border-radius: 3px; padding: .1em .35em; font-size: .85em; }
-.uf-doc-body pre  { background: #f5f5f5; border: 1px solid #e0e0e0; padding: .6em .8em; border-radius: 4px; overflow: auto; }
-.uf-doc-body table { border-collapse: collapse; width: 100%; }
-.uf-doc-body th, .uf-doc-body td { border: 1px solid #ddd; padding: .3em .6em; }
-.uf-doc-body th { background: #f0f0f0; }
+/* Higher specificity than .preview-content h1/h2/h3/h4 to ensure consistent margins */
+.uf-doc-page .uf-doc-body h1, .uf-doc-page .uf-doc-body h2,
+.uf-doc-page .uf-doc-body h3, .uf-doc-page .uf-doc-body h4,
+.uf-doc-tape h1, .uf-doc-tape h2, .uf-doc-tape h3, .uf-doc-tape h4 { color: #1e1e2e; margin-top: 1em; }
+.uf-doc-body p, .uf-doc-tape p   { margin: .6em 0; line-height: inherit; }
+.uf-doc-body a, .uf-doc-tape a   { color: #4a86e8; }
+.uf-doc-body ul, .uf-doc-body ol,
+.uf-doc-tape  ul, .uf-doc-tape  ol { padding-left: 1.4em; }
+.uf-doc-body code, .uf-doc-tape code { background: #f5f5f5; border-radius: 3px; padding: .1em .35em; font-size: .85em; }
+.uf-doc-body pre,  .uf-doc-tape pre  { background: #f5f5f5; border: 1px solid #e0e0e0; padding: .6em .8em; border-radius: 4px; overflow: auto; }
+.uf-doc-body table, .uf-doc-tape table { border-collapse: collapse; width: 100%; }
+.uf-doc-body th, .uf-doc-body td,
+.uf-doc-tape  th, .uf-doc-tape  td { border: 1px solid #ddd; padding: .3em .6em; }
+.uf-doc-body th, .uf-doc-tape th { background: #f0f0f0; }
 /* ==============================================================
    PRINT LAYOUT LIGHT-MODE LOCK
    Slides and document pages are always white/light regardless of
@@ -2819,7 +2824,7 @@ noscript .noscript-wrap {
 }
 
 @media print {
-  #uf-topbar, #uf-divider, #uf-panels { display: none !important; }
+  #uf-topbar, #uf-divider, #uf-panels, .draft-banner { display: none !important; }
   #uf-editor-wrap { display: none !important; }
   #uf-main { display: block !important; }
   #uf-preview-wrap { width: 100% !important; flex: none !important; }

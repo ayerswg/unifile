@@ -181,8 +181,12 @@ export class Preview {
    * Scroll the preview pane so the page whose content includes `offset` (a
    * character index into the document) is visible.  Falls back to the nearest
    * page when no stub exactly covers the offset.
+   * @param {boolean} [onlyIfOffscreen] – when true, skip the scroll if the
+   *   target stub is already at least partially visible in the pane.  Used
+   *   during typing so we don't fight the user's scroll position while still
+   *   bringing new pages into view when the cursor moves off-screen.
    */
-  _scrollToOffset(offset, block = 'nearest') {
+  _scrollToOffset(offset, block = 'nearest', onlyIfOffscreen = false) {
     // Only makes sense in document layout mode where stubs carry content ranges.
     const stubs = this.content.querySelectorAll('[data-page-content-from]');
     if (!stubs.length) return;
@@ -203,6 +207,15 @@ export class Preview {
     }
 
     if (best) {
+      if (onlyIfOffscreen) {
+        // Skip scroll if the target page is meaningfully visible (≥100 px showing).
+        // A page barely peeking at the edge counts as off-screen so we still scroll.
+        const paneRect = this.pane.getBoundingClientRect();
+        const stubRect = best.getBoundingClientRect();
+        const visiblePx = Math.max(0,
+          Math.min(stubRect.bottom, paneRect.bottom) - Math.max(stubRect.top, paneRect.top));
+        if (visiblePx >= 100) return;
+      }
       // Temporarily suppress the scroll handler so scrolling programmatically
       // doesn't disable sync for the next 2 s.
       this._scrollSyncEnabled = false;
@@ -347,14 +360,22 @@ export class Preview {
           }
         }, 300);
 
+        // Snapshot scroll position so a full render that resets it can be undone.
+        const savedScrollTop = this.pane.scrollTop;
         try {
           const wasFullRender = await renderer.render(content, this.content, { signal: ac.signal, cursorPos: this._cursorPos, defaultDsl: state.data?.dslType, commitHash: state.shortHeadHash, isDirty: state.isDirty });
           if (ac.signal.aborted) return;
-          // Suppress scroll during typing so the view doesn't jump (incremental
-          // renders update pages in-place and the scroll position is preserved).
-          // But after a full re-render the DOM was replaced, so we must restore
-          // the view to the cursor page regardless of _suppressScrollAfterRender.
-          if (!this._suppressScrollAfterRender || wasFullRender) {
+            if (this._suppressScrollAfterRender) {
+            // User is actively typing: restore scroll if a full render reset it,
+            // then only scroll if the cursor page has gone off-screen (e.g. moved
+            // to a new page).  Avoids fighting the user's position while still
+            // bringing newly-typed pages into view.
+            // Defer to next frame so CSS zoom (applied by attachScaleObserver via
+            // requestAnimationFrame) has been applied before checking visibility.
+            if (wasFullRender) this.pane.scrollTop = savedScrollTop;
+            const _pos = this._cursorPos ?? 0;
+            requestAnimationFrame(() => this._scrollToOffset(_pos, 'nearest', true));
+          } else {
             this._scrollToOffset(this._cursorPos ?? 0);
           }
           this._suppressScrollAfterRender = false;

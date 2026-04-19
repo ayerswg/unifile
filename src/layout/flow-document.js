@@ -184,6 +184,18 @@ export async function renderDocument(content, container, { signal, cursorPos, de
     }
     detachScaleObserver(container);
   } else {
+    // Lock the document's scroll height before removing stubs so the preview
+    // pane's scrollTop is never clamped mid-surgery.  Without this, removing
+    // the stub that is currently visible causes the browser to clamp scrollTop
+    // to 0, fire a spurious scroll event, and jump the view to page 1.
+    // Clear first so that a stale minHeight from an aborted render doesn't
+    // inflate the measured height.
+    const ufDocEl = container.querySelector('.uf-doc');
+    if (ufDocEl) {
+      ufDocEl.style.minHeight = '';
+      ufDocEl.style.minHeight = ufDocEl.offsetHeight + 'px';
+    }
+
     // Keep stubs 0..pivotPageNum-1.  Remove the rest, properly decrementing
     // each stub's tapeGroup.remaining so tapes are freed when no longer needed.
     const allStubs = [...container.querySelectorAll('.uf-doc-page')];
@@ -364,6 +376,12 @@ export async function renderDocument(content, container, { signal, cursorPos, de
     container.appendChild(ufDoc);
     container._ufIntrinsicW = cfg.pageW;
     attachScaleObserver(container, '.uf-doc-page', cfg.pageW);
+  }
+
+  // Release the scroll-height lock set before the incremental DOM surgery.
+  if (!isFullRender) {
+    const ufDocEl = container.querySelector('.uf-doc');
+    if (ufDocEl) ufDocEl.style.minHeight = '';
   }
 
   const keptSections = isFullRender ? [] : (container._ufDocSections ?? []).slice(0, pivotSectionIdx);
