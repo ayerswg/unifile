@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The App — Unifile</title>
+  <meta name="description" content="A universal file format for ideas" />
+  <link rel="stylesheet" href="/assets/css/style.css" />
+</head>
+<body>
+  <nav id="site-nav">
+  <span class="prompt-glyph">&gt;</span>
+  <div class="nav-search-wrap">
+    <span id="nav-display">/app/</span>
+    <input
+      id="nav-search-input"
+      type="text"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="type to navigate..."
+      style="display:none"
+    />
+  </div>
+  <button id="theme-toggle" aria-label="Toggle theme"></button>
+</nav>
+
+<div class="page-body">
+  <h1>The App</h1>
+  <div class="content">
+    <p>Unifile is a single HTML file that runs entirely in your browser. No server, no account, no sync — just open it and write.</p>
+
+<h2 id="get-it">Get it</h2>
+
+<p>Download the latest build and open it directly, or use the hosted version at <a href="/app/">unifile.app/app</a>.</p>
+
+<h2 id="what-it-does">What it does</h2>
+
+<p>Unifile gives every section of your document its own syntax — Markdown for prose, Mermaid for diagrams, ABC for music notation, Fountain for screenplays — all in one file, one editor.</p>
+
+<p>Switch between them with a shebang line at the top of any section:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>#!markdown
+This is prose.
+
+#!mermaid
+graph LR
+  A --&gt; B
+</code></pre></div></div>
+
+<h2 id="keyboard-shortcuts">Keyboard shortcuts</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code class="language-plaintext highlighter-rouge">Ctrl+Enter</code></td>
+      <td>Render current section</td>
+    </tr>
+    <tr>
+      <td><code class="language-plaintext highlighter-rouge">Ctrl+/</code></td>
+      <td>Toggle comment</td>
+    </tr>
+    <tr>
+      <td><code class="language-plaintext highlighter-rouge">Ctrl+Shift+P</code></td>
+      <td>Command palette</td>
+    </tr>
+  </tbody>
+</table>
+
+  </div>
+</div>
+
+  <script src="/assets/js/search.js"></script>
+</body>
+</html>

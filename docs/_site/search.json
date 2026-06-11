@@ -1,0 +1,78 @@
+[
+  
+  
+  
+  
+  {
+    "title": "About",
+    "url": "/about/",
+    "excerpt": "",
+    "date": null,
+    "type": "page",
+    "pinned": false
+  },
+  
+  {
+    "title": "The App",
+    "url": "/app/",
+    "excerpt": "",
+    "date": null,
+    "type": "page",
+    "pinned": false
+  },
+  
+  {
+    "title": "Unifile",
+    "url": "/",
+    "excerpt": "",
+    "date": null,
+    "type": "page",
+    "pinned": false
+  },
+  
+  {
+    "title": "Posts",
+    "url": "/posts/",
+    "excerpt": "",
+    "date": null,
+    "type": "page",
+    "pinned": false
+  },
+  
+  {
+    "title": "Why one file?",
+    "url": "/posts/why-one-file/",
+    "excerpt": "The file is the unit of trust on the internet. You can email it, version it with git, drag it into a chat, attach it ...",
+    "date": "May 20, 2026",
+    "type": "post",
+    "pinned": true
+  },
+  
+  {
+    "title": "Building the plugin system",
+    "url": "/posts/building-the-plugin-system/",
+    "excerpt": "The core challenge with a multi-DSL editor is that you want the host app to stay small while letting language support...",
+    "date": "May 10, 2026",
+    "type": "post",
+    "pinned": true
+  },
+  
+  {
+    "title": "Per-section syntax highlighting",
+    "url": "/posts/section-syntax-highlighting/",
+    "excerpt": "A document with mixed DSLs needs mixed highlighting — Markdown rules for prose sections, Mermaid rules for diagram se...",
+    "date": "April 28, 2026",
+    "type": "post",
+    "pinned": false
+  },
+  
+  {
+    "title": "The model layer",
+    "url": "/posts/the-model-layer/",
+    "excerpt": "Unifile documents have three layers of structure: the DSL (what syntax a section uses), the layout (how sections are ...",
+    "date": "April 10, 2026",
+    "type": "post",
+    "pinned": false
+  }
+  
+]

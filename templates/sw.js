@@ -5,6 +5,10 @@
  * Uses a cache-first strategy for app shell, network-first for data.
  */
 
+// CACHE_PREFIX namespaces caches per build type (e.g. "unifile-abc") so multiple
+// unifile PWAs installed on the same origin (universal, abc, …) don't evict each
+// other's caches.  CACHE_VERSION appends a content hash so updates supersede.
+const CACHE_PREFIX  = 'UNIFILE_CACHE_PREFIX';
 const CACHE_VERSION = 'UNIFILE_CACHE_VERSION';
 const APP_SHELL = [
   './',
@@ -37,7 +41,9 @@ self.addEventListener('activate', (event) => {
     caches.keys().then(keys => {
       return Promise.all(
         keys
-          .filter(key => key !== CACHE_VERSION)
+          // Only prune stale caches for THIS build type — leave other unifile
+          // PWAs' caches (different prefix) intact.
+          .filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_VERSION)
           .map(key => caches.delete(key))
       );
     }).then(() => self.clients.claim())

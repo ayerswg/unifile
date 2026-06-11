@@ -1,0 +1,18 @@
+---
+layout: none
+---
+[
+  {% assign pages = site.pages | where_exp: "p", "p.title != nil and p.title != ''" %}
+  {% assign posts = site.posts %}
+  {% assign all = pages | concat: posts %}
+  {% for item in all %}
+  {
+    "title": {{ item.title | jsonify }},
+    "url": {{ item.url | jsonify }},
+    "excerpt": {{ item.excerpt | strip_html | truncate: 120 | jsonify }},
+    "date": {% if item.date %}"{{ item.date | date: "%B %d, %Y" }}"{% else %}null{% endif %},
+    "type": {% if item.date %}"post"{% else %}"page"{% endif %},
+    "pinned": {% if item.pinned %}true{% else %}false{% endif %}
+  }{% unless forloop.last %},{% endunless %}
+  {% endfor %}
+]

@@ -23,7 +23,7 @@ import { getDSL }                   from '../dsl/registry.js';
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function renderWebpage(content, container) {
+export async function renderWebpage(content, container, opts = {}) {
   const { meta, bodyFrom } = parseGlobalFrontMatter(content);
 
   container.innerHTML = '';
@@ -38,8 +38,9 @@ export async function renderWebpage(content, container) {
   const segments = _splitOnPageBreak(content, bodyFrom);
 
   // `dsl:` front matter sets the default DSL for sections without a #!shebang.
-  // Carries forward across === breaks so the active DSL persists.
-  let currentDslId = meta.dsl ?? 'markdown';
+  // Falls back to the document's default DSL (e.g. a dedicated abcjs build seeds
+  // dslType:'abcjs') before markdown.  Carries forward across === breaks.
+  let currentDslId = meta.dsl ?? opts.defaultDsl ?? 'markdown';
 
   for (let i = 0; i < segments.length; i++) {
     if (i > 0) {

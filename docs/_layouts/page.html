@@ -1,0 +1,25 @@
+---
+layout: default
+---
+<nav id="site-nav">
+  <span class="prompt-glyph">&gt;</span>
+  <div class="nav-search-wrap">
+    <span id="nav-display">{{ page.url }}</span>
+    <input
+      id="nav-search-input"
+      type="text"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="type to navigate..."
+      style="display:none"
+    />
+  </div>
+  <button id="theme-toggle" aria-label="Toggle theme"></button>
+</nav>
+
+<div class="page-body">
+  <h1>{{ page.title }}</h1>
+  <div class="content">
+    {{ content }}
+  </div>
+</div>

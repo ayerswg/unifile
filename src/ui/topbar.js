@@ -115,6 +115,31 @@ export class TopBar {
     `;
 
     this._bindEvents();
+    // Keep the mobile commit-log pane (if mounted) in sync with every re-render
+    // — render() fires on state 'change', which covers commit/checkout/branch.
+    this._refreshCommitLog();
+  }
+
+  /**
+   * Mount the commit history into an external container (the mobile far-left
+   * pane).  Reuses the same list markup + checkout handler as the topbar
+   * dropdown so behaviour stays identical across desktop and mobile.
+   */
+  mountCommitLog(container) {
+    this._commitLogEl = container;
+    this._refreshCommitLog();
+  }
+
+  _refreshCommitLog() {
+    if (!this._commitLogEl) return;
+    this._commitLogEl.innerHTML =
+      `<div class="commit-log-pane">${this._renderCommitList()}</div>`;
+    this._commitLogEl.querySelectorAll('.dd-commit-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const hash = item.dataset.hash;
+        if (hash) this._onCheckout(hash);
+      });
+    });
   }
 
   _updateDirty() {

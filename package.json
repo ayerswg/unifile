@@ -6,7 +6,9 @@
   "scripts": {
     "build": "node build/build.mjs",
     "build:dev": "node build/build.mjs --dev",
+    "build:abcjs": "node build/build.mjs --dsl=abcjs",
     "build:plugins": "node build/build.mjs --plugins",
+    "gen:soundfont": "node build/gen-soundfont.mjs",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

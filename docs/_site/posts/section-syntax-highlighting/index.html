@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Per-section syntax highlighting — Unifile</title>
+  <meta name="description" content="A document with mixed DSLs needs mixed highlighting — Markdown rules for prose sections, Mermaid rules for diagram sections, and so on, all in the same CodeM..." />
+  <link rel="stylesheet" href="/assets/css/style.css" />
+</head>
+<body>
+  <nav id="site-nav">
+  <span class="prompt-glyph">&gt;</span>
+  <div class="nav-search-wrap">
+    <span id="nav-display">/posts/section-syntax-highlighting/</span>
+    <input
+      id="nav-search-input"
+      type="text"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="type to navigate..."
+      style="display:none"
+    />
+  </div>
+  <button id="theme-toggle" aria-label="Toggle theme"></button>
+</nav>
+
+<div class="page-body">
+  <h1>Per-section syntax highlighting</h1>
+  <div class="post-meta">April 28, 2026</div>
+  <div class="content">
+    <p>A document with mixed DSLs needs mixed highlighting — Markdown rules for prose sections, Mermaid rules for diagram sections, and so on, all in the same CodeMirror instance.</p>
+
+<p>CodeMirror 6 doesn’t support this out of the box. The editor has one language at a time. But the decoration system is flexible enough to let us fake it.</p>
+
+<h2 id="the-approach">The approach</h2>
+
+<p>We parse the document into sections, then for each section we run the appropriate language’s Lezer parser over just that slice of text. <code class="language-plaintext highlighter-rouge">highlightTree()</code> walks the resulting syntax tree and emits token ranges, which we convert into <code class="language-plaintext highlighter-rouge">Decoration.mark</code> instances with the right CSS classes.</p>
+
+<p>The result is a <code class="language-plaintext highlighter-rouge">StateField</code> that rebuilds its decoration set whenever the document changes, dispatched via a custom <code class="language-plaintext highlighter-rouge">rebuildSectionHighlightsEffect</code>.</p>
+
+<h2 id="the-tricky-part">The tricky part</h2>
+
+<p>Decoration marks have to be sorted and non-overlapping. Since we’re building them section by section, we have to be careful about the offset arithmetic — each section’s Lezer tree starts at position 0, but the marks need to land at the right absolute positions in the full document.</p>
+
+<h2 id="performance">Performance</h2>
+
+<p>For short documents this is fast enough to run synchronously on every keystroke. For very long documents we’ll need to make it incremental — only reparse sections that actually changed. That’s future work.</p>
+
+  </div>
+</div>
+
+  <script src="/assets/js/search.js"></script>
+</body>
+</html>

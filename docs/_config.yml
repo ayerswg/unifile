@@ -1,0 +1,26 @@
+title: Unifile
+description: A universal file format for ideas
+url: "https://unifile.app"
+baseurl: ""
+
+permalink: /posts/:slug/
+
+markdown: kramdown
+highlighter: rouge
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+
+defaults:
+  - scope:
+      path: ""
+      type: posts
+    values:
+      layout: post
+  - scope:
+      path: ""
+      type: pages
+    values:
+      layout: page

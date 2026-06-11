@@ -133,6 +133,9 @@ export class App {
     // 10b. Bind model-related handlers (needs editor component from step 10)
     this._bindModelHandlers();
 
+    // 10b-ii. Wire the mobile far-left commit-log pane + horizontal pane nav.
+    this._setupMobilePanes();
+
     // 10c. Show draft-restored banner if we recovered unsaved content
     if (this._pendingDraftSavedAt) {
       this._showDraftBanner(this._pendingDraftSavedAt);
@@ -157,6 +160,7 @@ export class App {
     root.innerHTML = `
       <div id="uf-topbar"></div>
       <div id="uf-main">
+        <div id="uf-commit-log" aria-label="Commit history"></div>
         <div id="uf-editor-wrap"></div>
         <div id="uf-divider" class="pane-divider">
           <button class="divider-btn divider-to-preview" title="Preview only" aria-label="Preview only">
@@ -374,6 +378,36 @@ export class App {
 
     state.on('view-mode-change', syncDivider);
     syncDivider(state.viewMode);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mobile panes — on phone-width screens #uf-main becomes a horizontal
+  // scroll-snap strip: [commit log] · [editor] · [preview].  (PWAs can't use
+  // edge-swipe navigation, so the user scrolls/pulls horizontally between panes.)
+  // The CSS handles the layout; here we feed the commit-log pane and centre the
+  // editor pane on entry so the strip opens on the document, not the history.
+  // ---------------------------------------------------------------------------
+
+  _setupMobilePanes() {
+    const logPane = document.getElementById('uf-commit-log');
+    if (logPane && this._components.topbar?.mountCommitLog) {
+      this._components.topbar.mountCommitLog(logPane);
+    }
+
+    const scrollToEditor = (smooth = false) => {
+      if (!_isMobile()) return;
+      const main   = document.getElementById('uf-main');
+      const editor = document.getElementById('uf-editor-wrap');
+      if (!main || !editor) return;
+      // Defer until layout has the panes at full width.
+      requestAnimationFrame(() => {
+        main.scrollTo({ left: editor.offsetLeft, behavior: smooth ? 'smooth' : 'auto' });
+      });
+    };
+
+    // Open centred on the editor, and re-centre whenever we (re)enter mobile.
+    scrollToEditor(false);
+    _mql.addEventListener('change', (e) => { if (e.matches) scrollToEditor(false); });
   }
 
   // ---------------------------------------------------------------------------

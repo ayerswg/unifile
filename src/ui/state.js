@@ -108,6 +108,15 @@ class AppState extends EventBus {
     /** @type {boolean} Whether a note in the ABC preview is currently selected (red highlight) */
     this.abcNoteSelected = false;
 
+    /** @type {Array<{id:string,name:string}>} Available Web MIDI output ports */
+    this.abcMidiOutputs = [];
+
+    /** @type {string|null} Selected MIDI output port id; null → internal piano synth */
+    this.abcMidiOutId = null;
+
+    /** @type {boolean} Whether the Web MIDI API is available in this browser */
+    this.abcMidiSupported = typeof navigator !== 'undefined' && !!navigator.requestMIDIAccess;
+
     /** @type {string|null} DSL id at current cursor position; null → use data.dslType */
     this.activeDslId = null;
 

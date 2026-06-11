@@ -263,9 +263,6 @@ export class Preview {
   _scheduleRender(content, immediate = false) {
     // Cancel any in-flight async render immediately so large-doc renders
     // don't keep running while the user is actively typing.
-    if (this._renderAbort) {
-      console.log('[preview] aborting render, immediate=', immediate, 'stack=', new Error().stack.split('\n')[2]?.trim());
-    }
     this._renderAbort?.abort();
     this._renderAbort = null;
 

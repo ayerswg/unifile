@@ -6,15 +6,25 @@
  *
  * Outputs
  * -------
- *   dist/unifile.html        universal quine  (markdown built-in; fountain/mermaid/abcjs via plugins)
- *   dist/pwa/                installable PWA  (same)
+ *   (default, no flags)
+ *   dist/index.html          landing/site page
+ *   dist/unifile.html        universal quine  (markdown built-in; others via plugins)
+ *   dist/pwa/                installable PWA  (universal)
  *   dist/plugins/            drag-and-drop DSL plugin bundles
+ *
+ *   --dsl=<variant>          dedicated single-DSL build (DSL bundled in, no plugins)
+ *   dist/unifile.<abbrev>.html   standalone quine for that DSL
+ *   dist/pwa/                     PWA for that DSL
+ *     variants: markdown | mermaid | abcjs | universal
+ *     e.g. `node build/build.mjs --dsl=abcjs` → dist/unifile.abc.html (offline piano)
  *
  * npm scripts
  * -----------
- *   npm run build            quine + PWA
- *   npm run build:dev        quine + PWA, unminified + inline source maps
+ *   npm run build            default (site + universal quine + PWA + plugins)
+ *   npm run build:dev        default, unminified + inline source maps
+ *   npm run build:abcjs      dedicated ABC notation build (--dsl=abcjs)
  *   npm run build:plugins    all DSL plugin bundles
+ *   npm run gen:soundfont    refresh the bundled offline piano soundfont
  *
  * Pass --no-pwa to skip the PWA build.
  */
@@ -33,7 +43,7 @@ const TEMPLATES = join(ROOT, 'templates');
 const DIST      = join(ROOT, 'dist');
 
 // ---------------------------------------------------------------------------
-// esbuild plugins for bundle size reduction
+// esbuild plugins for bundle size / offline behaviour
 // ---------------------------------------------------------------------------
 
 /**
@@ -57,6 +67,24 @@ const elkjsStubPlugin = {
   },
 };
 
+/**
+ * Redirect abcjs's internal `require('./load-note')` to our offline note loader
+ * (src/dsl/abcjs-piano-loader.js), which decodes the bundled FluidR3
+ * acoustic_grand_piano soundfont on demand instead of fetching per-note mp3s.
+ * Only matches the require coming from inside the abcjs package.
+ */
+const loadNoteOverridePlugin = {
+  name: 'abcjs-load-note-override',
+  setup(build) {
+    build.onResolve({ filter: /load-note$/ }, (args) => {
+      if (args.importer && args.importer.replace(/\\/g, '/').includes('node_modules/abcjs')) {
+        return { path: join(SRC, 'dsl', 'abcjs-piano-loader.js') };
+      }
+      return null;
+    });
+  },
+};
+
 // ---------------------------------------------------------------------------
 // CLI flags
 // ---------------------------------------------------------------------------
@@ -64,23 +92,40 @@ const elkjsStubPlugin = {
 const args      = process.argv.slice(2);
 const DEV       = args.includes('--dev');
 const BUILD_PWA = !args.includes('--no-pwa');
+const dslArg    = args.find(a => a.startsWith('--dsl='))?.split('=')[1]?.toLowerCase() ?? null;
 
-// Baseline plugins always bundled into the app (markdown is the built-in DSL).
+// Baseline plugins always bundled into the universal app (markdown is built-in).
 // All other DSLs are loaded at runtime via drag-and-drop plugin bundles.
-const BASE_PLUGINS       = ['markdown'];
-const DEFAULT_DSL_TYPE   = 'markdown';
+const BASE_PLUGINS     = ['markdown'];
+const DEFAULT_DSL_TYPE = 'markdown';
+
+// DSL metadata for dedicated `--dsl=<variant>` builds.  `plugins` is the set of
+// DSL modules bundled directly into the output (no runtime plugin loading);
+// `defaultDslType` seeds new documents; `abbrev` names the quine output file.
+const DSL_META = {
+  markdown:  { abbrev: 'md',  plugins: ['markdown'],            defaultDslType: 'markdown', label: 'Unifile Markdown' },
+  mermaid:   { abbrev: 'mer', plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid',  label: 'Unifile Mermaid'  },
+  abcjs:     { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs',    label: 'Unifile ABC'      },
+  // Universal: markdown-only baseline; other DSLs installed at runtime via drag-drop.
+  universal: { abbrev: 'uni', plugins: ['markdown'],            defaultDslType: 'markdown', label: 'Unifile' },
+};
 
 // DSLs that can be built as standalone plugin bundles (drag-and-drop installation)
 const PLUGIN_DSLS = ['mermaid', 'abcjs', 'fountain'];
+
+if (dslArg && !DSL_META[dslArg]) {
+  console.error(`Unknown --dsl: "${dslArg}". Choose: ${Object.keys(DSL_META).join(' | ')}`);
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // Generate a temporary entry module for esbuild.
 // Only imports the DSL plugins needed — unused ones are never bundled.
 // ---------------------------------------------------------------------------
 
-async function generateEntry(mode) {
+async function generateEntry(plugins, mode, tag) {
   const src = `// Auto-generated entry — do not edit (regenerated on every build)
-${BASE_PLUGINS.map(p => `import './dsl/${p}.js';`).join('\n')}
+${plugins.map(p => `import './dsl/${p}.js';`).join('\n')}
 import { App } from './ui/app.js';
 import { state as _state } from './ui/state.js';
 import * as _cmLanguage from '@codemirror/language';
@@ -110,7 +155,7 @@ if (document.readyState === 'loading') {
   main();
 }
 `;
-  const path = join(SRC, `_entry_${mode}.js`);
+  const path = join(SRC, `_entry_${mode}_${tag}.js`);
   await writeFile(path, src, 'utf8');
   return path;
 }
@@ -119,11 +164,11 @@ if (document.readyState === 'loading') {
 // Embedded initial data
 // ---------------------------------------------------------------------------
 
-function makeInitialData() {
+function makeInitialData(defaultDslType = DEFAULT_DSL_TYPE) {
   return {
     version: '0.1.0',
     title: 'Untitled Document',
-    dslType: DEFAULT_DSL_TYPE,
+    dslType: defaultDslType,
     currentBranch: 'main',
     branches: { main: { name: 'main', head: null } },
     commits: {},
@@ -136,7 +181,15 @@ function makeInitialData() {
 // Shared esbuild config
 // ---------------------------------------------------------------------------
 
-function buildOptions(entryPoint, unifileMode) {
+/**
+ * @param {string[]} plugins  DSL modules bundled into this build (used to decide
+ *                            which esbuild source transforms to apply).
+ */
+function buildOptions(entryPoint, unifileMode, plugins) {
+  const esPlugins = [];
+  if (plugins.includes('mermaid')) esPlugins.push(elkjsStubPlugin);
+  if (plugins.includes('abcjs'))   esPlugins.push(loadNoteOverridePlugin);
+
   return {
     entryPoints: [entryPoint],
     bundle: true,
@@ -154,6 +207,7 @@ function buildOptions(entryPoint, unifileMode) {
       'UNIFILE_MODE': `"${unifileMode}"`
     },
     logOverride: { 'indirect-require': 'silent' },
+    plugins: esPlugins,
   };
 }
 
@@ -169,13 +223,19 @@ async function bundleCSS() {
 // Build quine
 // ---------------------------------------------------------------------------
 
-async function buildQuine() {
-  console.log(`\nBuilding quine [dev=${DEV}]…`);
+/**
+ * @param {string[]} plugins         DSL modules bundled in.
+ * @param {string}   defaultDslType  Seeds new documents.
+ * @param {string}   outName         Output filename (e.g. 'unifile.html' or 'unifile.abc.html').
+ * @param {string}   tag             Unique tag for the temp entry file.
+ */
+async function buildQuine(plugins, defaultDslType, outName, tag) {
+  console.log(`\nBuilding quine [${outName}, dev=${DEV}]…`);
 
-  const entryPath = await generateEntry('quine');
+  const entryPath = await generateEntry(plugins, 'quine', tag);
 
   const [jsResult, css] = await Promise.all([
-    esbuild.build({ ...buildOptions(entryPath, 'quine'), write: false }),
+    esbuild.build({ ...buildOptions(entryPath, 'quine', plugins), write: false }),
     bundleCSS()
   ]);
   await unlink(entryPath).catch(() => {});
@@ -194,10 +254,10 @@ async function buildQuine() {
   const html = template
     .replace('/* UNIFILE_CSS */',  () => css)
     .replace('UNIFILE_BUNDLE_GZ',  () => bundleGz)
-    .replace('"UNIFILE_INITIAL_DATA"', () => JSON.stringify(makeInitialData(), null, 2));
+    .replace('"UNIFILE_INITIAL_DATA"', () => JSON.stringify(makeInitialData(defaultDslType), null, 2));
 
   await mkdir(DIST, { recursive: true });
-  const outPath = join(DIST, 'unifile.html');
+  const outPath = join(DIST, outName);
   await writeFile(outPath, html, 'utf8');
   const rawKB  = Math.round(jsText.length    / 1024);
   const gzKB   = Math.round(bundleGz.length  / 1024);   // base64 size
@@ -209,37 +269,63 @@ async function buildQuine() {
 // Build PWA
 // ---------------------------------------------------------------------------
 
-async function buildPWA() {
-  console.log(`\nBuilding PWA…`);
+/**
+ * @param {string[]} plugins         DSL modules bundled in.
+ * @param {object}   meta            { abbrev, defaultDslType, label }.
+ * @param {string}   tag             Build tag ('universal' or a DSL id).
+ *
+ * Each build type gets its OWN PWA directory and its own cache namespace so that
+ * installing several unifile PWAs on one origin (universal, abc, …) keeps them
+ * independent — each updates itself without disturbing the others.
+ *   • universal → dist/pwa/         cache prefix "unifile-uni"
+ *   • --dsl=abc → dist/pwa-abc/     cache prefix "unifile-abc"
+ */
+async function buildPWA(plugins, meta, tag) {
+  const isUniversal = tag === 'universal';
+  const dirName     = isUniversal ? 'pwa' : `pwa-${meta.abbrev}`;
+  const cachePrefix = `unifile-${meta.abbrev}`;
+  const appName     = meta.label || 'Unifile';
+  console.log(`\nBuilding PWA [${dirName}]…`);
 
-  const pwaDir    = join(DIST, 'pwa');
+  const pwaDir = join(DIST, dirName);
   await mkdir(pwaDir, { recursive: true });
 
-  const entryPath = await generateEntry('pwa');
+  const entryPath = await generateEntry(plugins, 'pwa', tag);
 
   const [jsResult, css] = await Promise.all([
-    esbuild.build({ ...buildOptions(entryPath, 'pwa'), write: false }),
+    esbuild.build({ ...buildOptions(entryPath, 'pwa', plugins), write: false }),
     bundleCSS()
   ]);
   await unlink(entryPath).catch(() => {});
 
-  const [pwaHtml, sw, manifest] = await Promise.all([
+  const [pwaHtmlRaw, sw, manifestRaw] = await Promise.all([
     readFile(join(TEMPLATES, 'pwa.html'),      'utf8'),
     readFile(join(TEMPLATES, 'sw.js'),         'utf8'),
     readFile(join(TEMPLATES, 'manifest.json'), 'utf8')
   ]);
 
-  // Stamp a content-hash-based cache version so that each new build
-  // automatically invalidates the service worker cache, ensuring users
-  // receive updated assets after re-deployment.
-  const cacheVersion = `unifile-${
+  // Content-hash cache version so each new build invalidates its own cache;
+  // prefixed by type so it only ever supersedes caches of the same type.
+  const cacheVersion = `${cachePrefix}-${
     createHash('sha256')
       .update(jsResult.outputFiles[0].text)
       .update(css)
       .digest('hex')
       .slice(0, 12)
   }`;
-  const swStamped = sw.replace('UNIFILE_CACHE_VERSION', cacheVersion);
+  const swStamped = sw
+    .replace('UNIFILE_CACHE_PREFIX',  () => cachePrefix)
+    .replace('UNIFILE_CACHE_VERSION', () => cacheVersion);
+
+  // Stamp the variant identity into the manifest + shell so each type installs
+  // as its own app, seeded with the right default DSL.
+  const manifest = manifestRaw
+    .replace(/"name":\s*"[^"]*"/,       () => `"name": ${JSON.stringify(appName)}`)
+    .replace(/"short_name":\s*"[^"]*"/, () => `"short_name": ${JSON.stringify(appName)}`);
+  const pwaHtml = pwaHtmlRaw
+    .replace(/<title>[^<]*<\/title>/, () => `<title>${appName}</title>`)
+    .replace(/(apple-mobile-web-app-title"\s+content=")[^"]*"/, (_, p) => `${p}${appName}"`)
+    .replace(/"dslType":\s*"[^"]*"/, () => `"dslType": ${JSON.stringify(meta.defaultDslType)}`);
 
   await Promise.all([
     writeFile(join(pwaDir, 'app.js'),        jsResult.outputFiles[0].text, 'utf8'),
@@ -250,14 +336,14 @@ async function buildPWA() {
   ]);
 
   const kb = ((jsResult.outputFiles[0].text.length + css.length) / 1024).toFixed(0);
-  console.log(`  ✓ ${pwaDir}/  (${kb} KB JS+CSS)`);
+  console.log(`  ✓ ${pwaDir}/  (${kb} KB JS+CSS, cache "${cachePrefix}")`);
 }
 
 // ---------------------------------------------------------------------------
 // Build plugin bundle
 //
 // Creates a standalone <dslId>.plugin.js file that can be drag-dropped onto
-// a running unifile.uni.html to install the DSL at runtime.
+// a running unifile quine to install the DSL at runtime.
 //
 // Plugin format (the file IS a function expression, not self-invoked):
 //   /* @unifile-plugin <id>@<version> */
@@ -410,6 +496,7 @@ export const highlightTree = _l.highlightTree;
 
   const esbuildPlugins = [registryStubPlugin, hostApiStubPlugin];
   if (dslId === 'mermaid') esbuildPlugins.push(elkjsStubPlugin);
+  if (dslId === 'abcjs')   esbuildPlugins.push(loadNoteOverridePlugin);
 
   const result = await esbuild.build({
     entryPoints: [entryPath],
@@ -478,12 +565,27 @@ async function main() {
     return;
   }
 
-  // Default: build quine + PWA + all plugin bundles so dist/ is always coherent.
-  // Plugin source changes are picked up on every build — no separate step needed.
+  // --dsl=<variant>: dedicated single-DSL build (DSL bundled in, no plugins).
+  if (dslArg) {
+    try {
+      const meta = DSL_META[dslArg];
+      const outName = `unifile.${meta.abbrev}.html`;
+      await buildQuine(meta.plugins, meta.defaultDslType, outName, dslArg);
+      if (BUILD_PWA) await buildPWA(meta.plugins, meta, dslArg);
+      console.log(`\nDedicated ${dslArg} build complete. Fully self-contained and offline.`);
+    } catch (err) {
+      console.error('\nBuild failed:', err.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  // Default: build site + universal quine + PWA + all plugin bundles so dist/
+  // is always coherent.  Plugin source changes are picked up on every build.
   try {
     await buildSite();
-    await buildQuine();
-    if (BUILD_PWA) await buildPWA();
+    await buildQuine(BASE_PLUGINS, DEFAULT_DSL_TYPE, 'unifile.html', 'universal');
+    if (BUILD_PWA) await buildPWA(BASE_PLUGINS, DSL_META.universal, 'universal');
     console.log('\nBuilding plugins…');
     for (const dslId of PLUGIN_DSLS) {
       await buildPlugin(dslId);

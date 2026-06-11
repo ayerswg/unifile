@@ -816,6 +816,55 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   min-width: 0;
 }
 
+/* Commit-log pane: a mobile-only far-left pane; hidden entirely on desktop
+   (where the commit history lives in the topbar dropdown instead). */
+#uf-commit-log { display: none; }
+
+/* ==============================================================
+   MOBILE PANE STRIP (phone-width)
+   On narrow screens #uf-main becomes a horizontal scroll-snap strip with three
+   full-width panes — commit log · editor · preview.  PWAs can't use edge-swipe
+   navigation, so the user scrolls/pulls horizontally to pivot between them.
+   ============================================================== */
+@media (max-width: 640px) {
+  #uf-main {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;          /* the snap dots / panes are the affordance */
+    overscroll-behavior-x: contain;
+  }
+  #uf-main::-webkit-scrollbar { display: none; }
+
+  /* Each pane is exactly one screen wide and snaps into place.  The !important
+     overrides the inline display:none/flex the view-mode logic sets on desktop —
+     on mobile all three panes coexist as scroll targets. */
+  #uf-commit-log,
+  #uf-editor-wrap,
+  #uf-preview-wrap {
+    display: flex !important;
+    flex: 0 0 100% !important;
+    width: 100%;
+    min-width: 100%;
+    scroll-snap-align: start;
+  }
+
+  #uf-commit-log {
+    flex-direction: column;
+    overflow-y: auto;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+  }
+
+  /* The vertical divider has no meaning inside a horizontal strip. */
+  #uf-divider { display: none !important; }
+}
+
+/* Commit-log pane contents (reuses the dropdown's commit-list markup). */
+.commit-log-pane { padding: 10px 12px 28px; }
+.commit-log-pane .dd-commit-item { cursor: pointer; }
+
 /* ==============================================================
    PANE DIVIDER
    Always-visible vertical bar between editor and preview.
@@ -1876,6 +1925,23 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   color: var(--bg);
 }
 .pf-btn.play-btn.playing:hover { filter: brightness(1.1); }
+
+/* ── MIDI output picker ──────────────────────────────────────── */
+.pf-row { display: inline-flex; align-items: center; gap: 8px; }
+.pf-midi-select {
+  height: 24px;
+  max-width: 220px;
+  padding: 0 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+.pf-midi-select:hover { color: var(--text); border-color: var(--text-muted); }
+.pf-midi-note { font-size: 12px; color: var(--text-muted); opacity: 0.6; }
 
 /* Markdown preview typography */
 .preview-content h1, .preview-content h2,

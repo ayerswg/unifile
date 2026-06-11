@@ -23,7 +23,7 @@ import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirro
 import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
-import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
+import { searchKeymap } from '@codemirror/search';
 
 import { catppuccinTheme, catppuccinHighlight } from './editor-theme.js';
 import { highlightTree } from '@lezer/highlight';
@@ -330,7 +330,8 @@ const baseExtensions = [
   highlightActiveLine(),
   highlightSpecialChars(),
   drawSelection(),
-  highlightSelectionMatches(),
+  // NOTE: highlightSelectionMatches() intentionally omitted — selecting text
+  // should not light up every other occurrence of that text in the document.
 
   // Editing quality
   history(),
@@ -613,9 +614,17 @@ export class Editor {
       // Active section tracking — update state.activeDslId / activeSectionRange
       // whenever the cursor moves or the document changes.
       if (update.selectionSet || update.docChanged) {
-        const pos   = update.state.selection.main.head;
-        const text  = update.state.doc.toString();
-        const sects = parseDocSections(text);
+        const pos  = update.state.selection.main.head;
+        const doc  = update.state.doc;
+        // parseDocSections scans the entire document.  Cache it per doc instance
+        // (the Text object only changes when the document changes) so pure cursor
+        // moves / note-click selections don't re-parse on every event — this is
+        // the hot path that made clickback feel slow on larger scores.
+        if (this._sectionsCacheDoc !== doc) {
+          this._sectionsCacheDoc   = doc;
+          this._sectionsCacheValue = parseDocSections(doc.toString());
+        }
+        const sects = this._sectionsCacheValue;
         const sect  = activeSectionAt(sects, pos);
 
         const newDslId = sect ? sect.dslId : null;

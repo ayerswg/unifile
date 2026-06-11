@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The model layer — Unifile</title>
+  <meta name="description" content="Unifile documents have three layers of structure: the DSL (what syntax a section uses), the layout (how sections are arranged visually), and the model (the c..." />
+  <link rel="stylesheet" href="/assets/css/style.css" />
+</head>
+<body>
+  <nav id="site-nav">
+  <span class="prompt-glyph">&gt;</span>
+  <div class="nav-search-wrap">
+    <span id="nav-display">/posts/the-model-layer/</span>
+    <input
+      id="nav-search-input"
+      type="text"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="type to navigate..."
+      style="display:none"
+    />
+  </div>
+  <button id="theme-toggle" aria-label="Toggle theme"></button>
+</nav>
+
+<div class="page-body">
+  <h1>The model layer</h1>
+  <div class="post-meta">April 10, 2026</div>
+  <div class="content">
+    <p>Unifile documents have three layers of structure: the DSL (what syntax a section uses), the layout (how sections are arranged visually), and the model (the coordinate metaphor that governs the whole document).</p>
+
+<p>Models are the newest addition and the least visible. Here’s what they do.</p>
+
+<h2 id="what-a-model-is">What a model is</h2>
+
+<p>A model is a named coordinate system for thinking about your content. The five built-in models are:</p>
+
+<ul>
+  <li><strong>flow</strong> — linear, top-to-bottom. Default.</li>
+  <li><strong>grid</strong> — sections as cells in a 2D grid.</li>
+  <li><strong>spatial</strong> — sections placed at (x, y) coordinates on an infinite canvas.</li>
+  <li><strong>timeline</strong> — sections as events along a time axis.</li>
+  <li><strong>graph</strong> — sections as nodes in a directed graph.</li>
+</ul>
+
+<p>You declare one in front matter:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>model: spatial
+</code></pre></div></div>
+
+<h2 id="what-they-unlock">What they unlock</h2>
+
+<p>The model tells the renderer how to lay out sections and what navigation gestures make sense. A <code class="language-plaintext highlighter-rouge">spatial</code> model might let you pan and zoom. A <code class="language-plaintext highlighter-rouge">timeline</code> model might let you scrub through time. A <code class="language-plaintext highlighter-rouge">graph</code> model might let you follow edges.</p>
+
+<p>Most of this is aspirational — today, only <code class="language-plaintext highlighter-rouge">flow</code> and <code class="language-plaintext highlighter-rouge">slides</code> layout are fully implemented. But the model field is in the format now, so documents written today will carry the right metadata forward.</p>
+
+  </div>
+</div>
+
+  <script src="/assets/js/search.js"></script>
+</body>
+</html>

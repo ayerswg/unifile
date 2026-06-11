@@ -182,6 +182,21 @@ function _setNoteSelected(v) {
   }
 }
 
+// engraver.rangeHighlight() does an O(notes) DOM scan inside abcjs.  When the
+// user drags the cursor / makes a selection it can fire many times per frame, so
+// coalesce to one call per animation frame (latest range wins) to keep the main
+// thread responsive on large scores.  Other rangeHighlight callers (playback,
+// stopPlayback) run synchronously — they aren't on a high-frequency path.
+let _rangeHighlightRaf = 0;
+function _scheduleRangeHighlight(adjFrom, adjTo) {
+  if (_rangeHighlightRaf) cancelAnimationFrame(_rangeHighlightRaf);
+  _rangeHighlightRaf = requestAnimationFrame(() => {
+    _rangeHighlightRaf = 0;
+    if (!_engraver) return;
+    try { _engraver.rangeHighlight(adjFrom, adjTo); } catch { /* stale after re-render */ }
+  });
+}
+
 // Active playback handles (null when not playing).
 // _synth is used as a boolean sentinel — truthy while playing.
 let _synth = null;
@@ -333,12 +348,11 @@ state.on('editor-select', ({ from, to }) => {
   if (from === to && !state.abcPlaying) _setNoteSelected(false);
 
   if (_engraver && (state.activeDslId ?? state.data?.dslType) === 'abcjs' && !state.abcPlaying) {
-    try {
-      // Translated to section-relative: collapsed cursor clears, range highlights.
-      const adjFrom = from === to ? 0 : Math.max(0, from - _sectionOffset);
-      const adjTo   = from === to ? 0 : Math.max(0, to   - _sectionOffset);
-      _engraver.rangeHighlight(adjFrom, adjTo);
-    } catch { /* engraver may be stale after a re-render — ignore */ }
+    // Translated to section-relative: collapsed cursor clears, range highlights.
+    // Coalesced to one rangeHighlight per frame (see _scheduleRangeHighlight).
+    const adjFrom = from === to ? 0 : Math.max(0, from - _sectionOffset);
+    const adjTo   = from === to ? 0 : Math.max(0, to   - _sectionOffset);
+    _scheduleRangeHighlight(adjFrom, adjTo);
     // A real text-range selection over ABC content counts as a note selected.
     if (from !== to) _setNoteSelected(true);
   }
@@ -487,6 +501,201 @@ function _scheduleOscillators(noteEvents, startSeconds, stopChar) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Web MIDI output routing
+//
+// When the user selects an external MIDI output port (e.g. an IAC virtual bus
+// feeding Kontakt or a DAW), playback is routed there as live MIDI note on/off
+// messages *instead* of the internal piano synth.  Velocity carries the same
+// dynamics-aware volume abcjs computes, so expression is preserved downstream.
+//
+// Timing: each note's on/off is sent with an absolute DOMHighResTimeStamp via
+// MIDIOutput.send(), so the MIDI subsystem schedules it precisely.  We only push
+// messages that fall within a short look-ahead window (so a Stop can't be
+// outrun by more than that window of already-committed note-ons), and a panic
+// (note-offs + CC123 all-notes-off) is sent on stop.
+// ---------------------------------------------------------------------------
+
+const MIDI_LOOKAHEAD_MS = 150; // how far ahead we commit messages to the port
+const MIDI_PREROLL_MS   = 120; // lead time before the first note sounds
+const MIDI_PERSIST_KEY  = 'unifile_abc_midi_out';
+
+let _midiAccess = null;           // MIDIAccess (null until requested/granted)
+let _midiOut    = null;           // MIDIOutput currently playing through, or null
+let _midiQueue  = [];             // sorted [{at, status, pitch, vel}] absolute perf.now ms
+let _midiQueueIdx = 0;
+let _midiPumpTimer = null;        // look-ahead pump timeout
+let _midiActiveNotes = new Set(); // "ch:pitch" currently sounding (for panic note-offs)
+
+// Selected output id persisted across reloads (null → internal piano).
+let _midiOutId = (() => {
+  try { return localStorage.getItem(MIDI_PERSIST_KEY) || null; } catch { return null; }
+})();
+state.abcMidiOutId = _midiOutId;
+
+/** Publish the current output list + selection to state and notify the footer. */
+function _publishMidiOutputs() {
+  const outs = [];
+  if (_midiAccess) {
+    for (const out of _midiAccess.outputs.values()) {
+      outs.push({ id: out.id, name: out.name || out.id });
+    }
+  }
+  // Drop a stale selection if the device went away.
+  if (_midiOutId && !outs.some(o => o.id === _midiOutId)) {
+    _midiOutId = null;
+    try { localStorage.removeItem(MIDI_PERSIST_KEY); } catch { /* ignore */ }
+  }
+  state.abcMidiOutputs = outs;
+  state.abcMidiOutId   = _midiOutId;
+  state.emit('abc-midi-outputs-change', { outputs: outs, selectedId: _midiOutId });
+}
+
+/** Lazily request Web MIDI access (only on explicit user interest → no surprise prompt). */
+async function _ensureMidiAccess() {
+  if (_midiAccess || !navigator.requestMIDIAccess) { _publishMidiOutputs(); return; }
+  try {
+    _midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+    _midiAccess.onstatechange = () => _publishMidiOutputs();
+  } catch (err) {
+    console.warn('[abcjs] Web MIDI access denied/unavailable:', err?.message ?? err);
+    _midiAccess = null;
+  }
+  _publishMidiOutputs();
+}
+
+state.on('abc-midi-refresh', () => { _ensureMidiAccess(); });
+state.on('abc-midi-select', ({ id }) => {
+  _midiOutId = id || null;
+  try {
+    if (_midiOutId) localStorage.setItem(MIDI_PERSIST_KEY, _midiOutId);
+    else localStorage.removeItem(MIDI_PERSIST_KEY);
+  } catch { /* ignore */ }
+  state.abcMidiOutId = _midiOutId;
+  state.emit('abc-midi-outputs-change', { outputs: state.abcMidiOutputs, selectedId: _midiOutId });
+});
+
+/** Resolve the selected output to a live MIDIOutput, or null to use the synth. */
+function _resolveMidiOut() {
+  if (!_midiOutId || !_midiAccess) return null;
+  return _midiAccess.outputs.get(_midiOutId) ?? null;
+}
+
+/**
+ * Build a time-sorted MIDI message queue from abcjs note timings and start the
+ * look-ahead pump.  `startSeconds` is the playback offset; `stopChar` (or null)
+ * bounds a range selection.  `meterSize` converts note durations → milliseconds.
+ */
+function _startMidiPlayback(out, noteEvents, startSeconds, stopChar, meterSize) {
+  _midiOut = out;
+  _midiActiveNotes.clear();
+  const t0 = performance.now() + MIDI_PREROLL_MS;
+  const msgs = [];
+
+  for (const ev of noteEvents) {
+    const evSec = ev.milliseconds / 1000;
+    if (evSec < startSeconds - 1e-6) continue; // note starts before our entry point
+    const msPerMeasure = ev.millisecondsPerMeasure || 1000;
+    const onAt = t0 + (evSec - startSeconds) * 1000;
+
+    for (const p of (ev.midiPitches ?? [])) {
+      if (p?.pitch == null) continue;
+      // Range mode: skip notes at/after the selection end.
+      if (stopChar !== null && p.startChar !== undefined && p.startChar >= stopChar) continue;
+      const ch    = 0; // single channel; downstream instrument decides the sound
+      const pitch = Math.round(p.pitch);
+      const vel   = Math.max(1, Math.min(127, Math.round(p.volume ?? 92)));
+      const durMs = Math.max(40, (p.duration ?? 0.25) * msPerMeasure / meterSize);
+      const offAt = onAt + durMs * 0.97; // small gap so repeated pitches retrigger
+      msgs.push({ at: onAt,  status: 0x90 | ch, pitch, vel });
+      msgs.push({ at: offAt, status: 0x80 | ch, pitch, vel: 0 });
+    }
+  }
+
+  msgs.sort((a, b) => a.at - b.at);
+  _midiQueue = msgs;
+  _midiQueueIdx = 0;
+  _midiPump();
+}
+
+/** Look-ahead pump: flush due messages to the port with precise timestamps. */
+function _midiPump() {
+  if (!_midiOut) return;
+  const now = performance.now();
+  while (_midiQueueIdx < _midiQueue.length && _midiQueue[_midiQueueIdx].at <= now + MIDI_LOOKAHEAD_MS) {
+    const m = _midiQueue[_midiQueueIdx++];
+    try { _midiOut.send([m.status, m.pitch, m.vel], m.at); } catch { /* port vanished */ }
+    const key = (m.status & 0x0f) + ':' + m.pitch;
+    if ((m.status & 0xf0) === 0x90) _midiActiveNotes.add(key);
+    else _midiActiveNotes.delete(key);
+  }
+
+  if (_midiQueueIdx >= _midiQueue.length) {
+    // All committed — stop shortly after the final message has sounded.
+    const lastAt = _midiQueue.length ? _midiQueue[_midiQueue.length - 1].at : now;
+    _midiPumpTimer = setTimeout(() => stopPlayback(), Math.max(0, lastAt - now) + 60);
+    return;
+  }
+  _midiPumpTimer = setTimeout(_midiPump, 40);
+}
+
+/** Stop MIDI playback: cancel the pump and silence the port (panic). */
+function _stopMidiPlayback() {
+  if (_midiPumpTimer) { clearTimeout(_midiPumpTimer); _midiPumpTimer = null; }
+  if (_midiOut) {
+    try {
+      // Explicit note-offs for anything still sounding, then all-notes-off per channel.
+      for (const key of _midiActiveNotes) {
+        const [ch, pitch] = key.split(':').map(Number);
+        _midiOut.send([0x80 | ch, pitch, 0]);
+      }
+      for (let ch = 0; ch < 16; ch++) _midiOut.send([0xB0 | ch, 123, 0]);
+    } catch { /* ignore */ }
+  }
+  _midiActiveNotes.clear();
+  _midiQueue = [];
+  _midiQueueIdx = 0;
+  _midiOut = null;
+}
+
+// ---------------------------------------------------------------------------
+// Visual feedback callback (shared by audio + MIDI paths)
+//
+// abcjs TimingCallbacks drives the moving cursor regardless of how sound is
+// produced.  This factory builds the per-event handler: it stops at the range
+// end, highlights the sounding SVG notes, and emits 'abc-play-cursor' so the
+// editor colours the current notes green.
+// ---------------------------------------------------------------------------
+function _makeVisualEventCallback(stopChar) {
+  return (event) => {
+    if (!event) { stopPlayback(); return; }
+
+    // Range mode: stop when all voices have passed the selection end.
+    if (stopChar !== null) {
+      const chars = event.startCharArray ?? (event.startChar !== undefined ? [event.startChar] : []);
+      if (chars.length > 0 && chars.every(c => c >= stopChar)) { stopPlayback(); return; }
+    }
+
+    // SVG: highlight all simultaneously-playing note elements.
+    if (_playEl) {
+      _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
+        el.classList.remove('abcjs-note_playing')
+      );
+      if (event.elements) {
+        event.elements.flat().forEach(svgEl => svgEl?.classList.add('abcjs-note_playing'));
+      }
+    }
+
+    // Editor: emit all voice char ranges for green text-colour highlighting.
+    const starts = event.startCharArray ?? [event.startChar];
+    const ends   = event.endCharArray   ?? [event.endChar];
+    const ranges = starts
+      .map((s, i) => ({ from: s, to: ends[i] }))
+      .filter(r => r.from !== undefined && r.to !== undefined && r.from < r.to);
+    state.emit('abc-play-cursor', ranges.length ? ranges : null);
+  };
+}
+
 async function startPlayback() {
   if (!_tuneObjects?.[0]) return;
 
@@ -503,9 +712,12 @@ async function startPlayback() {
   const selFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
   const selTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
 
-  // Check whether the user has configured a soundfont URL via the extension slot.
-  // Read directly from state.data (state is stubbed to the host singleton in
-  // plugin builds, so this always sees the live document data).
+  // Playback uses the abcjs synthesiser by default — this build bundles the
+  // FluidR3 acoustic_grand_piano soundfont and serves it offline (see
+  // abcjs-piano-loader.js), so the default sound is a real piano with no fetch.
+  // A user-supplied soundfont URL (extension slot) overrides the base URL for
+  // richer/other instruments.  Read directly from state.data so the live
+  // document value is always seen.
   const soundfontUrl = state.data?.pluginExtensions?.abcjs?.['soundfont-url']?.value ?? null;
 
   // ── 1.  Populate midiPitches by running the MIDI flattener ───────────────
@@ -540,13 +752,45 @@ async function startPlayback() {
     if (startEv) startSeconds = startEv.milliseconds / 1000;
     stopChar = selTo;
   } else if (selFrom > 0) {
-    // Cursor inside document: find note containing selFrom, or first note after it.
+    // Cursor inside document: find the event whose note (in ANY voice) spans
+    // selFrom, else the first event starting at/after it.  Multi-voice events
+    // carry startCharArray/endCharArray with one entry per simultaneous voice;
+    // matching only the primary startChar would mis-locate a click on a second
+    // (e.g. bass-clef) voice and start playback at the wrong place.
+    const startsOf = e => e.startCharArray ?? [e.startChar];
+    const endsOf   = e => e.endCharArray   ?? [e.endChar];
     const startEv =
-      noteEvents.find(e => e.startChar <= selFrom && e.endChar > selFrom) ??
-      noteEvents.find(e => e.startChar >= selFrom);
+      noteEvents.find(e => {
+        const s = startsOf(e), n = endsOf(e);
+        return s.some((c, i) => c !== undefined && c <= selFrom && n[i] > selFrom);
+      }) ??
+      noteEvents.find(e => startsOf(e).some(c => c !== undefined && c >= selFrom));
     if (startEv) startSeconds = startEv.milliseconds / 1000;
   }
   // else: cursor at 0 / no selection → play from beginning
+
+  // ── 2.5  MIDI output path (replaces the internal synth when a port is set) ──
+  //
+  // Route to the selected external MIDI port (e.g. IAC → Kontakt) as live
+  // note on/off with dynamics-aware velocity.  No AudioContext/synth here — the
+  // external instrument makes the sound; we only drive the visual cursor.
+  const midiOut = _resolveMidiOut();
+  if (midiOut) {
+    const mf = tune.getMeterFraction?.() ?? { num: 4, den: 4 };
+    const meterSize = (mf.num / mf.den) || 1;
+
+    _timingCallbacks = new abcjs.TimingCallbacks(tune, {
+      eventCallback: _makeVisualEventCallback(stopChar),
+    });
+
+    _playEl?.classList.add('abc-playing');
+    state.abcPlaying = true;
+    state.emit('abc-play-state', { playing: true });
+
+    _startMidiPlayback(midiOut, noteEvents, startSeconds, stopChar, meterSize);
+    _timingCallbacks.start(startSeconds, 'seconds');
+    return;
+  }
 
   // ── 3.  Schedule audio ───────────────────────────────────────────────────
   //
@@ -563,38 +807,41 @@ async function startPlayback() {
     return;
   }
 
-  if (soundfontUrl && abcjs.synth?.CreateSynth) {
-    // ── 3a.  Soundfont synth path ─────────────────────────────────────────
+  if (abcjs.synth?.CreateSynth) {
+    // ── 3a.  Soundfont synth path (default: bundled offline piano) ────────
     //
-    // abcjs.synth.CreateSynth fetches per-instrument MIDI.js files from the
-    // configured base URL and decodes them into AudioBuffers.
-    // This path always starts from the beginning of the tune (the synth API
-    // does not support starting at an arbitrary time offset).
+    // abcjs.synth.CreateSynth decodes per-note AudioBuffers via our overridden
+    // load-note (acoustic_grand_piano from the bundle, offline).  When the user
+    // supplies a soundFontUrl it is used as the base for other instruments.
+    // Arbitrary start offsets are handled by seek() before start() (below).
     try {
       const synth = new abcjs.synth.CreateSynth();
       await synth.init({
         audioContext: _audioContext,
         visualObj:    tune,
         options: {
-          soundFontUrl: soundfontUrl,
+          // Omit soundFontUrl to use abcjs's default FluidR3 base — for which
+          // this build serves acoustic_grand_piano from the bundle offline.
+          ...(soundfontUrl ? { soundFontUrl: soundfontUrl } : {}),
           onEnded:      () => stopPlayback(),
         },
       });
       await synth.prime();
       _synth = synth;
     } catch (err) {
-      // Synth setup failed (e.g. wrong URL format, network unavailable, CORS).
-      // Show an error banner in the preview so the user knows what went wrong,
-      // then fall through to the oscillator path so playback still works.
+      // Synth setup failed (e.g. a custom URL is wrong / unreachable, or a note
+      // couldn't be decoded).  Fall through to the oscillator path so playback
+      // still works.  Only surface a banner when the user explicitly configured
+      // a remote soundfont — the default bundled piano falling back is silent.
       const msg = err?.message ?? String(err);
-      if (_playEl) {
+      if (soundfontUrl && _playEl) {
         const banner = document.createElement('div');
         banner.className = 'abc-soundfont-error';
         banner.textContent = `⚠ Soundfont failed to load (${msg}). Using oscillator playback instead.`;
         _playEl.insertAdjacentElement('afterbegin', banner);
         setTimeout(() => banner.remove(), 8000);
       }
-      console.warn('[abcjs] Soundfont synth init failed, falling back to oscillators:', msg);
+      console.warn('[abcjs] Synth init failed, falling back to oscillators:', msg);
       try { _audioContext.close(); } catch { /* ignore */ }
       _audioContext = null;
       _synth = null;
@@ -619,39 +866,7 @@ async function startPlayback() {
   // ── 4.  Timing callbacks (visual feedback only) ──────────────────────────
 
   _timingCallbacks = new abcjs.TimingCallbacks(tune, {
-    eventCallback: (event) => {
-      if (!event) {
-        stopPlayback();
-        return;
-      }
-
-      // Range mode: stop when all voices have passed the selection end.
-      if (stopChar !== null) {
-        const chars = event.startCharArray ?? (event.startChar !== undefined ? [event.startChar] : []);
-        if (chars.length > 0 && chars.every(c => c >= stopChar)) {
-          stopPlayback();
-          return;
-        }
-      }
-
-      // SVG: highlight all simultaneously-playing note elements.
-      if (_playEl) {
-        _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
-          el.classList.remove('abcjs-note_playing')
-        );
-        if (event.elements) {
-          event.elements.flat().forEach(svgEl => svgEl?.classList.add('abcjs-note_playing'));
-        }
-      }
-
-      // Editor: emit all voice char ranges for green text-colour highlighting.
-      const starts = event.startCharArray ?? [event.startChar];
-      const ends   = event.endCharArray   ?? [event.endChar];
-      const ranges = starts
-        .map((s, i) => ({ from: s, to: ends[i] }))
-        .filter(r => r.from !== undefined && r.to !== undefined && r.from < r.to);
-      state.emit('abc-play-cursor', ranges.length ? ranges : null);
-    }
+    eventCallback: _makeVisualEventCallback(stopChar),
   });
 
   // ── 5.  Start ────────────────────────────────────────────────────────────
@@ -674,6 +889,9 @@ async function startPlayback() {
 function stopPlayback() {
   try { _timingCallbacks?.stop(); } catch { /* ignore */ }
   _timingCallbacks = null;
+
+  // Silence + cancel any external MIDI routing.
+  _stopMidiPlayback();
 
   // Stop all pre-scheduled oscillators immediately.
   for (const osc of _scheduledOscs) {
@@ -889,11 +1107,11 @@ const abcjsDSL = {
       type:        'text',
       label:       'Soundfont URL',
       placeholder: 'https://paulrosen.github.io/midi-js-soundfonts/FluidR3_GM/',
-      description: 'Base URL for an mp3-format soundfont collection. '
-        + 'When set, playback uses the abcjs synthesiser for richer instrument sounds instead of '
-        + 'the built-in offline oscillators. Playback will start from the beginning of the tune. '
+      description: 'Playback already uses a bundled offline acoustic piano. '
+        + 'Set this only to use a different/remote soundfont collection (requires a network connection). '
         + 'Compatible URLs: …/FluidR3_GM/  or  …/MusyngKite/  '
-        + '(the …/abcjs/ path uses a different format and will not work here).',
+        + '(the …/abcjs/ path uses a different format and will not work here). '
+        + 'If a note cannot be loaded, playback falls back to the built-in oscillators.',
     },
   ],
 };
