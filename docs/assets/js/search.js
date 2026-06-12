@@ -19,8 +19,9 @@
     applyTheme(next);
   }
 
-  const saved = localStorage.getItem(THEME_KEY)
-    || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  // Default to light mode (the IBM command-prompt theme); only honour an
+  // explicit user choice saved previously.
+  const saved = localStorage.getItem(THEME_KEY) || "light";
   applyTheme(saved);
 
   document.querySelectorAll("#theme-toggle, #home-theme-toggle")
@@ -197,6 +198,36 @@
     });
   }
 
+  // ── Block cursor (old IBM command-prompt look) ─────────────────
+  // Hide the native caret and draw a blinking block at the caret position,
+  // measured with a hidden mirror span so it tracks exactly as you type.
+  function attachBlockCursor(input) {
+    const wrap = input.parentElement; // position:relative in CSS
+    if (!wrap) return;
+    input.classList.add("has-block-cursor");
+    const cursor = document.createElement("span");
+    cursor.className = "block-cursor";
+    cursor.style.display = "none";
+    const mirror = document.createElement("span");
+    mirror.className = "cursor-mirror";
+    wrap.appendChild(mirror);
+    wrap.appendChild(cursor);
+
+    function sync() {
+      const cs = getComputedStyle(input);
+      mirror.style.font = cs.font;
+      mirror.style.letterSpacing = cs.letterSpacing;
+      const pos = input.selectionStart ?? input.value.length;
+      mirror.textContent = input.value.slice(0, pos).replace(/ /g, " ");
+      cursor.style.fontSize = cs.fontSize;
+      cursor.style.left = (input.offsetLeft + mirror.offsetWidth) + "px";
+      cursor.style.display = document.activeElement === input ? "" : "none";
+    }
+    ["input", "keyup", "click", "select", "focus"].forEach(ev => input.addEventListener(ev, sync));
+    input.addEventListener("blur", () => { cursor.style.display = "none"; });
+    sync();
+  }
+
   // ── Home page ──────────────────────────────────────────────────
 
   const homeInput = document.getElementById("home-search-input");
@@ -218,6 +249,7 @@
     document.getElementById("home-search-wrap").appendChild(drop);
 
     attachSearch(homeInput);
+    attachBlockCursor(homeInput);
     homeInput.focus();
   }
 
@@ -229,6 +261,7 @@
     drop.className = "search-dropdown";
     navInput.closest(".nav-search-wrap").appendChild(drop);
     attachSearch(navInput);
+    attachBlockCursor(navInput);
 
     const display = document.getElementById("nav-display");
     if (display) {

@@ -330,6 +330,12 @@ async function render(content, el) {
     }
 
     _setHasTune(!!(tuneObjects?.[0]));
+
+    // Transport: compute total duration for the scrubber and reset position.
+    _totalMs = tuneObjects?.[0] ? _computeDuration(tuneObjects[0]) : 0;
+    _pausedAtMs = 0;
+    state.abcDurationMs = _totalMs;
+    state.emit('abc-duration', { total: _totalMs });
   } catch (e) {
     el.innerHTML = `<pre class="error">ABC parse error:\n${e.message}</pre>`;
     _setHasTune(false);
@@ -712,13 +718,98 @@ function _makeVisualEventCallback(stopChar) {
   };
 }
 
-async function startPlayback() {
+// ---------------------------------------------------------------------------
+// Transport: duration, progress bar, play/pause, seek
+// ---------------------------------------------------------------------------
+
+let _totalMs       = 0;   // total tune duration (ms) — drives the scrubber
+let _pausedAtMs    = 0;   // remembered position when paused / sought (ms)
+let _progressRaf   = 0;   // rAF id for progress emission
+let _playOffsetMs  = 0;   // ms position where the current run started
+let _playWallStart = 0;   // performance.now() at the current run's start
+
+/** Play a 1-sample silent buffer to unlock audio on iOS within a user gesture. */
+function _unlockAudio(ctx) {
+  try {
+    const src = ctx.createBufferSource();
+    src.buffer = ctx.createBuffer(1, 1, 22050);
+    src.connect(ctx.destination);
+    src.start(0);
+  } catch { /* ignore */ }
+}
+
+/** Compute total tune duration (ms) without playing, for the transport display. */
+function _computeDuration(tune) {
+  try {
+    tune.setUpAudio({});
+    const tc = new abcjs.TimingCallbacks(tune, { eventCallback: () => {} });
+    const nt = (tc.noteTimings ?? []).filter(e => e.type === 'event');
+    if (!nt.length) return 0;
+    const last = nt[nt.length - 1];
+    // lastMoment is the start of the last event; add ~one beat so the bar
+    // reaches the end as the final note rings out.
+    const beat = last.millisecondsPerMeasure ? last.millisecondsPerMeasure / 4 : 400;
+    return Math.round(last.milliseconds + beat);
+  } catch { return 0; }
+}
+
+function _emitProgress(ms) {
+  state.abcPositionMs = ms;
+  state.emit('abc-progress', { ms, total: _totalMs });
+}
+
+function _startProgress(offsetMs) {
+  _playOffsetMs  = offsetMs;
+  _playWallStart = performance.now();
+  cancelAnimationFrame(_progressRaf);
+  const tick = () => {
+    const ms = _playOffsetMs + (performance.now() - _playWallStart);
+    _emitProgress(_totalMs ? Math.min(ms, _totalMs) : ms);
+    if (state.abcPlaying) _progressRaf = requestAnimationFrame(tick);
+  };
+  _progressRaf = requestAnimationFrame(tick);
+}
+
+function _stopProgress() { cancelAnimationFrame(_progressRaf); _progressRaf = 0; }
+
+/** Current playback position (ms): live while playing, else the paused point. */
+function _currentMs() {
+  if (state.abcPlaying) {
+    const ms = _playOffsetMs + (performance.now() - _playWallStart);
+    return _totalMs ? Math.min(ms, _totalMs) : ms;
+  }
+  return _pausedAtMs;
+}
+
+/** Play/pause toggle used by the transport footer. */
+function togglePlay() {
+  if ((state.activeDslId ?? state.data?.dslType) !== 'abcjs') return;
+  if (state.abcPlaying) {
+    _pausedAtMs = _currentMs();
+    stopPlayback({ keepPosition: true });
+  } else {
+    startPlayback({ startMs: _pausedAtMs });
+  }
+}
+
+/** Seek to an absolute ms position (from the scrubber). */
+function seekTo(ms) {
+  ms = Math.max(0, Math.min(ms, _totalMs || ms));
+  _pausedAtMs = ms;
+  if (state.abcPlaying) {
+    stopPlayback({ keepPosition: true });
+    startPlayback({ startMs: ms });
+  } else {
+    _emitProgress(ms);
+  }
+}
+
+async function startPlayback(opts = {}) {
   if (!_tuneObjects?.[0]) return;
 
-  // Toggle off if already playing.
+  // Restart cleanly if something is already playing (e.g. a seek while playing).
   if (_synth) {
-    stopPlayback();
-    return;
+    stopPlayback({ keepPosition: true });
   }
 
   const tune = _tuneObjects[0];
@@ -759,7 +850,10 @@ async function startPlayback() {
   // expose startCharArray / endCharArray with one entry per simultaneous voice.
   const noteEvents = (previewTc.noteTimings ?? []).filter(e => e.type === 'event');
 
-  if (selFrom !== selTo && selTo > selFrom) {
+  if (opts.startMs != null) {
+    // Transport seek / resume: play the whole tune from an absolute position.
+    startSeconds = Math.max(0, opts.startMs / 1000);
+  } else if (selFrom !== selTo && selTo > selFrom) {
     // Range selection: play from first note at/after selFrom.
     const startEv = noteEvents.find(e => {
       const chars = e.startCharArray ?? [e.startChar];
@@ -805,18 +899,23 @@ async function startPlayback() {
 
     _startMidiPlayback(midiOut, noteEvents, startSeconds, stopChar, meterSize);
     _timingCallbacks.start(startSeconds, 'seconds');
+    _startProgress(startSeconds * 1000);
     return;
   }
 
   // ── 3.  Schedule audio ───────────────────────────────────────────────────
   //
-  // AudioContext must be created synchronously inside the user-gesture handler
-  // so the browser's autoplay policy allows it to start immediately.
+  // AudioContext must be created AND unlocked synchronously inside the user-
+  // gesture handler.  iOS Safari is strict: if audio isn't unlocked during the
+  // gesture, playback that starts later (after the async soundfont decode in
+  // synth.prime) is silenced — the visual cursor still runs, but no sound.
+  // Playing a 1-sample silent buffer here unlocks the context for the session.
 
   _scheduledOscs = [];
 
   try {
-    _audioContext = new AudioContext();
+    _audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    _unlockAudio(_audioContext);     // iOS: unlock within the user gesture
     await _audioContext.resume();
   } catch {
     _audioContext = null;
@@ -891,6 +990,12 @@ async function startPlayback() {
   state.abcPlaying = true;
   state.emit('abc-play-state', { playing: true });
 
+  // iOS: the context can drop back to 'suspended' during the async prime — make
+  // sure it's running again right before start, or the first notes are silent.
+  if (_audioContext && _audioContext.state !== 'running') {
+    try { await _audioContext.resume(); } catch { /* ignore */ }
+  }
+
   if (typeof _synth?.start === 'function') {
     // Seek to the requested start position before starting (synth.seek() sets
     // pausedTimeSec so that start() resumes from there rather than the beginning).
@@ -900,11 +1005,15 @@ async function startPlayback() {
   } else {
     _timingCallbacks.start(startSeconds, 'seconds');
   }
+
+  // Drive the transport progress bar (works for all audio paths).
+  _startProgress(startSeconds * 1000);
 }
 
-function stopPlayback() {
+function stopPlayback(opts = {}) {
   try { _timingCallbacks?.stop(); } catch { /* ignore */ }
   _timingCallbacks = null;
+  _stopProgress();
 
   // Silence + cancel any external MIDI routing.
   _stopMidiPlayback();
@@ -931,6 +1040,10 @@ function stopPlayback() {
   state.emit('abc-play-state', { playing: false });
   state.emit('abc-play-cursor', null);
 
+  // Transport position: a real stop / natural end resets to the start; a pause
+  // or seek (keepPosition) leaves _pausedAtMs where the caller set it.
+  if (!opts.keepPosition) { _pausedAtMs = 0; _emitProgress(0); }
+
   // Restore range-selection highlight if the user had a text range selected.
   // For note-click selections (collapsed _lastEditorSel), abcjs's own
   // abcjs-note_selected fill survives naturally — don't call rangeHighlight(0,0)
@@ -942,10 +1055,9 @@ function stopPlayback() {
   }
 }
 
-// External play/pause trigger (emitted by the topbar play button).
-state.on('abc-play', () => {
-  if ((state.activeDslId ?? state.data?.dslType) === 'abcjs') startPlayback();
-});
+// Transport controls (emitted by the persistent abc footer).
+state.on('abc-play', () => togglePlay());
+state.on('abc-seek', ({ ms }) => seekTo(ms));
 
 async function renderToString(content) {
   const tmp = document.createElement('div');

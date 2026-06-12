@@ -6,8 +6,9 @@
   --muted: #999;
   --accent: #4f5ef7;
   --accent-dim: rgba(79, 94, 247, 0.08);
-  --font-mono: "Fira Code", "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
-  --font-prose: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* IBM command-prompt look — monospace everywhere. */
+  --font-mono: "IBM Plex Mono", "Cascadia Code", ui-monospace, monospace;
+  --font-prose: "IBM Plex Mono", "Cascadia Code", ui-monospace, monospace;
 }
 
 [data-theme="dark"] {
@@ -465,3 +466,25 @@ html, body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Block cursor (old IBM command-prompt) ─────────────────────── */
+.has-block-cursor { caret-color: transparent; }
+.cursor-mirror {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.block-cursor {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0.6em;
+  height: 1.15em;
+  background: var(--accent);
+  pointer-events: none;
+  animation: uf-blink 1.06s steps(1) infinite;
+}
+@keyframes uf-blink { 50% { opacity: 0; } }
