@@ -36,6 +36,7 @@ import { TopBar } from './topbar.js';
 import { Editor } from './editor.js';
 import { Preview } from './preview.js';
 import { DslFooter } from './dsl-footer.js';
+import { mountSiteNav } from './site-nav.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { MergeDialog } from './merge-dialog.js';
@@ -124,6 +125,10 @@ export class App {
     // 8. Render the shell
     this._buildShell();
 
+    // 8b. Site-nav bar — only renders when viewed in a browser tab on the web
+    //     (hidden for installed PWAs and file:// downloads); see site-nav.js.
+    mountSiteNav(document.getElementById('uf-site-nav'));
+
     // 9. Bind plugin drag-and-drop handler
     this._bindPluginDrop();
 
@@ -158,6 +163,7 @@ export class App {
   _buildShell() {
     const root = document.getElementById('unifile-app');
     root.innerHTML = `
+      <div id="uf-site-nav"></div>
       <div id="uf-topbar"></div>
       <div id="uf-main">
         <div id="uf-commit-log" aria-label="Commit history"></div>

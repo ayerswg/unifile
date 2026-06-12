@@ -237,6 +237,55 @@ html, body {
 }
 
 /* ==============================================================
+   SITE NAV (shown only when the app is viewed in a browser tab on the web —
+   hidden for installed PWAs and file:// downloads; see site-nav.js)
+   ============================================================== */
+
+#uf-site-nav {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-ui);
+  z-index: 120;
+}
+#uf-site-nav:empty { display: none; }
+.usn-glyph { color: var(--accent); font-size: 13px; flex-shrink: 0; user-select: none; }
+.usn-wrap { position: relative; flex: 1; max-width: 560px; }
+.usn-input {
+  width: 100%;
+  background: transparent; border: none; outline: none;
+  color: var(--text); font-family: var(--font-ui); font-size: 13px;
+  padding: 0; caret-color: var(--accent);
+}
+.usn-input::placeholder { color: var(--text-muted); }
+.usn-home {
+  margin-left: auto; flex-shrink: 0;
+  color: var(--text-muted); font-size: 12px; text-decoration: none;
+}
+.usn-home:hover { color: var(--text); }
+.usn-dropdown {
+  position: absolute; top: calc(100% + 6px); left: -20px; right: 0;
+  background: var(--bg-alt); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); overflow: hidden;
+  display: none; z-index: 200; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+}
+.usn-dropdown.open { display: block; max-height: 320px; overflow-y: auto; }
+.usn-item {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border);
+}
+.usn-item:last-child { border-bottom: none; }
+.usn-item:hover, .usn-item.active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.usn-title { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; flex-shrink: 0; }
+.usn-url { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.usn-badge { margin-left: auto; flex-shrink: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); border: 1px solid currentColor; border-radius: 3px; padding: 1px 5px; }
+
+/* ==============================================================
    TOP BAR
    ============================================================== */
 

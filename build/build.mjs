@@ -308,19 +308,6 @@ async function buildPWA(plugins, meta, tag) {
     readFile(join(TEMPLATES, 'manifest.json'), 'utf8')
   ]);
 
-  // Content-hash cache version so each new build invalidates its own cache;
-  // prefixed by type so it only ever supersedes caches of the same type.
-  const cacheVersion = `${cachePrefix}-${
-    createHash('sha256')
-      .update(jsResult.outputFiles[0].text)
-      .update(css)
-      .digest('hex')
-      .slice(0, 12)
-  }`;
-  const swStamped = sw
-    .replace('UNIFILE_CACHE_PREFIX',  () => cachePrefix)
-    .replace('UNIFILE_CACHE_VERSION', () => cacheVersion);
-
   // Stamp the variant identity into the manifest + shell so each type installs
   // as its own app, seeded with the right default DSL.
   const manifest = manifestRaw
@@ -330,6 +317,23 @@ async function buildPWA(plugins, meta, tag) {
     .replace(/<title>[^<]*<\/title>/, () => `<title>${appName}</title>`)
     .replace(/(apple-mobile-web-app-title"\s+content=")[^"]*"/, (_, p) => `${p}${appName}"`)
     .replace(/"dslType":\s*"[^"]*"/, () => `"dslType": ${JSON.stringify(meta.defaultDslType)}`);
+
+  // Content-hash cache version so each new build invalidates its own cache;
+  // prefixed by type so it only ever supersedes caches of the same type.  Hash
+  // ALL cached shell files (js, css, html, manifest) so a change to the CSP or
+  // manifest alone — not just app.js — still busts the service-worker cache.
+  const cacheVersion = `${cachePrefix}-${
+    createHash('sha256')
+      .update(jsResult.outputFiles[0].text)
+      .update(css)
+      .update(pwaHtml)
+      .update(manifest)
+      .digest('hex')
+      .slice(0, 12)
+  }`;
+  const swStamped = sw
+    .replace('UNIFILE_CACHE_PREFIX',  () => cachePrefix)
+    .replace('UNIFILE_CACHE_VERSION', () => cacheVersion);
 
   await Promise.all([
     writeFile(join(pwaDir, 'app.js'),        jsResult.outputFiles[0].text, 'utf8'),

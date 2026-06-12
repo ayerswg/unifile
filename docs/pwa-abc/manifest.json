@@ -12,7 +12,19 @@
       "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Ccircle cx='96' cy='96' r='192' fill='%23181825'/%3E%3Ccircle cx='96' cy='96' r='36' fill='none' stroke='%2389b4fa' stroke-width='12'/%3E%3Cline x1='16' y1='96' x2='60' y2='96' stroke='%2389b4fa' stroke-width='12' stroke-linecap='round'/%3E%3Cline x1='132' y1='96' x2='176' y2='96' stroke='%2389b4fa' stroke-width='12' stroke-linecap='round'/%3E%3C/svg%3E",
       "sizes": "192x192",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Ccircle cx='96' cy='96' r='192' fill='%23181825'/%3E%3Ccircle cx='96' cy='96' r='36' fill='none' stroke='%2389b4fa' stroke-width='12'/%3E%3Cline x1='16' y1='96' x2='60' y2='96' stroke='%2389b4fa' stroke-width='12' stroke-linecap='round'/%3E%3Cline x1='132' y1='96' x2='176' y2='96' stroke='%2389b4fa' stroke-width='12' stroke-linecap='round'/%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' fill='%23181825'/%3E%3Ccircle cx='96' cy='96' r='34' fill='none' stroke='%2389b4fa' stroke-width='11'/%3E%3Cline x1='34' y1='96' x2='62' y2='96' stroke='%2389b4fa' stroke-width='11' stroke-linecap='round'/%3E%3Cline x1='130' y1='96' x2='158' y2='96' stroke='%2389b4fa' stroke-width='11' stroke-linecap='round'/%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ],
   "categories": ["productivity", "utilities"],
