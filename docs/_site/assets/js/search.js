@@ -28,11 +28,17 @@
 
   // ── Search index ───────────────────────────────────────────────
 
+  // Jekyll baseurl (injected by default.html). "" for a custom domain / user
+  // page; "/repo" for a project page.  Page/app URLs in search.json are
+  // root-relative without the baseurl, so prepend it when building links.
+  const BASE = window.SITE_BASEURL || "";
+  const linkFor = (url) => (/^https?:/i.test(url) ? url : BASE + url);
+
   let index = null;
 
   async function loadIndex() {
     if (index) return index;
-    const res = await fetch("/search.json");
+    const res = await fetch(BASE + "/search.json");
     index = await res.json();
     return index;
   }
@@ -104,9 +110,12 @@
   function makeItem(item, input, isPinned = false) {
     const li = document.createElement("li");
     li.dataset.url = item.url;
-    const badge = isPinned
-      ? `<span class="item-badge pinned">pinned</span>`
-      : item.type === "post" ? `<span class="item-badge">post</span>` : "";
+    // Badge by kind: download / pwa / post (pinned takes precedence visually).
+    let badge = "";
+    if (isPinned) badge = `<span class="item-badge pinned">pinned</span>`;
+    else if (item.type && item.type !== "page") {
+      badge = `<span class="item-badge kind-${item.type}">${item.type}</span>`;
+    }
     li.innerHTML = `
       <span class="item-title">${item.title}</span>
       <span class="item-url">${item.url}</span>
@@ -127,7 +136,7 @@
   function navigateTo(item, input) {
     input.value = item.title;
     closeDropdown(input);
-    window.location.href = item.url;
+    window.location.href = linkFor(item.url);
   }
 
   function getActiveItem(input) {
@@ -171,7 +180,7 @@
         if (active) {
           input.value = active.querySelector(".item-title")?.textContent ?? "";
           closeDropdown(input);
-          window.location.href = active.dataset.url;
+          window.location.href = linkFor(active.dataset.url);
         }
       } else if (e.key === "Escape") {
         closeDropdown(input);

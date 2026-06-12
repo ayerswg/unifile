@@ -4,8 +4,9 @@ layout: none
 [
   {% assign pages = site.pages | where_exp: "p", "p.title != nil and p.title != ''" %}
   {% assign posts = site.posts %}
-  {% assign all = pages | concat: posts %}
-  {% for item in all %}
+  {% assign items = pages | concat: posts %}
+  {% assign appCount = site.data.apps | size %}
+  {% for item in items %}
   {
     "title": {{ item.title | jsonify }},
     "url": {{ item.url | jsonify }},
@@ -13,6 +14,16 @@ layout: none
     "date": {% if item.date %}"{{ item.date | date: "%B %d, %Y" }}"{% else %}null{% endif %},
     "type": {% if item.date %}"post"{% else %}"page"{% endif %},
     "pinned": {% if item.pinned %}true{% else %}false{% endif %}
+  }{% unless forloop.last and appCount == 0 %},{% endunless %}
+  {% endfor %}
+  {% for app in site.data.apps %}
+  {
+    "title": {{ app.title | jsonify }},
+    "url": {{ app.url | jsonify }},
+    "excerpt": {{ app.excerpt | default: "" | strip_html | truncate: 120 | jsonify }},
+    "date": null,
+    "type": {{ app.kind | default: "app" | jsonify }},
+    "pinned": {% if app.pinned %}true{% else %}false{% endif %}
   }{% unless forloop.last %},{% endunless %}
   {% endfor %}
 ]

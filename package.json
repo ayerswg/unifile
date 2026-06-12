@@ -8,6 +8,8 @@
     "build:dev": "node build/build.mjs --dev",
     "build:abcjs": "node build/build.mjs --dsl=abcjs",
     "build:plugins": "node build/build.mjs --plugins",
+    "build:site": "node build/sync-site.mjs",
+    "site:preview": "node build/render-site.mjs",
     "gen:soundfont": "node build/gen-soundfont.mjs",
     "clean": "rm -rf dist"
   },

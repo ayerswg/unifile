@@ -1,8 +1,4 @@
 [
-  
-  
-  
-  
   {
     "title": "About",
     "url": "/about/",
@@ -11,7 +7,6 @@
     "type": "page",
     "pinned": false
   },
-  
   {
     "title": "The App",
     "url": "/app/",
@@ -20,7 +15,14 @@
     "type": "page",
     "pinned": false
   },
-  
+  {
+    "title": "Downloads",
+    "url": "/downloads/",
+    "excerpt": "",
+    "date": null,
+    "type": "page",
+    "pinned": true
+  },
   {
     "title": "Unifile",
     "url": "/",
@@ -29,7 +31,6 @@
     "type": "page",
     "pinned": false
   },
-  
   {
     "title": "Posts",
     "url": "/posts/",
@@ -38,41 +39,68 @@
     "type": "page",
     "pinned": false
   },
-  
   {
     "title": "Why one file?",
     "url": "/posts/why-one-file/",
-    "excerpt": "The file is the unit of trust on the internet. You can email it, version it with git, drag it into a chat, attach it ...",
-    "date": "May 20, 2026",
+    "excerpt": "",
+    "date": "2026-05-20",
     "type": "post",
-    "pinned": true
+    "pinned": false
   },
-  
   {
     "title": "Building the plugin system",
     "url": "/posts/building-the-plugin-system/",
-    "excerpt": "The core challenge with a multi-DSL editor is that you want the host app to stay small while letting language support...",
-    "date": "May 10, 2026",
+    "excerpt": "",
+    "date": "2026-05-10",
     "type": "post",
-    "pinned": true
+    "pinned": false
   },
-  
   {
     "title": "Per-section syntax highlighting",
     "url": "/posts/section-syntax-highlighting/",
-    "excerpt": "A document with mixed DSLs needs mixed highlighting — Markdown rules for prose sections, Mermaid rules for diagram se...",
-    "date": "April 28, 2026",
+    "excerpt": "",
+    "date": "2026-04-28",
     "type": "post",
     "pinned": false
   },
-  
   {
     "title": "The model layer",
     "url": "/posts/the-model-layer/",
-    "excerpt": "Unifile documents have three layers of structure: the DSL (what syntax a section uses), the layout (how sections are ...",
-    "date": "April 10, 2026",
+    "excerpt": "",
+    "date": "2026-04-10",
     "type": "post",
     "pinned": false
+  },
+  {
+    "title": "Unifile",
+    "url": "/dl/unifile.html",
+    "excerpt": "The universal single-file editor — download and open in any browser, fully offline.",
+    "date": null,
+    "type": "download",
+    "pinned": true
+  },
+  {
+    "title": "Unifile — ABC Notation",
+    "url": "/dl/unifile.abc.html",
+    "excerpt": "Dedicated ABC notation build with an offline acoustic piano and external MIDI output.",
+    "date": null,
+    "type": "download",
+    "pinned": false
+  },
+  {
+    "title": "Unifile — install app",
+    "url": "/pwa/",
+    "excerpt": "Install the universal editor as an offline Progressive Web App.",
+    "date": null,
+    "type": "pwa",
+    "pinned": false
+  },
+  {
+    "title": "ABC Notation — install app",
+    "url": "/pwa-abc/",
+    "excerpt": "Install the ABC notation app (offline piano + MIDI) as a Progressive Web App.",
+    "date": null,
+    "type": "pwa",
+    "pinned": false
   }
-  
 ]

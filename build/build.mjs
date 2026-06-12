@@ -4,26 +4,30 @@
  * Every output is fully self-contained and works 100% offline.
  * All vendor libraries are bundled by esbuild — no CDN fetches at runtime.
  *
+ * The website lives in docs/ (Jekyll, GitHub Pages).  This build only produces
+ * the app artifacts; `npm run build:site` copies them into docs/ for hosting.
+ *
  * Outputs
  * -------
  *   (default, no flags)
- *   dist/index.html          landing/site page
  *   dist/unifile.html        universal quine  (markdown built-in; others via plugins)
  *   dist/pwa/                installable PWA  (universal)
  *   dist/plugins/            drag-and-drop DSL plugin bundles
  *
  *   --dsl=<variant>          dedicated single-DSL build (DSL bundled in, no plugins)
  *   dist/unifile.<abbrev>.html   standalone quine for that DSL
- *   dist/pwa/                     PWA for that DSL
+ *   dist/pwa-<abbrev>/            PWA for that DSL (universal → dist/pwa/)
  *     variants: markdown | mermaid | abcjs | universal
  *     e.g. `node build/build.mjs --dsl=abcjs` → dist/unifile.abc.html (offline piano)
  *
  * npm scripts
  * -----------
- *   npm run build            default (site + universal quine + PWA + plugins)
+ *   npm run build            default (universal quine + PWA + plugins)
  *   npm run build:dev        default, unminified + inline source maps
  *   npm run build:abcjs      dedicated ABC notation build (--dsl=abcjs)
  *   npm run build:plugins    all DSL plugin bundles
+ *   npm run build:site       build app artifacts + copy into docs/ for hosting
+ *   npm run site:preview     render docs/ → docs/_site (no-Ruby local preview)
  *   npm run gen:soundfont    refresh the bundled offline piano soundfont
  *
  * Pass --no-pwa to skip the PWA build.
@@ -534,19 +538,6 @@ delete globalThis.__uf_pending_register;
 }
 
 // ---------------------------------------------------------------------------
-// Build site landing page
-// ---------------------------------------------------------------------------
-
-async function buildSite() {
-  console.log(`\nBuilding site…`);
-  const html = await readFile(join(TEMPLATES, 'site.html'), 'utf8');
-  await mkdir(DIST, { recursive: true });
-  const outPath = join(DIST, 'index.html');
-  await writeFile(outPath, html, 'utf8');
-  console.log(`  ✓ ${outPath}`);
-}
-
-// ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
 
@@ -580,10 +571,10 @@ async function main() {
     return;
   }
 
-  // Default: build site + universal quine + PWA + all plugin bundles so dist/
-  // is always coherent.  Plugin source changes are picked up on every build.
+  // Default: build universal quine + PWA + all plugin bundles so dist/ is always
+  // coherent.  Plugin source changes are picked up on every build.  (The website
+  // is the Jekyll site in docs/ — there is no separate dist/ landing page.)
   try {
-    await buildSite();
     await buildQuine(BASE_PLUGINS, DEFAULT_DSL_TYPE, 'unifile.html', 'universal');
     if (BUILD_PWA) await buildPWA(BASE_PLUGINS, DSL_META.universal, 'universal');
     console.log('\nBuilding plugins…');

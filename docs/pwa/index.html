@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Enforce fully-offline operation: block all external network connections. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; worker-src 'self' blob:; media-src blob:; frame-src 'none'; object-src 'none';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unifile</title>
+  <meta name="description" content="Unifile – offline document editor with full version history.">
+
+  <!-- PWA / installability -->
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#181825">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Unifile">
+
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+
+  <!--
+    NO-JS FALLBACK
+    In PWA mode, JS is always available. But if somehow it isn't,
+    show a friendly message.
+  -->
+  <noscript>
+    <div style="padding:2rem;font-family:system-ui,sans-serif;color:#4c4f69">
+      <h1>Unifile requires JavaScript</h1>
+      <p>Please enable JavaScript to use the Unifile editor.</p>
+    </div>
+  </noscript>
+
+  <!-- App root -->
+  <div id="unifile-app">
+    <div id="noscript-preview" style="display:none"></div>
+    <div style="
+      display:flex;align-items:center;justify-content:center;
+      height:100vh;color:#a6adc8;font-family:system-ui,sans-serif;
+      flex-direction:column;gap:12px
+    ">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="6" stroke="#89b4fa" stroke-width="2.5"/>
+        <line x1="2" y1="16" x2="10" y2="16" stroke="#89b4fa" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="22" y1="16" x2="30" y2="16" stroke="#89b4fa" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <span>Loading Unifile…</span>
+    </div>
+  </div>
+
+  <!--
+    PWA DATA STORE
+    Unlike the quine, the PWA reads from IndexedDB.
+    This script tag provides default empty data for a fresh install.
+    On load, the app will check IndexedDB first.
+  -->
+  <script id="unifile-data" type="application/json">
+{
+  "version": "0.1.0",
+  "title": "Untitled Document",
+  "dslType": "markdown",
+  "currentBranch": "main",
+  "branches": { "main": { "name": "main", "head": null } },
+  "commits": {},
+  "comments": {},
+  "password": null
+}
+  </script>
+
+  <script src="./app.js"></script>
+
+</body>
+</html>

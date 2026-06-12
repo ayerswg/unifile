@@ -280,6 +280,55 @@ html, body {
   border-color: var(--border);
 }
 
+/* Destination-kind badges (download / pwa) — accent-coloured. */
+.search-dropdown .item-badge.kind-download,
+.search-dropdown .item-badge.kind-pwa {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Downloads page list ───────────────────────────────────────── */
+
+.app-list {
+  list-style: none;
+  margin-top: 32px;
+}
+
+.app-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 6px 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-list a {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--text);
+  text-decoration: none;
+}
+.app-list a:hover { color: var(--accent); }
+
+.app-list .app-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 1px 6px;
+  justify-self: end;
+}
+
+.app-list .app-desc {
+  grid-column: 1 / -1;
+  font-family: var(--font-prose);
+  font-size: 14px;
+  color: var(--muted);
+}
+
 /* separator before pinned section */
 .search-dropdown li.pinned-separator {
   display: block;

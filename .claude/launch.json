@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8765", "--directory", "dist", "--bind", "127.0.0.1"],
       "port": 8765
+    },
+    {
+      "name": "site-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8780", "--directory", "docs/_site", "--bind", "127.0.0.1"],
+      "port": 8780
     }
   ]
 }

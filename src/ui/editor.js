@@ -340,7 +340,10 @@ const baseExtensions = [
   bracketMatching(),
   closeBrackets(),
   autocompletion(),
-  EditorView.lineWrapping,
+  // NOTE: line wrapping intentionally omitted — long DSL lines scroll
+  // horizontally inside the editor (cm-scroller) rather than wrapping. On mobile
+  // this nests inside the pane scroll-snap strip: swiping the code scrolls it,
+  // and at the edge the gesture chains out to snap to the next pane.
 
   // DSL range highlight (e.g. from clicking a note in ABC preview)
   dslHighlightField,

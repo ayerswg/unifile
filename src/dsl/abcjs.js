@@ -95,46 +95,62 @@ const abcLanguage = StreamLanguage.define({
  * Supported tablature instruments and their human-readable names.
  * These match the keys registered in abcjs's internal pluginTab table.
  */
-const TAB_INSTRUMENTS = new Set(['guitar', 'mandolin', 'violin', 'fiddle', 'fiveString']);
+// Case-insensitive instrument lookup → abcjs's exact pluginTab key.
+const TAB_INSTRUMENTS = new Map([
+  ['guitar', 'guitar'], ['mandolin', 'mandolin'], ['violin', 'violin'],
+  ['fiddle', 'fiddle'], ['fivestring', 'fiveString'],
+]);
 
 /**
- * Parse `%%tablature` formatting directives from an ABC source string.
+ * Parse tablature pragmas from an ABC source string into the `tablature` array
+ * abcjs's renderAbc expects (abcjs renders one tab staff per array entry, in
+ * declaration order).  Forgiving about syntax so the common forms all work:
  *
- * Each `%%tablature` line defines tablature for one staff (in declaration
- * order).  Recognised key=value pairs on the line:
+ *   %%tablature instrument=guitar capo=2 label="Gtr"
+ *   %%tablature guitar              (instrument as a bare positional word)
+ *   %%tab guitar                    (%%tab is accepted as a shorthand)
+ *   %%tablature violin tuning=G,D,A,e
  *
- *   instrument  – required; one of: guitar, mandolin, violin, fiddle, fiveString
- *   capo        – fret number to capo (integer, default 0)
- *   label       – label text shown to the left of the tab staff
- *   firstStaffOnly – if "true", only show the tab label on the first staff
+ * Recognised keys (case-insensitive): instrument, capo, label, tuning
+ * (comma/space separated → array), transpose / visualtranspose, firststaffonly,
+ * hidetabsymbol.  A line with an unknown/empty instrument becomes a placeholder
+ * ({instrument:''}) so per-voice ordering still works (e.g. tab on voice 1 only).
  *
- * Lines with an unrecognised or empty instrument create a placeholder so
- * that per-voice ordering still works (e.g. omit tab on the second voice of
- * a two-voice tune).
- *
- * Returns the `tablature` array to pass to `renderAbc`, or `null` when no
- * `%%tablature` directives are present.
- *
- * Example ABC:
- *   %%tablature instrument=guitar capo=2 label=Tab
+ * Returns the array, or null when no tablature pragma is present.
  */
 function parseTabDirectives(src) {
   const tabs = [];
   for (const line of src.split('\n')) {
-    const m = line.match(/^%%tablature\b(.*)/i);
+    const m = line.match(/^%%tab(?:lature)?\b(.*)/i);
     if (!m) continue;
+    const rest = m[1];
+
+    // key=value pairs (value may be "quoted" to allow spaces).
+    const raw = {};
+    for (const pair of rest.matchAll(/(\w+)\s*=\s*("[^"]*"|\S+)/g)) {
+      raw[pair[1].toLowerCase()] = pair[2].replace(/^"|"$/g, '');
+    }
+
+    // Instrument: explicit instrument=… else first bare known-instrument token.
+    let inst = raw.instrument;
+    if (!inst) {
+      for (const tok of rest.split(/\s+/)) {
+        if (TAB_INSTRUMENTS.has(tok.toLowerCase())) { inst = tok; break; }
+      }
+    }
+
+    // Build the abcjs-shaped args (correct camelCase keys).
     const args = {};
-    for (const pair of m[1].matchAll(/([\w]+)=([^\s]+)/g)) {
-      args[pair[1]] = pair[2];
-    }
-    // capo must be an integer
-    if (args.capo !== undefined) args.capo = parseInt(args.capo, 10) || 0;
-    // firstStaffOnly is a boolean flag
-    if (args.firstStaffOnly !== undefined) args.firstStaffOnly = args.firstStaffOnly === 'true';
-    // Unknown / empty instrument → placeholder (no tab for this staff slot)
-    if (!args.instrument || !TAB_INSTRUMENTS.has(args.instrument)) {
-      args.instrument = '';
-    }
+    const key = inst ? TAB_INSTRUMENTS.get(inst.toLowerCase()) : null;
+    args.instrument = key || '';               // '' = placeholder slot
+    if (raw.capo !== undefined)  args.capo = parseInt(raw.capo, 10) || 0;
+    if (raw.label !== undefined) args.label = raw.label;
+    if (raw.tuning) args.tuning = raw.tuning.split(/[,\s]+/).filter(Boolean);
+    const transpose = raw.transpose ?? raw.visualtranspose;
+    if (transpose !== undefined) args.visualTranspose = parseInt(transpose, 10) || 0;
+    if (raw.firststaffonly !== undefined) args.firstStaffOnly = raw.firststaffonly === 'true';
+    if (raw.hidetabsymbol !== undefined) args.hideTabSymbol = raw.hidetabsymbol === 'true';
+
     tabs.push(args);
   }
   return tabs.length ? tabs : null;

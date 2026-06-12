@@ -1,67 +1,32 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Building the plugin system — Unifile</title>
-  <meta name="description" content="The core challenge with a multi-DSL editor is that you want the host app to stay small while letting language support grow unboundedly. The solution we lande..." />
-  <link rel="stylesheet" href="/assets/css/style.css" />
-</head>
-<body>
-  <nav id="site-nav">
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Building the plugin system — Unifile</title>
+<link rel="stylesheet" href="/assets/css/style.css">
+</head><body><nav id="site-nav">
   <span class="prompt-glyph">&gt;</span>
   <div class="nav-search-wrap">
     <span id="nav-display">/posts/building-the-plugin-system/</span>
-    <input
-      id="nav-search-input"
-      type="text"
-      autocomplete="off"
-      spellcheck="false"
-      placeholder="type to navigate..."
-      style="display:none"
-    />
+    <input id="nav-search-input" type="text" autocomplete="off" spellcheck="false" placeholder="type to navigate..." style="display:none">
   </div>
   <button id="theme-toggle" aria-label="Toggle theme"></button>
-</nav>
-
-<div class="page-body">
-  <h1>Building the plugin system</h1>
-  <div class="post-meta">May 10, 2026</div>
-  <div class="content">
-    <p>The core challenge with a multi-DSL editor is that you want the host app to stay small while letting language support grow unboundedly. The solution we landed on: DSL plugins are standalone <code class="language-plaintext highlighter-rouge">.js</code> files that you install by dragging onto the editor.</p>
-
-<h2 id="how-it-works">How it works</h2>
-
+</nav><div class="page-body"><h1>Building the plugin system</h1><div class="content"><p>The core challenge with a multi-DSL editor is that you want the host app to stay small while letting language support grow unboundedly. The solution we landed on: DSL plugins are standalone <code>.js</code> files that you install by dragging onto the editor.</p>
+<h2>How it works</h2>
 <p>Each plugin is a self-contained ES module that exports a DSL descriptor:</p>
-
-<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">export</span> <span class="k">default</span> <span class="p">{</span>
-  <span class="na">id</span><span class="p">:</span> <span class="dl">"</span><span class="s2">mermaid</span><span class="dl">"</span><span class="p">,</span>
-  <span class="na">label</span><span class="p">:</span> <span class="dl">"</span><span class="s2">Mermaid</span><span class="dl">"</span><span class="p">,</span>
-  <span class="nf">render</span><span class="p">(</span><span class="nx">source</span><span class="p">,</span> <span class="nx">container</span><span class="p">)</span> <span class="p">{</span> <span class="cm">/* ... */</span> <span class="p">},</span>
-  <span class="nf">getEditorExtensions</span><span class="p">()</span> <span class="p">{</span> <span class="cm">/* CodeMirror extensions */</span> <span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div></div>
-
-<p>When you drag a <code class="language-plaintext highlighter-rouge">.plugin.js</code> file onto <code class="language-plaintext highlighter-rouge">unifile.uni.html</code>, the app reads it, registers the DSL, and immediately makes it available in any section tagged <code class="language-plaintext highlighter-rouge">#!mermaid</code> (or whatever the id is).</p>
-
-<h2 id="the-import-redirect-trick">The import redirect trick</h2>
-
-<p>Plugins need access to CodeMirror and the app’s state without bundling them a second time. We solve this with a build-time esbuild plugin that rewrites imports of specific packages to pull from <code class="language-plaintext highlighter-rouge">globalThis.__uf</code> instead — the host API surface the app exposes.</p>
-
+<pre><code class="language-js">export default {
+  id: &quot;mermaid&quot;,
+  label: &quot;Mermaid&quot;,
+  render(source, container) { /* ... */ },
+  getEditorExtensions() { /* CodeMirror extensions */ }
+}
+</code></pre>
+<p>When you drag a <code>.plugin.js</code> file onto <code>unifile.uni.html</code>, the app reads it, registers the DSL, and immediately makes it available in any section tagged <code>#!mermaid</code> (or whatever the id is).</p>
+<h2>The import redirect trick</h2>
+<p>Plugins need access to CodeMirror and the app&#39;s state without bundling them a second time. We solve this with a build-time esbuild plugin that rewrites imports of specific packages to pull from <code>globalThis.__uf</code> instead — the host API surface the app exposes.</p>
 <p>So a plugin can write:</p>
-
-<div class="language-js highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">import</span> <span class="p">{</span> <span class="nx">EditorView</span> <span class="p">}</span> <span class="k">from</span> <span class="dl">"</span><span class="s2">@codemirror/view</span><span class="dl">"</span><span class="p">;</span>
-</code></pre></div></div>
-
+<pre><code class="language-js">import { EditorView } from &quot;@codemirror/view&quot;;
+</code></pre>
 <p>And at runtime, that resolves to the already-loaded CM6 instance inside the host app. No duplication, no version mismatch.</p>
-
-<h2 id="whats-next">What’s next</h2>
-
-<p>The plugin manifest currently lives only in memory — refreshing the page loses your installed plugins unless the app has saved them to <code class="language-plaintext highlighter-rouge">localStorage</code>. Persistent plugin storage across sessions is the next piece.</p>
-
-  </div>
-</div>
-
-  <script src="/assets/js/search.js"></script>
-</body>
-</html>
+<h2>What&#39;s next</h2>
+<p>The plugin manifest currently lives only in memory — refreshing the page loses your installed plugins unless the app has saved them to <code>localStorage</code>. Persistent plugin storage across sessions is the next piece.</p>
+</div></div><script>window.SITE_BASEURL = "";</script>
+<script src="/assets/js/search.js"></script></body></html>

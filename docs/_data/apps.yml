@@ -1,0 +1,27 @@
+# Navigable apps + downloads, surfaced in the command bar and on /downloads/.
+# The actual files are copied into docs/ by `npm run build:site`
+# (build/sync-site.mjs) from the dist/ build output.
+#
+#   kind: download → a standalone single-file .html (save & open offline)
+#   kind: pwa      → an installable offline web app (served from its own dir)
+
+- title: Unifile
+  url: /dl/unifile.html
+  kind: download
+  pinned: true
+  excerpt: The universal single-file editor — download and open in any browser, fully offline.
+
+- title: Unifile — ABC Notation
+  url: /dl/unifile.abc.html
+  kind: download
+  excerpt: Dedicated ABC notation build with an offline acoustic piano and external MIDI output.
+
+- title: Unifile — install app
+  url: /pwa/
+  kind: pwa
+  excerpt: Install the universal editor as an offline Progressive Web App.
+
+- title: ABC Notation — install app
+  url: /pwa-abc/
+  kind: pwa
+  excerpt: Install the ABC notation app (offline piano + MIDI) as a Progressive Web App.
