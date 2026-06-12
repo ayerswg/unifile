@@ -1,4 +1,9 @@
 source "https://rubygems.org"
 
-gem "jekyll", "~> 4.3"
+# GitHub Pages (Deploy from a branch) builds with its own pinned environment via
+# the github-pages gem (currently Jekyll 3.x).  Depend on that same gem so the
+# build can resolve dependencies — pinning a different jekyll version (e.g. 4.x)
+# makes the Pages build fail with "github-pages gem can't satisfy your Gemfile".
+# This also lets local `bundle exec jekyll serve` mirror production (Ruby >= 2.7).
+gem "github-pages", group: :jekyll_plugins
 gem "kramdown-parser-gfm"
