@@ -1,29 +1,25 @@
 ---
 layout: none
 ---
+{% assign all = site.pages | concat: site.posts %}
 [
-  {% assign pages = site.pages | where_exp: "p", "p.title != nil and p.title != ''" %}
-  {% assign posts = site.posts %}
-  {% assign items = pages | concat: posts %}
-  {% assign appCount = site.data.apps | size %}
-  {% for item in items %}
-  {
-    "title": {{ item.title | jsonify }},
-    "url": {{ item.url | jsonify }},
-    "excerpt": {{ item.excerpt | strip_html | truncate: 120 | jsonify }},
-    "date": {% if item.date %}"{{ item.date | date: "%B %d, %Y" }}"{% else %}null{% endif %},
-    "type": {% if item.date %}"post"{% else %}"page"{% endif %},
-    "pinned": {% if item.pinned %}true{% else %}false{% endif %}
-  }{% unless forloop.last and appCount == 0 %},{% endunless %}
-  {% endfor %}
-  {% for app in site.data.apps %}
-  {
-    "title": {{ app.title | jsonify }},
-    "url": {{ app.url | jsonify }},
-    "excerpt": {{ app.excerpt | default: "" | strip_html | truncate: 120 | jsonify }},
-    "date": null,
-    "type": {{ app.kind | default: "app" | jsonify }},
-    "pinned": {% if app.pinned %}true{% else %}false{% endif %}
-  }{% unless forloop.last %},{% endunless %}
-  {% endfor %}
+{% assign first = true %}
+{% for item in all %}{% if item.title and item.title != "" %}{% unless first %},{% endunless %}{% assign first = false %}
+{
+"title": {{ item.title | jsonify }},
+"url": {{ item.url | jsonify }},
+"excerpt": {{ item.excerpt | strip_html | truncate: 120 | jsonify }},
+"date": {% if item.date %}{{ item.date | date: "%B %d, %Y" | jsonify }}{% else %}null{% endif %},
+"type": {% if item.date %}"post"{% else %}"page"{% endif %},
+"pinned": {% if item.pinned %}true{% else %}false{% endif %}
+}{% endif %}{% endfor %}
+{% for app in site.data.apps %}{% unless first %},{% endunless %}{% assign first = false %}
+{
+"title": {{ app.title | jsonify }},
+"url": {{ app.url | jsonify }},
+"excerpt": {{ app.excerpt | default: "" | jsonify }},
+"date": null,
+"type": {{ app.kind | default: "app" | jsonify }},
+"pinned": {% if app.pinned %}true{% else %}false{% endif %}
+}{% endfor %}
 ]
