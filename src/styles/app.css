@@ -542,6 +542,19 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   line-height: 1.4;
 }
 
+/* Temporary audio diagnostic line (helps debug iOS playback). */
+.abc-debug {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-alt);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
 /* (topbar-extras kept for any legacy references) */
 .topbar-extras {
   display: flex;
