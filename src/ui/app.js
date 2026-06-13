@@ -184,6 +184,7 @@ export class App {
         </div>
         <div id="uf-preview-wrap"></div>
       </div>
+      <div id="uf-transport"></div>
       <div id="uf-panels">
         <div id="uf-commit-panel"   style="display:none"></div>
         <div id="uf-blame-panel"    style="display:none"></div>
@@ -229,11 +230,9 @@ export class App {
     editorFooterEl.id = 'uf-editor-footer';
     document.getElementById('uf-editor-wrap').appendChild(editorFooterEl);
 
-    const previewFooterEl = document.createElement('div');
-    previewFooterEl.id = 'uf-preview-footer';
-    document.getElementById('uf-preview-wrap').appendChild(previewFooterEl);
-
-    this._components.dslFooter = new DslFooter(previewFooterEl);
+    // The DSL transport is a global bottom bar (sticks to the screen bottom and
+    // is visible in both the editor and preview panes), not a per-pane footer.
+    this._components.dslFooter = new DslFooter(document.getElementById('uf-transport'));
 
     this._components.commit = new CommitDialog(
       document.getElementById('uf-commit-panel'),

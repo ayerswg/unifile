@@ -1940,6 +1940,24 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 #uf-editor-footer:empty,
 #uf-preview-footer:empty { display: none; }
 
+/* ── Global transport bar (#uf-transport) ──────────────────────────
+   A persistent bottom bar that sticks to the screen bottom and is visible in
+   both the editor and preview panes.  flex-shrink:0 keeps it pinned at the
+   bottom of the #unifile-app column; safe-area padding clears the iOS home bar. */
+#uf-transport {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  min-height: 40px;
+  background: var(--bg-alt);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  z-index: 90;
+}
+#uf-transport:empty { display: none; }
+
 /* ── Preview footer buttons (.pf-btn) ────────────────────────── */
 .pf-btn {
   display: inline-flex;

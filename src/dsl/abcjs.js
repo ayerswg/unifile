@@ -914,8 +914,13 @@ async function startPlayback(opts = {}) {
   _scheduledOscs = [];
 
   try {
-    _audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    _unlockAudio(_audioContext);     // iOS: unlock within the user gesture
+    // Reuse ONE persistent AudioContext for the whole session.  iOS Safari (esp.
+    // installed PWAs) won't reliably start a freshly-created/closed context after
+    // the gesture; a single context unlocked once on the first tap keeps working.
+    if (!_audioContext) {
+      _audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      _unlockAudio(_audioContext);   // iOS: unlock within the user gesture
+    }
     await _audioContext.resume();
   } catch {
     _audioContext = null;
@@ -957,18 +962,9 @@ async function startPlayback(opts = {}) {
         setTimeout(() => banner.remove(), 8000);
       }
       console.warn('[abcjs] Synth init failed, falling back to oscillators:', msg);
-      try { _audioContext.close(); } catch { /* ignore */ }
-      _audioContext = null;
       _synth = null;
-
-      // Re-create AudioContext for the oscillator path.
-      try {
-        _audioContext = new AudioContext();
-        await _audioContext.resume();
-      } catch {
-        _audioContext = null;
-        return;
-      }
+      // Keep the persistent context; just make sure it's running for oscillators.
+      try { await _audioContext.resume(); } catch { /* ignore */ }
     }
   }
 
@@ -1024,10 +1020,11 @@ function stopPlayback(opts = {}) {
   }
   _scheduledOscs = [];
 
+  try { _synth?.stop?.(); } catch { /* ignore */ }
   _synth = null;
 
-  try { _audioContext?.close(); } catch { /* ignore */ }
-  _audioContext = null;
+  // Keep the persistent AudioContext alive (do NOT close it) — closing and
+  // recreating per play is exactly what breaks audio on iOS.
 
   if (_playEl) {
     _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
