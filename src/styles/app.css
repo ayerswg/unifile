@@ -542,19 +542,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   line-height: 1.4;
 }
 
-/* Temporary audio diagnostic line (helps debug iOS playback). */
-.abc-debug {
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-  color: var(--text-muted);
-  background: var(--bg-alt);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  margin-bottom: 8px;
-  word-break: break-word;
-}
-
 /* (topbar-extras kept for any legacy references) */
 .topbar-extras {
   display: flex;
@@ -921,6 +908,32 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 
   /* The vertical divider has no meaning inside a horizontal strip. */
   #uf-divider { display: none !important; }
+
+  /* ── Pane-aware top bar ──────────────────────────────────────────
+     On mobile the top region adapts to the centred pane:
+       commit → branch dropdown · editor → menu + title · render → transport.
+     Exactly one of #uf-topbar / #uf-transport shows at a time, pinned to top. */
+  #uf-site-nav { order: -2; }
+  #uf-transport { order: -1; }                 /* when shown, sits at the very top */
+  /* clear the iOS status bar in standalone PWAs for whichever bar is on top */
+  #uf-topbar, #uf-transport { padding-top: env(safe-area-inset-top, 0px); }
+  #uf-transport { padding-bottom: 0; }
+  #pf-midi { display: none !important; }        /* MIDI routing is desktop-only */
+
+  /* RENDER pane → show the transport, hide the normal top bar (ABC docs only;
+     a non-ABC doc has no transport, so it keeps its normal top bar). */
+  #unifile-app.abc-active[data-mobile-pane="render"] #uf-topbar    { display: none !important; }
+  #unifile-app.abc-active[data-mobile-pane="render"] #uf-transport { display: flex !important; }
+
+  /* EDITOR pane → menu + title only (no branch/commit pills). */
+  #unifile-app[data-mobile-pane="editor"] #uf-transport  { display: none !important; }
+  #unifile-app[data-mobile-pane="editor"] .topbar-right  { display: none !important; }
+
+  /* COMMIT pane → branch dropdown only (hide menu, title, commit pills). */
+  #unifile-app[data-mobile-pane="commit"] #uf-transport   { display: none !important; }
+  #unifile-app[data-mobile-pane="commit"] .tb-hamburger,
+  #unifile-app[data-mobile-pane="commit"] .topbar-title,
+  #unifile-app[data-mobile-pane="commit"] .commit-pill    { display: none !important; }
 }
 
 /* Commit-log pane contents (reuses the dropdown's commit-list markup). */

@@ -738,24 +738,6 @@ function _unlockAudio(ctx) {
   } catch { /* ignore */ }
 }
 
-// ── On-screen audio diagnostics (temporary; helps debug iOS where there's no
-//    console). Shows context state, path, decoded note count, and the rendered
-//    output-buffer peak so we can tell silence-at-source from output issues. ──
-function _bufPeak(buf) {
-  if (!buf) return -1;
-  try {
-    const ch = buf.getChannelData(0);
-    let p = 0;
-    for (let i = 0; i < ch.length; i += 997) { const v = Math.abs(ch[i]); if (v > p) p = v; }
-    return Math.round(p * 1000) / 1000;
-  } catch { return -2; }
-}
-function _showAbcDebug(text) {
-  if (!_playEl) return;
-  let el = _playEl.querySelector('.abc-debug');
-  if (!el) { el = document.createElement('div'); el.className = 'abc-debug'; _playEl.insertAdjacentElement('afterbegin', el); }
-  el.textContent = '🔎 ' + text;
-}
 
 /** Compute total tune duration (ms) without playing, for the transport display. */
 function _computeDuration(tune) {
@@ -932,6 +914,11 @@ async function startPlayback(opts = {}) {
 
   _scheduledOscs = [];
 
+  // iOS: by default Web Audio is "ambient" and is silenced by the hardware mute
+  // switch.  Declaring a 'playback' audio session makes it behave like a media
+  // player (plays through the mute switch), matching user expectation for music.
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* unsupported */ }
+
   try {
     // Reuse ONE persistent AudioContext for the whole session.  iOS Safari (esp.
     // installed PWAs) won't reliably start a freshly-created/closed context after
@@ -1023,12 +1010,6 @@ async function startPlayback(opts = {}) {
 
   // Drive the transport progress bar (works for all audio paths).
   _startProgress(startSeconds * 1000);
-
-  // On-screen audio diagnostics (temporary) — read this on iOS and report back.
-  const st = globalThis.__ufPiano ?? { ok: 0, fail: 0, err: '' };
-  const path = (typeof _synth?.start === 'function') ? 'synth' : 'osc';
-  const peak = path === 'synth' ? _bufPeak(_synth?.audioBuffers?.[0]) : 'n/a';
-  _showAbcDebug(`ctx=${_audioContext?.state} ${Math.round(_audioContext?.sampleRate || 0)}Hz · ${path} · notes ok=${st.ok} fail=${st.fail} · outPeak=${peak}${st.err ? ' · ' + st.err : ''}`);
 }
 
 function stopPlayback(opts = {}) {

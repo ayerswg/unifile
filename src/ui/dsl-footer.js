@@ -46,6 +46,10 @@ export class DslFooter {
     const dslType = state.activeDslId ?? state.data?.dslType ?? 'markdown';
     this._lastDsl = dslType;
 
+    // Mark the app as ABC-active so the mobile render pane swaps its top bar for
+    // the transport (a non-ABC doc has no transport and keeps its normal bar).
+    document.getElementById('unifile-app')?.classList.toggle('abc-active', dslType === 'abcjs');
+
     if (dslType !== 'abcjs') { this.el.innerHTML = ''; return; }
 
     const playing = state.abcPlaying;

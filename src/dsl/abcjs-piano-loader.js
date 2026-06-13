@@ -42,23 +42,17 @@ function dataUriToArrayBuffer(dataUri) {
   return bytes.buffer;
 }
 
-// Lightweight decode stats for on-screen diagnostics (read by abcjs.js).
-const _stats = (globalThis.__ufPiano ??= { ok: 0, fail: 0, err: '' });
-
 function decodeFromBundle(instrument, name, dataUri, audioContext) {
   return new Promise((resolve, reject) => {
     let buf;
     try { buf = dataUriToArrayBuffer(dataUri); }
-    catch (e) { _stats.fail++; _stats.err = 'b64:' + e.message; reject(e); return; }
-    const onDecoded = (audioBuffer) => {
-      _stats.ok++;
+    catch (e) { reject(e); return; }
+    const onDecoded = (audioBuffer) =>
       resolve({ instrument, name, status: 'loaded', audioBuffer });
-    };
-    const onErr = (e) => { _stats.fail++; _stats.err = 'decode:' + (e?.message || e || 'fail'); reject(e); };
     // decodeAudioData returns a promise in modern browsers and uses callbacks in
     // older ones — support both, matching abcjs's own load-note logic.
-    const maybePromise = audioContext.decodeAudioData(buf, onDecoded, onErr);
-    if (maybePromise && typeof maybePromise.catch === 'function') maybePromise.catch(onErr);
+    const maybePromise = audioContext.decodeAudioData(buf, onDecoded, reject);
+    if (maybePromise && typeof maybePromise.catch === 'function') maybePromise.catch(reject);
   });
 }
 

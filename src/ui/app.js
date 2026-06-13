@@ -399,20 +399,39 @@ export class App {
       this._components.topbar.mountCommitLog(logPane);
     }
 
+    const main = document.getElementById('uf-main');
+    const root = document.getElementById('unifile-app');
+
     const scrollToEditor = (smooth = false) => {
-      if (!_isMobile()) return;
-      const main   = document.getElementById('uf-main');
+      if (!_isMobile() || !main) return;
       const editor = document.getElementById('uf-editor-wrap');
-      if (!main || !editor) return;
+      if (!editor) return;
       // Defer until layout has the panes at full width.
       requestAnimationFrame(() => {
         main.scrollTo({ left: editor.offsetLeft, behavior: smooth ? 'smooth' : 'auto' });
       });
     };
 
+    // Track which pane is centred so the top bar can adapt per pane on mobile
+    // (commit → branch dropdown, editor → menu+title, render → transport).
+    const updatePane = () => {
+      if (!main) return;
+      if (!_isMobile()) { root.removeAttribute('data-mobile-pane'); return; }
+      const w = main.clientWidth || 1;
+      const idx = Math.round(main.scrollLeft / w);          // 0=commit, 1=editor, 2=render
+      const pane = idx <= 0 ? 'commit' : idx === 1 ? 'editor' : 'render';
+      if (root.getAttribute('data-mobile-pane') !== pane) root.setAttribute('data-mobile-pane', pane);
+    };
+    let raf = 0;
+    main?.addEventListener('scroll', () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; updatePane(); });
+    }, { passive: true });
+
     // Open centred on the editor, and re-centre whenever we (re)enter mobile.
     scrollToEditor(false);
-    _mql.addEventListener('change', (e) => { if (e.matches) scrollToEditor(false); });
+    requestAnimationFrame(updatePane);
+    _mql.addEventListener('change', (e) => { if (e.matches) { scrollToEditor(false); } requestAnimationFrame(updatePane); });
   }
 
   // ---------------------------------------------------------------------------
