@@ -1,27 +1,42 @@
-# Navigable apps + downloads, surfaced in the command bar and on /downloads/.
-# The actual files are copied into docs/ by `npm run build:site`
-# (build/sync-site.mjs) from the dist/ build output.
+# Navigable destinations, surfaced in the command bar and on /downloads/.
 #
-#   kind: download → a standalone single-file .html (save & open offline)
-#   kind: pwa      → an installable offline web app (served from its own dir)
+# The hub pages (kind: app) are the front door — each detects the device and
+# routes to the right artifact (see _data/types.yml + _includes/launcher.html).
+# The raw PWA/download URLs are kept directly reachable + searchable.
+#   kind: app      → per-type front-door hub page
+#   kind: download → a standalone single-file .html
+#   kind: pwa      → an installable offline web app
 
+# ── Front-door hubs (primary) ──
 - title: Unifile
+  url: /get/
+  kind: app
+  pinned: true
+  excerpt: The universal editor — overview, then install the app or download the file.
+
+- title: ABC Notation
+  url: /abc/
+  kind: app
+  pinned: true
+  excerpt: ABC music notation — overview, then install the app or download the file.
+
+# ── Direct links (searchable) ──
+- title: Unifile — download (.html)
   url: /dl/unifile.html
   kind: download
-  pinned: true
-  excerpt: The universal single-file editor — download and open in any browser, fully offline.
+  excerpt: Standalone single-file editor; save and open offline.
 
-- title: Unifile — ABC Notation
+- title: ABC Notation — download (.html)
   url: /dl/unifile.abc.html
   kind: download
-  excerpt: Dedicated ABC notation build with an offline acoustic piano and external MIDI output.
+  excerpt: Standalone ABC build with offline piano + MIDI.
 
-- title: Unifile — install app
+- title: Unifile — install (PWA)
   url: /pwa/
   kind: pwa
-  excerpt: Install the universal editor as an offline Progressive Web App.
+  excerpt: Install the universal editor as an offline app.
 
-- title: ABC Notation — install app
+- title: ABC Notation — install (PWA)
   url: /pwa-abc/
   kind: pwa
-  excerpt: Install the ABC notation app (offline piano + MIDI) as a Progressive Web App.
+  excerpt: Install the ABC notation app as an offline app.

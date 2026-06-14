@@ -119,6 +119,51 @@ function renderAppList(apps) {
   return `<ul class="app-list">\n${items}\n</ul>`;
 }
 
+// Minimal parser for _data/types.yml (list of maps with a folded `overview:` and
+// a nested `features:` list) — enough to mirror the launcher include locally.
+async function loadTypes() {
+  const raw = await readFile(join(DOCS, '_data', 'types.yml'), 'utf8');
+  const types = [];
+  let cur = null, mode = null;
+  for (const line of raw.split('\n')) {
+    if (/^\s*#/.test(line)) continue;
+    const item = line.match(/^-\s+(\w+):\s*(.*)$/);
+    if (item) { cur = { features: [] }; types.push(cur); cur[item[1]] = item[2].trim(); mode = null; continue; }
+    if (!cur) continue;
+    const kv = line.match(/^\s{2}(\w+):\s*(.*)$/);
+    if (kv) {
+      const [, k, v] = kv;
+      if (k === 'features') { mode = 'features'; }
+      else if (v === '>' || v === '|') { cur[k] = ''; mode = 'fold:' + k; }
+      else { cur[k] = v.replace(/^["']|["']$/g, '').trim(); mode = null; }
+      continue;
+    }
+    const feat = line.match(/^\s{4}-\s+(.*)$/);
+    if (feat && mode === 'features') { cur.features.push(feat[1].trim()); continue; }
+    if (mode && mode.startsWith('fold:') && line.trim()) {
+      const k = mode.slice(5);
+      cur[k] = (cur[k] ? cur[k] + ' ' : '') + line.trim();
+    }
+  }
+  return types;
+}
+
+function renderLauncher(t) {
+  if (!t) return '<p>(unknown type)</p>';
+  const feats = (t.features || []).map(f => `<li>${esc(f)}</li>`).join('\n');
+  return `<div class="launcher">
+  <p class="launch-tagline">${esc(t.tagline || '')}</p>
+  <div id="launch" class="launch-actions" data-pwa="${rel(t.pwa)}" data-download="${rel(t.download)}" data-title="${esc(t.title)}">
+    <a class="launch-btn primary" href="${rel(t.pwa)}">Open / install the app</a>
+    <a class="launch-btn" href="${rel(t.download)}" download>Download single .html</a>
+  </div>
+  <div class="launch-overview"><p>${esc(t.overview || '')}</p>
+    <ul class="launch-features">\n${feats}\n</ul>
+  </div>
+</div>
+<script src="${rel('/assets/js/launch.js')}" defer></script>`;
+}
+
 async function write(outRelPath, html) {
   const dest = join(OUT, outRelPath);
   await mkdir(dirname(dest), { recursive: true });
@@ -131,6 +176,7 @@ async function main() {
   await mkdir(OUT, { recursive: true });
 
   const apps = await loadApps();
+  const types = await loadTypes();
 
   // Posts (filename: YYYY-MM-DD-slug.md → /posts/slug/).
   const postFiles = (await readdir(join(DOCS, '_posts'))).filter(f => f.endsWith('.md')).sort().reverse();
@@ -160,6 +206,10 @@ async function main() {
     let body = p.body;
     if (/\{%\s*for\s+post/.test(body)) body = body.replace(/\{%\s*for[\s\S]*?\{%\s*endfor\s*%\}/, renderPostList(posts));
     if (/\{%\s*for\s+app/.test(body))  body = body.replace(/<ul class="app-list">[\s\S]*?<\/ul>/, renderAppList(apps));
+    // Launcher include → rendered inline (marked passes the raw HTML through).
+    const launcherHtml = /\{%\s*include\s+launcher\.html\s*%\}/.test(body)
+      ? renderLauncher(types.find(t => t.id === p.type)) : null;
+    if (launcherHtml) body = body.replace(/\{%\s*include\s+launcher\.html\s*%\}/, launcherHtml);
     const html = marked.parse(body);
     const outPath = p.url === '/' ? 'index.html' : p.url.replace(/^\//, '').replace(/\/$/, '') + '/index.html';
     await write(outPath, layoutPage(p, html));
@@ -173,7 +223,7 @@ async function main() {
 
   // search.json (pages + posts + apps) — mirrors docs/search.json output.
   const idx = [];
-  for (const p of pages) idx.push({ title: p.title, url: p.url, excerpt: '', date: null, type: 'page', pinned: p.pinned === 'true' || p.pinned === true });
+  for (const p of pages) { if (p.nav_exclude === 'true' || p.nav_exclude === true) continue; idx.push({ title: p.title, url: p.url, excerpt: '', date: null, type: 'page', pinned: p.pinned === 'true' || p.pinned === true }); }
   for (const p of posts) idx.push({ title: p.title, url: p.url, excerpt: '', date: p.dateISO, type: 'post', pinned: false });
   for (const a of apps)  idx.push({ title: a.title, url: a.url, excerpt: a.excerpt || '', date: null, type: a.kind || 'app', pinned: !!a.pinned });
   await write('search.json', JSON.stringify(idx, null, 2));
@@ -184,6 +234,7 @@ async function main() {
     if (await exists(join(DOCS, d))) await cp(join(DOCS, d), join(OUT, d), { recursive: true });
   }
   if (await exists(join(DOCS, 'CNAME'))) await cp(join(DOCS, 'CNAME'), join(OUT, 'CNAME'));
+  if (await exists(join(DOCS, 'version.json'))) await cp(join(DOCS, 'version.json'), join(OUT, 'version.json'));
 
   console.log(`  ✓ rendered ${pages.length} pages + ${posts.length} posts → docs/_site/`);
   console.log(`    preview:  python3 -m http.server 8780 --directory docs/_site`);

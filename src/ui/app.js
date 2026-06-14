@@ -37,6 +37,7 @@ import { Editor } from './editor.js';
 import { Preview } from './preview.js';
 import { DslFooter } from './dsl-footer.js';
 import { mountSiteNav } from './site-nav.js';
+import { checkForUpdate } from './update-check.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { MergeDialog } from './merge-dialog.js';
@@ -154,6 +155,9 @@ export class App {
     if (!IS_QUINE && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js').catch(console.warn);
     }
+
+    // 13. Offer an upgrade if a newer release has been published (non-blocking).
+    checkForUpdate({ isQuine: IS_QUINE });
   }
 
   // ---------------------------------------------------------------------------

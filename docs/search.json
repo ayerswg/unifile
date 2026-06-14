@@ -4,7 +4,7 @@ layout: none
 {% assign all = site.pages | concat: site.posts %}
 [
 {% assign first = true %}
-{% for item in all %}{% if item.title and item.title != "" %}{% unless first %},{% endunless %}{% assign first = false %}
+{% for item in all %}{% if item.title and item.title != "" and item.nav_exclude != true %}{% unless first %},{% endunless %}{% assign first = false %}
 {
 "title": {{ item.title | jsonify }},
 "url": {{ item.url | jsonify }},

@@ -39,12 +39,31 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { gzipSync } from 'zlib';
 import { createHash } from 'crypto';
+import { execSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '..');
 const SRC       = join(ROOT, 'src');
 const TEMPLATES = join(ROOT, 'templates');
 const DIST      = join(ROOT, 'dist');
+
+// ---------------------------------------------------------------------------
+// App version — semantic version from the latest git tag (single source of
+// truth for releases), falling back to package.json.  Stamped into every build
+// so a running copy knows its version and can offer an upgrade (see update-check.js).
+// ---------------------------------------------------------------------------
+
+function detectVersion() {
+  try {
+    const tag = execSync('git describe --tags --abbrev=0', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString().trim().replace(/^v/, '');
+    if (tag) return tag;
+  } catch { /* no tags yet */ }
+  try {
+    return JSON.parse(execSync('cat package.json', { cwd: ROOT }).toString()).version || '0.0.0';
+  } catch { return '0.0.0'; }
+}
+export const APP_VERSION = detectVersion();
 
 // ---------------------------------------------------------------------------
 // esbuild plugins for bundle size / offline behaviour
@@ -170,7 +189,7 @@ if (document.readyState === 'loading') {
 
 function makeInitialData(defaultDslType = DEFAULT_DSL_TYPE) {
   return {
-    version: '0.1.0',
+    version: APP_VERSION,
     title: 'Untitled Document',
     dslType: defaultDslType,
     currentBranch: 'main',
@@ -208,7 +227,8 @@ function buildOptions(entryPoint, unifileMode, plugins) {
     external: ['buffer'],
     define: {
       'process.env.NODE_ENV': DEV ? '"development"' : '"production"',
-      'UNIFILE_MODE': `"${unifileMode}"`
+      'UNIFILE_MODE': `"${unifileMode}"`,
+      'UNIFILE_VERSION': JSON.stringify(APP_VERSION)
     },
     logOverride: { 'indirect-require': 'silent' },
     plugins: esPlugins,

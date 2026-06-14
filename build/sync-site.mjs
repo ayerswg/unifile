@@ -15,7 +15,7 @@
  */
 
 import { execSync } from 'child_process';
-import { cp, mkdir, rm, copyFile, access } from 'fs/promises';
+import { cp, mkdir, rm, copyFile, access, writeFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -23,6 +23,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const DIST = join(ROOT, 'dist');
 const DOCS = join(ROOT, 'docs');
+
+/** Latest git tag (semver source of truth), fallback to package.json. */
+function detectVersion() {
+  try {
+    const tag = execSync('git describe --tags --abbrev=0', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString().trim().replace(/^v/, '');
+    if (tag) return tag;
+  } catch { /* no tags */ }
+  try { return JSON.parse(execSync('cat package.json', { cwd: ROOT }).toString()).version || '0.0.0'; }
+  catch { return '0.0.0'; }
+}
 
 const FILES = [
   ['unifile.html',     'dl/unifile.html'],
@@ -60,6 +71,12 @@ async function main() {
     await cp(from, join(DOCS, dst), { recursive: true });
     console.log(`  ✓ docs/${dst}/`);
   }
+
+  // 4. Publish the current version so installed/hosted apps can offer an upgrade.
+  const version = detectVersion();
+  await writeFile(join(DOCS, 'version.json'),
+    JSON.stringify({ version, released: new Date().toISOString() }, null, 2) + '\n', 'utf8');
+  console.log(`  ✓ docs/version.json  (v${version})`);
 
   console.log('\nSite synced. Commit docs/ and push to publish on GitHub Pages.');
 }

@@ -1,0 +1,34 @@
+# Unifile types — one entry per "product". Each drives a front-door hub page
+# (_includes/launcher.html + assets/js/launch.js) that detects the device and
+# routes the visitor to the right artifact, plus an overview of the type.
+#
+#   pwa      → installable Progressive Web App directory
+#   download → standalone single-file .html
+
+- id: universal
+  title: Unifile
+  tagline: One file. Every format. Fully offline.
+  overview: >
+    The universal editor. Markdown by default, with Mermaid diagrams, ABC music,
+    and Fountain screenplays available per section — all in a single file that
+    works with no server and no account, and keeps its own version history.
+  features:
+    - Works 100% offline — no server, no account, no sync
+    - Built-in git-style branches, commits, and history
+    - Mix formats per section with #!shebang lines
+  pwa: /pwa/
+  download: /dl/unifile.html
+
+- id: abc
+  title: ABC Notation
+  tagline: Write music, hear it, route it — offline.
+  overview: >
+    A dedicated ABC notation editor with a bundled offline acoustic piano, a
+    play/scrub transport, guitar/violin tablature, and live MIDI output so you
+    can drive an external instrument such as Kontakt.
+  features:
+    - Offline acoustic piano (FluidR3) — bundled, no network
+    - Transport with seekable progress + tablature
+    - Route playback to an external MIDI port (Web MIDI)
+  pwa: /pwa-abc/
+  download: /dl/unifile.abc.html
