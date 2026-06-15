@@ -167,6 +167,7 @@ export class App {
   _buildShell() {
     const root = document.getElementById('unifile-app');
     root.innerHTML = `
+      <div id="uf-pane-rail" aria-hidden="true"></div>
       <div id="uf-site-nav"></div>
       <div id="uf-topbar"></div>
       <div id="uf-main">
@@ -408,12 +409,12 @@ export class App {
 
     const scrollToEditor = (smooth = false) => {
       if (!_isMobile() || !main) return;
-      const editor = document.getElementById('uf-editor-wrap');
-      if (!editor) return;
-      // Defer until layout has the panes at full width.
-      requestAnimationFrame(() => {
-        main.scrollTo({ left: editor.offsetLeft, behavior: smooth ? 'smooth' : 'auto' });
-      });
+      // Snap to the middle (editor) pane by index × pane width — more reliable
+      // than offsetLeft, which can be fractional and land between snap points.
+      const go = () => main.scrollTo({ left: main.clientWidth, behavior: smooth ? 'smooth' : 'auto' });
+      // Run after two frames + a tick so pane widths have settled (fonts, safe-area).
+      requestAnimationFrame(() => requestAnimationFrame(go));
+      setTimeout(go, 120);
     };
 
     // Track which pane is centred so the top bar can adapt per pane on mobile
