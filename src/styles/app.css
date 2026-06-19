@@ -949,34 +949,29 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   .topbar-right { display: none !important; }
   .topbar-title { flex: 1; }               /* filename takes the free width */
 
-  /* ── Bottom bar: ONE fixed bar floating at the visible bottom (JS sets its
-     `bottom` from visualViewport so it sits flush even with the iOS toolbar /
-     home indicator).  Content is contextual: commit pane → commit bar; the
-     editor/render panes of an ABC doc → transport. ── */
+  /* ── Bottom bar: an IN-FLOW flex child at the end of the #unifile-app column.
+     Because the column is exactly `100dvh` (the visible viewport — no browser
+     chrome in a standalone PWA) and #uf-main takes the remaining space, the bar
+     naturally sits flush at the true screen bottom — no `position: fixed`, no
+     visualViewport math, no containing-block surprises.  Content is contextual:
+     commit pane → commit bar; editor/render panes of an ABC doc → transport. ── */
+  #uf-main { min-height: 0; }       /* allow the strip to shrink for the bar */
   #uf-bottom {
     display: none;                 /* shown only when a child bar is active */
-    position: fixed;
-    left: 0; right: 0; bottom: 0;
-    z-index: 130;
+    flex-shrink: 0;
     background: var(--bg-alt);
     box-shadow: 0 -1px 0 var(--border);
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   /* #uf-bottom prefix raises specificity above the desktop `#uf-transport` rule. */
   #uf-bottom #uf-transport, #uf-bottom #uf-commit-bar { display: none; }
+  /* #uf-bottom owns the safe-area inset on mobile — don't double it on the child. */
+  #uf-bottom #uf-transport { padding-bottom: 0; }
   /* commit pane → commit bar (any DSL); editor/render of an ABC doc → transport */
   #unifile-app[data-mobile-pane="commit"] #uf-bottom { display: block; }
   #unifile-app[data-mobile-pane="commit"] #uf-commit-bar { display: block; }
   #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-bottom { display: block; }
   #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-transport { display: flex; }
-
-  /* Reserve room so pane content isn't hidden behind the fixed bottom bar. */
-  .cm-scroller, .preview-pane, #uf-commit-log {
-    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
-  }
-  #unifile-app[data-mobile-pane="commit"] #uf-commit-log {
-    padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px)); /* taller commit bar */
-  }
 
   /* Crisp pane snapping — each pull settles on exactly one pane. */
   #uf-commit-log, #uf-editor-wrap, #uf-preview-wrap { scroll-snap-stop: always; }

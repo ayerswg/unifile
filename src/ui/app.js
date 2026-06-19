@@ -441,26 +441,14 @@ export class App {
       raf = requestAnimationFrame(() => { raf = 0; updatePane(); });
     }, { passive: true });
 
-    // Pin the bottom bar to the TRUE visible bottom. On iOS (Safari toolbar /
-    // home indicator / keyboard) the layout viewport extends past what's
-    // visible, leaving a gap below a `bottom:0` bar — visualViewport gives the
-    // real visible rectangle so we can offset the bar down into that space.
-    const bottom = document.getElementById('uf-bottom');
-    const vv = window.visualViewport;
-    const pinBottom = () => {
-      if (!bottom) return;
-      if (!_isMobile() || !vv) { bottom.style.bottom = ''; return; }
-      const gap = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
-      bottom.style.bottom = gap + 'px';
-    };
-    if (vv) { vv.addEventListener('resize', pinBottom); vv.addEventListener('scroll', pinBottom); }
-    window.addEventListener('orientationchange', () => setTimeout(pinBottom, 200));
-    pinBottom();
+    // The bottom bar is an in-flow flex child at the end of the `100dvh`
+    // #unifile-app column (see app.css), so it sits flush at the true visible
+    // bottom with no JS — no visualViewport pinning needed.
 
     // Open centred on the editor, and re-centre whenever we (re)enter mobile.
     scrollToEditor(false);
-    requestAnimationFrame(() => { updatePane(); pinBottom(); });
-    _mql.addEventListener('change', (e) => { if (e.matches) { scrollToEditor(false); } requestAnimationFrame(() => { updatePane(); pinBottom(); }); });
+    requestAnimationFrame(() => { updatePane(); });
+    _mql.addEventListener('change', (e) => { if (e.matches) { scrollToEditor(false); } requestAnimationFrame(() => { updatePane(); }); });
   }
 
   // ---------------------------------------------------------------------------
