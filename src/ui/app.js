@@ -38,6 +38,7 @@ import { Preview } from './preview.js';
 import { DslFooter } from './dsl-footer.js';
 import { mountSiteNav } from './site-nav.js';
 import { checkForUpdate } from './update-check.js';
+import { CommitBar } from './commit-bar.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { MergeDialog } from './merge-dialog.js';
@@ -189,7 +190,10 @@ export class App {
         </div>
         <div id="uf-preview-wrap"></div>
       </div>
-      <div id="uf-transport"></div>
+      <div id="uf-bottom">
+        <div id="uf-transport"></div>
+        <div id="uf-commit-bar"></div>
+      </div>
       <div id="uf-panels">
         <div id="uf-commit-panel"   style="display:none"></div>
         <div id="uf-blame-panel"    style="display:none"></div>
@@ -238,6 +242,10 @@ export class App {
     // The DSL transport is a global bottom bar (sticks to the screen bottom and
     // is visible in both the editor and preview panes), not a per-pane footer.
     this._components.dslFooter = new DslFooter(document.getElementById('uf-transport'));
+    // Mobile commit bar — the bottom bar shown on the commit (left) pane.
+    this._components.commitBar = new CommitBar(
+      document.getElementById('uf-commit-bar'), { onCommit: handlers.onCommit }
+    );
 
     this._components.commit = new CommitDialog(
       document.getElementById('uf-commit-panel'),
@@ -433,10 +441,26 @@ export class App {
       raf = requestAnimationFrame(() => { raf = 0; updatePane(); });
     }, { passive: true });
 
+    // Pin the bottom bar to the TRUE visible bottom. On iOS (Safari toolbar /
+    // home indicator / keyboard) the layout viewport extends past what's
+    // visible, leaving a gap below a `bottom:0` bar — visualViewport gives the
+    // real visible rectangle so we can offset the bar down into that space.
+    const bottom = document.getElementById('uf-bottom');
+    const vv = window.visualViewport;
+    const pinBottom = () => {
+      if (!bottom) return;
+      if (!_isMobile() || !vv) { bottom.style.bottom = ''; return; }
+      const gap = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+      bottom.style.bottom = gap + 'px';
+    };
+    if (vv) { vv.addEventListener('resize', pinBottom); vv.addEventListener('scroll', pinBottom); }
+    window.addEventListener('orientationchange', () => setTimeout(pinBottom, 200));
+    pinBottom();
+
     // Open centred on the editor, and re-centre whenever we (re)enter mobile.
     scrollToEditor(false);
-    requestAnimationFrame(updatePane);
-    _mql.addEventListener('change', (e) => { if (e.matches) { scrollToEditor(false); } requestAnimationFrame(updatePane); });
+    requestAnimationFrame(() => { updatePane(); pinBottom(); });
+    _mql.addEventListener('change', (e) => { if (e.matches) { scrollToEditor(false); } requestAnimationFrame(() => { updatePane(); pinBottom(); }); });
   }
 
   // ---------------------------------------------------------------------------

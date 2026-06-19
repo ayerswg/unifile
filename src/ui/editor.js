@@ -519,14 +519,19 @@ export class Editor {
       // appearance as drag-selecting text.  If there's a real range, select
       // it; otherwise just move the cursor.
       const hasRange = safeFrom < safeTo;
+      // On phones the editor is a separate horizontal-scroll pane.  Focusing it
+      // or scrolling it into view would yank the strip over to the DSL pane —
+      // so on mobile we set the selection (highlight) but DON'T focus/scroll;
+      // the highlight is waiting when the user pulls over to the editor pane.
+      const mobile = window.matchMedia('(max-width: 640px)').matches;
       this._view.dispatch({
         selection: hasRange
           ? { anchor: safeFrom, head: safeTo }
           : { anchor: safeFrom, head: safeFrom },
-        scrollIntoView: true,
+        scrollIntoView: !mobile,
         annotations: Transaction.userEvent.of(DSL_SELECT_EVENT)
       });
-      this._view.focus();
+      if (!mobile) this._view.focus();
     }));
 
     // ABC playback state → suppress active-line background while playing so it

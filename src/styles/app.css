@@ -233,11 +233,15 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* track the actual visible viewport on mobile (no vh gap) */
   overflow: hidden;
 }
 
 /* Pane position indicator is mobile-only (shown in the ≤640px media query). */
 #uf-pane-rail { display: none; }
+/* Bottom-bar wrapper is transparent on desktop (children flow normally). */
+#uf-bottom { display: contents; }
+#uf-commit-bar { display: none; }
 
 /* ==============================================================
    SITE NAV (shown only when the app is viewed in a browser tab on the web —
@@ -938,32 +942,40 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-mobile-pane="render"] #uf-pane-rail::after { transform: translateX(200%); }
 
   #uf-site-nav { order: -2; }
-  #pf-midi { display: none !important; }   /* MIDI routing is desktop-only */
+  /* MIDI routing is desktop-only — bottom bar is wholly play/scrubber/time. */
+  #pf-midi, .pf-midi-note { display: none !important; }
 
-  /* ── Per-pane top bar ──
-     editor + render → filename + hamburger; commit → branch + commit/dirty. */
-  #unifile-app[data-mobile-pane="editor"] .topbar-right,
-  #unifile-app[data-mobile-pane="render"] .topbar-right { display: none !important; }
-  #unifile-app[data-mobile-pane="commit"] .tb-hamburger,
-  #unifile-app[data-mobile-pane="commit"] .topbar-title { display: none !important; }
+  /* ── Top bar: consistent across panes — hamburger + filename. ── */
+  .topbar-right { display: none !important; }
   .topbar-title { flex: 1; }               /* filename takes the free width */
 
-  /* ── Persistent transport: a FIXED bar floating at the visible bottom ──
-     (the previous in-flow footer could be pushed off-screen on iOS PWAs). */
-  #unifile-app.abc-active #uf-transport {
-    display: flex !important;
+  /* ── Bottom bar: ONE fixed bar floating at the visible bottom (JS sets its
+     `bottom` from visualViewport so it sits flush even with the iOS toolbar /
+     home indicator).  Content is contextual: commit pane → commit bar; the
+     editor/render panes of an ABC doc → transport. ── */
+  #uf-bottom {
+    display: none;                 /* shown only when a child bar is active */
     position: fixed;
     left: 0; right: 0; bottom: 0;
     z-index: 130;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--bg-alt);
     box-shadow: 0 -1px 0 var(--border);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
-  #unifile-app:not(.abc-active) #uf-transport { display: none !important; }
-  /* Reserve room so pane content isn't hidden behind the fixed transport. */
-  #unifile-app.abc-active .cm-scroller,
-  #unifile-app.abc-active .preview-pane,
-  #unifile-app.abc-active #uf-commit-log {
-    padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px));
+  /* #uf-bottom prefix raises specificity above the desktop `#uf-transport` rule. */
+  #uf-bottom #uf-transport, #uf-bottom #uf-commit-bar { display: none; }
+  /* commit pane → commit bar (any DSL); editor/render of an ABC doc → transport */
+  #unifile-app[data-mobile-pane="commit"] #uf-bottom { display: block; }
+  #unifile-app[data-mobile-pane="commit"] #uf-commit-bar { display: block; }
+  #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-bottom { display: block; }
+  #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-transport { display: flex; }
+
+  /* Reserve room so pane content isn't hidden behind the fixed bottom bar. */
+  .cm-scroller, .preview-pane, #uf-commit-log {
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+  #unifile-app[data-mobile-pane="commit"] #uf-commit-log {
+    padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px)); /* taller commit bar */
   }
 
   /* Crisp pane snapping — each pull settles on exactly one pane. */
@@ -973,6 +985,37 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   .cm-content, .topbar-title, .pf-midi-select, .usn-input,
   input, select, textarea { font-size: 16px; }
 }
+
+/* ── Mobile commit bar ───────────────────────────────────────── */
+.cb { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; }
+.cb-row { display: flex; align-items: center; gap: 8px; }
+.cb-branch {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); font-family: var(--font-ui); font-size: 13px; padding: 4px 8px; cursor: pointer;
+}
+.cb-branch .cb-caret { color: var(--text-muted); }
+.cb-status { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+.cb-status.dirty { color: var(--accent); }
+.cb-status .cb-dot { font-size: 9px; }
+.cb-compose { gap: 6px; }
+.cb-msg { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); padding: 6px 8px; font-family: var(--font-ui); }
+.cb-ver { width: 84px; flex-shrink: 0; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); padding: 6px 8px; font-family: var(--font-ui); }
+.cb-commit {
+  flex-shrink: 0; background: var(--accent); border: none; border-radius: var(--radius-sm);
+  color: var(--bg); font-family: var(--font-ui); font-size: 13px; padding: 6px 12px; cursor: pointer;
+}
+.cb-commit:disabled { opacity: .4; cursor: default; }
+.cb-branch-menu { display: none; flex-direction: column; gap: 2px; padding: 4px 0 2px; }
+.cb-branch-menu.open { display: flex; }
+.cb-branch-item {
+  display: flex; align-items: center; gap: 6px; text-align: left;
+  background: none; border: none; color: var(--text); font-family: var(--font-ui);
+  font-size: 13px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.cb-branch-item:hover, .cb-branch-item.current { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 
 /* Commit-log pane contents (reuses the dropdown's commit-list markup). */
 .commit-log-pane { padding: 10px 12px 28px; }
