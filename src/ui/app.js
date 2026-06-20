@@ -407,30 +407,38 @@ export class App {
   // ---------------------------------------------------------------------------
 
   /**
-   * Pin `--app-height` to the real viewport height in pixels.
+   * Pin `--app-height` to the real *visible* viewport height in pixels.
    *
    * iOS PWAs make every CSS viewport unit unreliable for full-screen height:
    * `100vh` includes Safari chrome, `100dvh` hits the iOS 26 regression that
    * leaves a gap at the bottom, and `-webkit-fill-available` resolves short in
-   * standalone.  `window.innerHeight` is a concrete measurement of the actual
-   * usable viewport (== the full screen in a standalone PWA), so we write it to
-   * a custom property the shell height reads (see app.css #unifile-app).  This is
-   * the canonical "viewport units on mobile" fix.  We re-measure on resize /
-   * orientation change, and a few delayed ticks after launch because iOS reports
-   * a stale innerHeight for a beat while the standalone chrome settles.
+   * standalone.  So we measure in JS and write it to a custom property the shell
+   * height reads (see app.css #unifile-app) — the canonical "viewport units on
+   * mobile" fix.
+   *
+   * We use `visualViewport.height` (not `window.innerHeight`): with no keyboard
+   * it equals the full screen in a standalone PWA, but when the soft keyboard
+   * opens it shrinks to the area ABOVE the keyboard.  Since the document can't
+   * scroll (see _lockWindowScroll), sizing the app to that visible area is what
+   * lets the editor pane shrink so CodeMirror can keep the caret in view instead
+   * of hiding it behind the keyboard.  Fall back to innerHeight where there's no
+   * visualViewport.  Re-measured on resize / orientation change + a few delayed
+   * ticks after launch (iOS reports a stale size for a beat while chrome settles).
    */
   _trackViewportHeight() {
     if (this._viewportTracked) return;
     this._viewportTracked = true;
     const set = () => {
-      document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+      const h = Math.round(window.visualViewport?.height ?? window.innerHeight);
+      document.documentElement.style.setProperty('--app-height', `${h}px`);
     };
     set();
     window.addEventListener('resize', set);
     window.addEventListener('orientationchange', () => { set(); setTimeout(set, 300); });
     window.visualViewport?.addEventListener('resize', set);
+    window.visualViewport?.addEventListener('scroll', set);
     window.addEventListener('pageshow', set);            // bfcache restore (iOS)
-    // iOS standalone reports a stale innerHeight for ~a frame after launch.
+    // iOS reports a stale size for ~a frame after launch / keyboard transitions.
     [50, 200, 500].forEach(ms => setTimeout(set, ms));
   }
 
