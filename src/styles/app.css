@@ -218,7 +218,10 @@
 *, *::before, *::after { box-sizing: border-box; }
 
 html, body {
-  height: 100%;
+  /* 100vh, NOT 100% — `height:100%` resolves against the containing block and,
+     when iOS pushes content behind the status bar, fails to grow, leaving the
+     "chin gap" at the bottom. 100vh tracks the actual viewport. */
+  height: 100vh;
   margin: 0;
   overflow: hidden;
   background: var(--bg);
