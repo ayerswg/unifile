@@ -407,6 +407,15 @@ export class App {
   // ---------------------------------------------------------------------------
 
   _setupMobilePanes() {
+    // Flag installed/standalone launches so CSS can use 100vh/-webkit-fill-available
+    // (the iOS-safe full height) instead of 100dvh, which hits the iOS 26 regression
+    // that leaves a gap at the bottom.  Mirrors the display-mode media query as a
+    // fallback for older iOS that exposes navigator.standalone but not the media. */
+    const standalone =
+      ['standalone', 'fullscreen', 'minimal-ui'].some(m => matchMedia(`(display-mode: ${m})`).matches) ||
+      window.navigator.standalone === true;
+    if (standalone) document.documentElement.classList.add('uf-standalone');
+
     const logPane = document.getElementById('uf-commit-log');
     if (logPane && this._components.topbar?.mountCommitLog) {
       this._components.topbar.mountCommitLog(logPane);
