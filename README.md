@@ -100,6 +100,27 @@ That's it. Within a minute or two:
   updates (browsers block the cross-origin request) — users re-download the
   latest from the hub page (`/abc/`, `/get/`).
 
+### Release candidates
+
+Pre-release builds use the conventional SemVer `-rc.N` suffix so you can tell
+which candidate an installed copy is. The flow is identical — just tag the RC:
+
+```bash
+git tag v0.8.0-rc.1   # then bump to -rc.2, -rc.3, … as you iterate
+npm run build:site
+git add -A && git commit -m "Release v0.8.0-rc.1" && git push origin main v0.8.0-rc.1
+```
+
+Then cut the final release by tagging the bare version (`v0.8.0`) and rebuilding.
+The update check uses full SemVer 2.0 precedence, so:
+
+- `rc.2` is offered as an update to anyone on `rc.1`, and
+- the **final `v0.8.0` supersedes every `v0.8.0-rc.N`** (a release outranks its
+  pre-releases), so RC testers are prompted to move to the real release.
+
+The running version is always visible in **Settings → About** (it reads the
+baked-in `UNIFILE_VERSION`), so an installed PWA self-identifies its exact build.
+
 ### How versioning works under the hood
 
 - `build/build.mjs` `detectVersion()` runs `git describe --tags --abbrev=0`
