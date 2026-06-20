@@ -445,15 +445,21 @@ export class App {
     const main = document.getElementById('uf-main');
     const root = document.getElementById('unifile-app');
 
-    const scrollToEditor = (smooth = false) => {
+    // Scroll the strip to a pane by index (0=commit, 1=editor, 2=render).
+    const PANE_IDX = { commit: 0, editor: 1, render: 2 };
+    const scrollToPane = (idx, smooth = false) => {
       if (!_isMobile() || !main) return;
-      // Snap to the middle (editor) pane by index × pane width — more reliable
-      // than offsetLeft, which can be fractional and land between snap points.
-      const go = () => main.scrollTo({ left: main.clientWidth, behavior: smooth ? 'smooth' : 'auto' });
+      // Snap by index × pane width — more reliable than offsetLeft, which can be
+      // fractional and land between snap points.
+      const go = () => main.scrollTo({ left: main.clientWidth * idx, behavior: smooth ? 'smooth' : 'auto' });
       // Run after two frames + a tick so pane widths have settled (fonts, safe-area).
       requestAnimationFrame(() => requestAnimationFrame(go));
       setTimeout(go, 120);
     };
+    const scrollToEditor = (smooth = false) => scrollToPane(PANE_IDX.editor, smooth);
+
+    // The top-bar branch/status chip (mobile) asks to slide to the commit pane.
+    state.on('mobile-goto-pane', (pane) => scrollToPane(PANE_IDX[pane] ?? 1, true));
 
     // Track which pane is centred so the top bar can adapt per pane on mobile
     // (commit → branch dropdown, editor → menu+title, render → transport).

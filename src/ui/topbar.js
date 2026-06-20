@@ -101,6 +101,18 @@ export class TopBar {
             `}
           </div>
         </div>
+
+        <!-- Mobile-only compact branch + dirty indicator. Always visible so the
+             current branch and state are clear from any pane; tap slides to the
+             commit pane (full switcher + commit composer). Hidden on desktop,
+             where the .topbar-right pill group is shown instead. -->
+        <button class="tb-status-chip${isDetached ? ' detached' : ''}${isDirty ? ' dirty' : ''}"
+          id="tb-status-chip" aria-label="Branch and commit status"
+          title="${isDetached ? 'Detached HEAD — tap to manage' : `Branch ${escHtml(branch)} — ${isDirty ? 'uncommitted changes' : 'all committed'} — tap to commit`}">
+          ${iconBranch()}
+          <span class="tb-status-branch">${isDetached ? '⚠' : escHtml(branch)}</span>
+          ${isDirty ? '<span class="tb-status-dot" aria-hidden="true">●</span>' : ''}
+        </button>
       </div>
 
       <div class="vcs-dropdown dsl-menu-dropdown${this._dslMenuOpen ? ' open' : ''}" id="tb-dsl-menu-dd">
@@ -279,6 +291,16 @@ export class TopBar {
     const commitActionBtn = this.el.querySelector('#tb-commit-action');
     if (commitActionBtn) {
       commitActionBtn.addEventListener('click', () => state.openPanel(PANELS.COMMIT));
+    }
+
+    // Mobile branch/status chip → slide to the commit pane (full switcher +
+    // commit composer live there). app.js _setupMobilePanes handles the scroll.
+    const statusChip = this.el.querySelector('#tb-status-chip');
+    if (statusChip) {
+      statusChip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        state.emit('mobile-goto-pane', 'commit');
+      });
     }
 
     // DSL menu toggle (far-left icon button)

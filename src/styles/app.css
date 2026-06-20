@@ -352,6 +352,9 @@ html, body {
   text-overflow: clip;
 }
 
+/* Mobile branch/status chip — desktop uses the .topbar-right pill group instead. */
+.tb-status-chip { display: none; }
+
 /* DSL type icon — small muted icon to the left of the title (legacy, kept for reference) */
 .dsl-icon {
   flex-shrink: 0;
@@ -957,9 +960,43 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* MIDI routing is desktop-only — bottom bar is wholly play/scrubber/time. */
   #pf-midi, .pf-midi-note { display: none !important; }
 
-  /* ── Top bar: consistent across panes — hamburger + filename. ── */
+  /* ── Top bar: hamburger + filename (flexes) + branch/status chip. ── */
   .topbar-right { display: none !important; }
-  .topbar-title { flex: 1; }               /* filename takes the free width */
+  .topbar-title {
+    flex: 1 1 auto;
+    max-width: none;        /* take all the room left by the chip; ellipsize only then */
+    min-width: 2ch;
+  }
+
+  /* Branch/status chip on the far right — always shows branch + dirty state. */
+  .tb-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    max-width: 42vw;        /* cap so a long branch can't starve the title */
+    height: 28px;
+    padding: 0 9px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .tb-status-chip svg { flex: 0 0 auto; width: 13px; height: 13px; opacity: .8; }
+  .tb-status-chip .tb-status-branch {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tb-status-chip .tb-status-dot { flex: 0 0 auto; font-size: 9px; color: var(--accent); }
+  .tb-status-chip.dirty { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+  .tb-status-chip.detached { color: var(--warning, #d20f39); border-color: currentColor; }
+  .tb-status-chip:active { background: var(--bg-overlay); }
 
   /* ── Bottom bar: an IN-FLOW flex child at the end of the #unifile-app column.
      Because the column is exactly `100dvh` (the visible viewport — no browser
@@ -3097,7 +3134,8 @@ noscript .noscript-wrap {
 
 @media (max-width: 640px) {
   .topbar { gap: 4px; padding: 0 8px; }
-  .topbar-title { max-width: 120px; }
+  /* (title width is handled by the flex rules above — no hard cap, so it uses
+     all the room left by the hamburger + branch chip before ellipsizing) */
   .vcs-pill .vcs-pill-text { display: none; }
   .dialog { width: 95vw; }
   .dialog-wide { width: 95vw; }
