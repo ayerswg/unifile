@@ -406,15 +406,36 @@ export class App {
   // editor pane on entry so the strip opens on the document, not the history.
   // ---------------------------------------------------------------------------
 
+  /**
+   * Pin `--app-height` to the real viewport height in pixels.
+   *
+   * iOS PWAs make every CSS viewport unit unreliable for full-screen height:
+   * `100vh` includes Safari chrome, `100dvh` hits the iOS 26 regression that
+   * leaves a gap at the bottom, and `-webkit-fill-available` resolves short in
+   * standalone.  `window.innerHeight` is a concrete measurement of the actual
+   * usable viewport (== the full screen in a standalone PWA), so we write it to
+   * a custom property the shell height reads (see app.css #unifile-app).  This is
+   * the canonical "viewport units on mobile" fix.  We re-measure on resize /
+   * orientation change, and a few delayed ticks after launch because iOS reports
+   * a stale innerHeight for a beat while the standalone chrome settles.
+   */
+  _trackViewportHeight() {
+    if (this._viewportTracked) return;
+    this._viewportTracked = true;
+    const set = () => {
+      document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+    };
+    set();
+    window.addEventListener('resize', set);
+    window.addEventListener('orientationchange', () => { set(); setTimeout(set, 300); });
+    window.visualViewport?.addEventListener('resize', set);
+    window.addEventListener('pageshow', set);            // bfcache restore (iOS)
+    // iOS standalone reports a stale innerHeight for ~a frame after launch.
+    [50, 200, 500].forEach(ms => setTimeout(set, ms));
+  }
+
   _setupMobilePanes() {
-    // Flag installed/standalone launches so CSS can use 100vh/-webkit-fill-available
-    // (the iOS-safe full height) instead of 100dvh, which hits the iOS 26 regression
-    // that leaves a gap at the bottom.  Mirrors the display-mode media query as a
-    // fallback for older iOS that exposes navigator.standalone but not the media. */
-    const standalone =
-      ['standalone', 'fullscreen', 'minimal-ui'].some(m => matchMedia(`(display-mode: ${m})`).matches) ||
-      window.navigator.standalone === true;
-    if (standalone) document.documentElement.classList.add('uf-standalone');
+    this._trackViewportHeight();
 
     const logPane = document.getElementById('uf-commit-log');
     if (logPane && this._components.topbar?.mountCommitLog) {

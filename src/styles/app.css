@@ -229,35 +229,22 @@ html, body {
 }
 
 /* ---- App shell ---- */
+/* Height is the eternal iOS-PWA headache: `100vh` includes Safari chrome,
+   `100dvh` hits the iOS 26 regression that leaves a gap at the bottom, and
+   `-webkit-fill-available` resolves short in standalone PWAs.  None of the CSS
+   viewport units are reliable.  The robust fix (the classic "viewport units on
+   mobile" trick) is to MEASURE the real viewport in JS — `window.innerHeight`,
+   a concrete pixel value of the actual screen in a standalone PWA — and write it
+   to `--app-height` (see app.js `_trackViewportHeight`).  The CSS units below are
+   only fallbacks for the first paint before JS runs. */
 #unifile-app {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  height: 100dvh; /* browser tab: track the dynamic viewport (Safari toolbar) */
+  height: 100dvh;
+  height: var(--app-height, 100dvh);
   overflow: hidden;
 }
-
-/* Installed PWA (iOS/Android standalone): there is no browser chrome, so the
-   layout viewport IS the screen and `100vh` == the full screen.  This is the
-   reliable path on iOS — `100dvh` hits the iOS 26 Safari regression where the
-   dynamic viewport stops covering the screen and leaves a GAP AT THE BOTTOM
-   (the persistent-footer bug).  `-webkit-fill-available` is the iOS-proven
-   full-height value, used last so it wins where supported.  With
-   `viewport-fit=cover` the column reaches behind the home indicator; the bottom
-   bar's `env(safe-area-inset-bottom)` padding lifts its controls clear of it. */
-@media all and (display-mode: standalone),
-       all and (display-mode: fullscreen),
-       all and (display-mode: minimal-ui) {
-  html, body { height: 100vh; height: -webkit-fill-available; }
-  #unifile-app {
-    height: 100vh;
-    height: -webkit-fill-available;
-  }
-}
-/* JS fallback for older iOS that exposes navigator.standalone but not the media
-   query (class set in app.js _setupMobilePanes). */
-html.uf-standalone, html.uf-standalone body { height: 100vh; height: -webkit-fill-available; }
-html.uf-standalone #unifile-app { height: 100vh; height: -webkit-fill-available; }
 
 /* Pane position indicator is mobile-only (shown in the ≤640px media query). */
 #uf-pane-rail { display: none; }
