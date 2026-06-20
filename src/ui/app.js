@@ -434,8 +434,35 @@ export class App {
     [50, 200, 500].forEach(ms => setTimeout(set, ms));
   }
 
+  /**
+   * Keep the document/window pinned at (0,0).
+   *
+   * On iOS, when the soft keyboard is up and you scroll (or an inner scroller
+   * overscrolls), Safari scrolls the whole *document* to reveal the focused
+   * line — and it sticks, shifting our in-flow top/bottom bars off-screen (the
+   * top bar slides up under the status bar).  The document itself must never
+   * scroll; only the inner panes (.cm-scroller / preview / commit log) do.  We
+   * snap any document scroll back to the origin.  `overscroll-behavior` (CSS)
+   * stops the chaining in the first place; this is the belt-and-suspenders.
+   */
+  _lockWindowScroll() {
+    if (this._scrollLocked) return;
+    this._scrollLocked = true;
+    const reset = () => {
+      if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+      const se = document.scrollingElement;
+      if (se && (se.scrollTop || se.scrollLeft)) { se.scrollTop = 0; se.scrollLeft = 0; }
+    };
+    window.addEventListener('scroll', reset, { passive: true });
+    window.visualViewport?.addEventListener('scroll', reset);
+    window.visualViewport?.addEventListener('resize', reset);
+    // When a field blurs / the keyboard dismisses, settle back to the top.
+    document.addEventListener('focusout', () => setTimeout(reset, 50));
+  }
+
   _setupMobilePanes() {
     this._trackViewportHeight();
+    this._lockWindowScroll();
 
     const logPane = document.getElementById('uf-commit-log');
     if (logPane && this._components.topbar?.mountCommitLog) {

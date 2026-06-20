@@ -224,6 +224,10 @@ html, body {
   height: 100vh;
   margin: 0;
   overflow: hidden;
+  /* Never let an inner scroller chain its overscroll up to the document — on iOS
+     that scrolls the whole page (esp. with the keyboard up) and shifts the
+     in-flow top/bottom bars off-screen. See app.js _lockWindowScroll. */
+  overscroll-behavior: none;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
@@ -924,6 +928,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #uf-commit-log {
     flex-direction: column;
     overflow-y: auto;
+    overscroll-behavior: contain;  /* don't chain to the document (iOS keyboard shift) */
     background: var(--bg);
     border-right: 1px solid var(--border);
   }
@@ -1211,6 +1216,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   overflow: auto;
   height: 100%;
   font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  /* Keep overscroll inside the editor — don't chain to the document (iOS shift). */
+  overscroll-behavior: contain;
 }
 
 /* Light-mode palette overrides — CM theme only handles the dark side */
@@ -1241,6 +1248,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   flex: 1;
   min-height: 0;       /* allow flex shrink past content height */
   overflow-y: auto;
+  overscroll-behavior: contain;  /* don't chain overscroll to the document (iOS shift) */
   background: var(--bg);
   border-left: 1px solid var(--border);
 }
