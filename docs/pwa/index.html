@@ -15,7 +15,12 @@
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#181825">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- NB: deliberately NO `apple-mobile-web-app-status-bar-style: black-translucent`.
+       That style is the iOS "chin gap" bug: iOS offsets the whole view up ~59px
+       (the status-bar height) without growing the viewport, leaving a fixed gap
+       at the bottom that no CSS can recover.  With the default status-bar style,
+       `display:standalone` + `viewport-fit=cover` reserves the status bar and lets
+       content reach the true bottom — no chin gap.  (See xefig PWA chin-gap tests.) -->
   <meta name="apple-mobile-web-app-title" content="Unifile">
 
   <link rel="stylesheet" href="./app.css">
