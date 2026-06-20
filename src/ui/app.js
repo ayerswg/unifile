@@ -158,7 +158,7 @@ export class App {
     }
 
     // 13. Offer an upgrade if a newer release has been published (non-blocking).
-    checkForUpdate({ isQuine: IS_QUINE });
+    checkForUpdate();
   }
 
   // ---------------------------------------------------------------------------

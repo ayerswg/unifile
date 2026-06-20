@@ -2650,6 +2650,27 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   border-bottom: 1px solid var(--border);
 }
 
+/* Release-candidate opt-in */
+.settings-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  margin: 2px 0 12px;
+}
+.settings-check input { margin-top: 2px; flex: 0 0 auto; }
+.settings-check small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.settings-update-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.settings-update-status { font-size: 12px; color: var(--text-muted); }
+.settings-update-status.is-update { color: var(--accent); }
+
 /* About / version line */
 .settings-about {
   font-size: 13px;

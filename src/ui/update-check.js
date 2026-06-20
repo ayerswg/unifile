@@ -7,6 +7,7 @@
  */
 
 import { state } from './state.js';
+import { loadUserPrefs, IS_QUINE } from '../core/storage.js';
 
 // Stamped by esbuild `define` in build.mjs; guard for any non-built context.
 const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
@@ -44,18 +45,51 @@ function _cmp(a, b) {
 /** Is `remote` a newer version than `local`? */
 function isNewer(remote, local) { return _cmp(remote, local) > 0; }
 
-export async function checkForUpdate({ isQuine } = {}) {
-  // Opened from disk: a cross-origin fetch to the site would be CORS-blocked.
-  if (location.protocol === 'file:') return;
-  try {
-    const res = await fetch('/version.json', { cache: 'no-store' });
-    if (!res.ok) return;
-    const remote = (await res.json())?.version;
-    if (remote && isNewer(remote, VERSION)) _showBanner(VERSION, remote, isQuine);
-  } catch { /* offline / not hosted alongside the site — ignore */ }
+/** True if the user has opted into the release-candidate channel (Settings). */
+export function isRcChannel() {
+  return loadUserPrefs().updateChannel === 'rc';
 }
 
-function _showBanner(local, remote, isQuine) {
+/**
+ * Pick the version to compare against, honouring the user's channel:
+ *   • stable channel → the latest stable (no pre-release)
+ *   • rc channel     → the latest overall (may be a pre-release)
+ * Falls back to the legacy single `version` field for older version.json files.
+ */
+function _target(data) {
+  const stable = data.stable ?? data.version;
+  const latest = data.latest ?? data.version;
+  return isRcChannel() ? (latest ?? stable) : stable;
+}
+
+/**
+ * Check the published version.json and, if a newer build exists on the user's
+ * channel, show the update banner.
+ *
+ * @param {{force?: boolean}} [opts]  force = manual check (Settings button).
+ * @returns {Promise<{status:'update'|'current'|'file'|'error', current:string, remote?:string}>}
+ */
+export async function checkForUpdate({ force } = {}) {
+  // Opened from disk: a cross-origin fetch to the site would be CORS-blocked.
+  if (location.protocol === 'file:') return { status: 'file', current: VERSION };
+  try {
+    // Cache-bust so an intermediary/CDN edge cache can't hand us a stale file —
+    // the usual reason a fresh release "isn't detected".
+    const res = await fetch(`/version.json?_=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return { status: 'error', current: VERSION };
+    const data = await res.json();
+    const remote = _target(data);
+    if (remote && isNewer(remote, VERSION)) {
+      _showBanner(VERSION, remote);
+      return { status: 'update', current: VERSION, remote };
+    }
+    return { status: 'current', current: VERSION, remote };
+  } catch {
+    return { status: 'error', current: VERSION };
+  }
+}
+
+function _showBanner(local, remote) {
   if (document.getElementById('uf-update-banner')) return;
   const el = document.createElement('div');
   el.id = 'uf-update-banner';
@@ -66,7 +100,7 @@ function _showBanner(local, remote, isQuine) {
     <button class="draft-banner-btn draft-banner-close" type="button" aria-label="Dismiss">×</button>`;
 
   el.querySelector('.draft-banner-close').addEventListener('click', () => el.remove());
-  el.querySelector('.update-apply').addEventListener('click', () => _applyUpdate(isQuine));
+  el.querySelector('.update-apply').addEventListener('click', () => _applyUpdate());
 
   const main = document.getElementById('uf-main');
   main?.parentElement?.insertBefore(el, main);
@@ -74,8 +108,8 @@ function _showBanner(local, remote, isQuine) {
 }
 
 /** Apply the update: for a PWA, swap the service worker then reload; else reload. */
-async function _applyUpdate(isQuine) {
-  if (!isQuine && 'serviceWorker' in navigator) {
+async function _applyUpdate() {
+  if (!IS_QUINE && 'serviceWorker' in navigator) {
     try {
       const reg = await navigator.serviceWorker.getRegistration();
       if (reg) {

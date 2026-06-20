@@ -8,6 +8,7 @@
 import { state, PANELS } from './state.js';
 import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
 import { applyTheme } from './theme.js';
+import { checkForUpdate } from './update-check.js';
 
 // Stamped by esbuild `define` in build.mjs (from the latest git tag); guard for
 // any non-built context (e.g. raw ESM in tests).
@@ -90,6 +91,19 @@ export class SettingsPanel {
             <p id="settings-error" class="form-error" hidden></p>
             <p id="settings-saved" class="form-success" hidden>Settings saved.</p>
 
+            <!-- ── Updates ────────────────────────────────────────────── -->
+            <div class="settings-section-label">Updates</div>
+            <label class="settings-check">
+              <input type="checkbox" id="settings-rc" ${prefs.updateChannel === 'rc' ? 'checked' : ''}>
+              <span>Receive release candidates
+                <small>Get pre-release (rc) builds early. Off = stable releases only.</small>
+              </span>
+            </label>
+            <div class="settings-update-row">
+              <button class="btn btn-ghost" id="settings-check-update" type="button">Check for updates</button>
+              <span class="settings-update-status" id="settings-update-status" aria-live="polite"></span>
+            </div>
+
             <!-- ── About ──────────────────────────────────────────────── -->
             <div class="settings-section-label">About</div>
             <p class="settings-about">
@@ -143,6 +157,46 @@ export class SettingsPanel {
         });
       });
     });
+
+    // Release-candidate opt-in — saved immediately, then re-check so opting in
+    // can surface a pending RC right away.
+    const rcToggle = this.el.querySelector('#settings-rc');
+    rcToggle?.addEventListener('change', () => {
+      saveUserPrefs({ updateChannel: rcToggle.checked ? 'rc' : 'stable' });
+      this._checkUpdate();
+    });
+
+    // Manual "Check for updates" — forces a cache-busting check.
+    this.el.querySelector('#settings-check-update')
+      ?.addEventListener('click', () => this._checkUpdate());
+  }
+
+  async _checkUpdate() {
+    const statusEl = this.el.querySelector('#settings-update-status');
+    const btn = this.el.querySelector('#settings-check-update');
+    if (!statusEl) return;
+    statusEl.textContent = 'Checking…';
+    statusEl.className = 'settings-update-status';
+    if (btn) btn.disabled = true;
+    try {
+      const r = await checkForUpdate({ force: true });
+      switch (r.status) {
+        case 'update':
+          statusEl.textContent = `Update available: v${r.remote} — see the banner to apply.`;
+          statusEl.classList.add('is-update');
+          break;
+        case 'current':
+          statusEl.textContent = `You're on the latest (v${r.current}).`;
+          break;
+        case 'file':
+          statusEl.textContent = "Can't check from a downloaded file — open the hosted app or PWA.";
+          break;
+        default:
+          statusEl.textContent = "Couldn't reach the update server. Try again later.";
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   _save() {

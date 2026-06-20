@@ -35,6 +35,49 @@ function detectVersion() {
   catch { return '0.0.0'; }
 }
 
+// --- SemVer 2.0 precedence (mirror of src/ui/update-check.js) -----------------
+function _parse(v) {
+  const [core, pre] = String(v).trim().replace(/^v/, '').split('-');
+  const n = core.split('.').map(x => parseInt(x, 10) || 0);
+  return { core: [n[0] || 0, n[1] || 0, n[2] || 0], pre: pre ? pre.split('.') : null };
+}
+function _cmp(a, b) {
+  const A = _parse(a), B = _parse(b);
+  for (let i = 0; i < 3; i++) if (A.core[i] !== B.core[i]) return A.core[i] > B.core[i] ? 1 : -1;
+  if (!A.pre && !B.pre) return 0;
+  if (!A.pre) return 1;
+  if (!B.pre) return -1;
+  for (let i = 0; i < Math.max(A.pre.length, B.pre.length); i++) {
+    const x = A.pre[i], y = B.pre[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+    if (xn && yn) { if (+x !== +y) return +x > +y ? 1 : -1; }
+    else if (xn !== yn) return xn ? -1 : 1;
+    else if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
+}
+
+/**
+ * Resolve the two update channels from git tags:
+ *   • latest  = highest version overall (may be a pre-release / RC)
+ *   • stable  = highest version with no pre-release suffix
+ * Falls back to detectVersion() when no tags exist.
+ */
+function detectChannels() {
+  let tags = [];
+  try {
+    tags = execSync('git tag', { cwd: ROOT }).toString().split('\n')
+      .map(t => t.trim().replace(/^v/, '')).filter(Boolean);
+  } catch { /* no tags */ }
+  if (!tags.length) { const v = detectVersion(); return { stable: v, latest: v }; }
+  const sorted = tags.slice().sort((a, b) => _cmp(b, a)); // desc
+  const latest = sorted[0];
+  const stable = sorted.find(v => !v.includes('-')) ?? latest;
+  return { stable, latest };
+}
+
 const FILES = [
   ['unifile.html',     'dl/unifile.html'],
   ['unifile.abc.html', 'dl/unifile.abc.html'],
@@ -72,11 +115,14 @@ async function main() {
     console.log(`  ✓ docs/${dst}/`);
   }
 
-  // 4. Publish the current version so installed/hosted apps can offer an upgrade.
-  const version = detectVersion();
+  // 4. Publish the version channels so installed/hosted apps can offer an upgrade.
+  //    `version` (= stable) is kept for backward-compat with older clients that
+  //    read a single field; new clients pick `stable` or `latest` per the user's
+  //    release-candidate opt-in (Settings).
+  const { stable, latest } = detectChannels();
   await writeFile(join(DOCS, 'version.json'),
-    JSON.stringify({ version, released: new Date().toISOString() }, null, 2) + '\n', 'utf8');
-  console.log(`  ✓ docs/version.json  (v${version})`);
+    JSON.stringify({ version: stable, stable, latest, released: new Date().toISOString() }, null, 2) + '\n', 'utf8');
+  console.log(`  ✓ docs/version.json  (stable v${stable}, latest v${latest})`);
 
   console.log('\nSite synced. Commit docs/ and push to publish on GitHub Pages.');
 }
