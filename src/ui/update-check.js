@@ -11,17 +11,38 @@ import { state } from './state.js';
 // Stamped by esbuild `define` in build.mjs; guard for any non-built context.
 const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
 
-/** Numeric-segment semver comparison: is `remote` newer than `local`? */
-function isNewer(remote, local) {
-  const r = String(remote).split('.').map(n => parseInt(n, 10) || 0);
-  const l = String(local).split('.').map(n => parseInt(n, 10) || 0);
-  for (let i = 0; i < Math.max(r.length, l.length); i++) {
-    const a = r[i] || 0, b = l[i] || 0;
-    if (a > b) return true;
-    if (a < b) return false;
-  }
-  return false;
+/** Parse `1.2.3-rc.4` → { core:[1,2,3], pre:['rc','4'] | null } (leading v stripped). */
+function _parse(v) {
+  const [core, pre] = String(v).trim().replace(/^v/, '').split('-');
+  const n = core.split('.').map(x => parseInt(x, 10) || 0);
+  return { core: [n[0] || 0, n[1] || 0, n[2] || 0], pre: pre ? pre.split('.') : null };
 }
+
+/**
+ * SemVer 2.0 precedence compare → +1 if a > b, -1 if a < b, 0 if equal.
+ * Crucially: a release outranks its pre-releases (1.0.0 > 1.0.0-rc.2), and
+ * pre-release identifiers compare per spec (rc.2 > rc.1; numeric < alphanumeric).
+ */
+function _cmp(a, b) {
+  const A = _parse(a), B = _parse(b);
+  for (let i = 0; i < 3; i++) if (A.core[i] !== B.core[i]) return A.core[i] > B.core[i] ? 1 : -1;
+  if (!A.pre && !B.pre) return 0;
+  if (!A.pre) return 1;          // a is the final release → newer than any pre-release
+  if (!B.pre) return -1;
+  for (let i = 0; i < Math.max(A.pre.length, B.pre.length); i++) {
+    const x = A.pre[i], y = B.pre[i];
+    if (x === undefined) return -1;   // shorter pre-release set has lower precedence
+    if (y === undefined) return 1;
+    const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+    if (xn && yn) { if (+x !== +y) return +x > +y ? 1 : -1; }
+    else if (xn !== yn) return xn ? -1 : 1;   // numeric identifiers rank below alphanumeric
+    else if (x !== y) return x > y ? 1 : -1;   // ASCII order
+  }
+  return 0;
+}
+
+/** Is `remote` a newer version than `local`? */
+function isNewer(remote, local) { return _cmp(remote, local) > 0; }
 
 export async function checkForUpdate({ isQuine } = {}) {
   // Opened from disk: a cross-origin fetch to the site would be CORS-blocked.

@@ -2623,6 +2623,17 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   border-bottom: 1px solid var(--border);
 }
 
+/* About / version line */
+.settings-about {
+  font-size: 13px;
+  color: var(--text-sub);
+  margin: 0;
+}
+.settings-version {
+  font-family: var(--font-mono, monospace);
+  color: var(--text);
+}
+
 /* Theme toggle button group (Dark / Auto / Light) */
 .theme-toggle-group {
   display: inline-flex;

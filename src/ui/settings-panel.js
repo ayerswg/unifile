@@ -9,6 +9,10 @@ import { state, PANELS } from './state.js';
 import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
 import { applyTheme } from './theme.js';
 
+// Stamped by esbuild `define` in build.mjs (from the latest git tag); guard for
+// any non-built context (e.g. raw ESM in tests).
+const APP_VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
+
 export class SettingsPanel {
   /** @param {HTMLElement} container */
   constructor(container) {
@@ -85,6 +89,12 @@ export class SettingsPanel {
 
             <p id="settings-error" class="form-error" hidden></p>
             <p id="settings-saved" class="form-success" hidden>Settings saved.</p>
+
+            <!-- ── About ──────────────────────────────────────────────── -->
+            <div class="settings-section-label">About</div>
+            <p class="settings-about">
+              Unifile <span class="settings-version">v${escHtml(APP_VERSION)}</span>
+            </p>
           </div>
 
           <div class="dialog-footer">
