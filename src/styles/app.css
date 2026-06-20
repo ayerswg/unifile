@@ -239,12 +239,23 @@ html, body {
 /* Height is the eternal iOS-PWA headache: `100vh` includes Safari chrome,
    `100dvh` hits the iOS 26 regression that leaves a gap at the bottom, and
    `-webkit-fill-available` resolves short in standalone PWAs.  None of the CSS
-   viewport units are reliable.  The robust fix (the classic "viewport units on
-   mobile" trick) is to MEASURE the real viewport in JS — `window.innerHeight`,
-   a concrete pixel value of the actual screen in a standalone PWA — and write it
-   to `--app-height` (see app.js `_trackViewportHeight`).  The CSS units below are
-   only fallbacks for the first paint before JS runs. */
+   viewport units are reliable, so we MEASURE the visual viewport in JS and pin
+   the shell to it (see app.js `_trackViewportHeight`):
+     • --app-height = visualViewport.height — shrinks above the soft keyboard so
+       the editor can keep the caret visible.
+     • --app-vv-top = visualViewport.offsetTop — when iOS pans the visual viewport
+       (scrolling while the keyboard is up) the shell follows instead of leaving a
+       gap / shifting the bars.
+   The shell is `position: fixed` (relative to the layout viewport, which the
+   scroll-lock keeps at the screen top) so `top`/`height` track the visible
+   rectangle exactly.  No `transform` here on purpose — it would turn the shell
+   into the containing block for #uf-panels (position:fixed).  CSS units are
+   first-paint fallbacks only. */
 #unifile-app {
+  position: fixed;
+  left: 0;
+  top: var(--app-vv-top, 0px);
+  width: 100%;
   display: flex;
   flex-direction: column;
   height: 100vh;

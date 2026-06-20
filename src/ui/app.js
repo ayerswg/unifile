@@ -429,8 +429,12 @@ export class App {
     if (this._viewportTracked) return;
     this._viewportTracked = true;
     const set = () => {
-      const h = Math.round(window.visualViewport?.height ?? window.innerHeight);
-      document.documentElement.style.setProperty('--app-height', `${h}px`);
+      const vv = window.visualViewport;
+      const h = Math.round(vv?.height ?? window.innerHeight);
+      const top = Math.round(vv?.offsetTop ?? 0);
+      const root = document.documentElement.style;
+      root.setProperty('--app-height', `${h}px`);
+      root.setProperty('--app-vv-top', `${top}px`);
     };
     set();
     window.addEventListener('resize', set);
