@@ -112,14 +112,23 @@ git add -A && git commit -m "Release v0.8.0-rc.1" && git push origin main v0.8.0
 ```
 
 Then cut the final release by tagging the bare version (`v0.8.0`) and rebuilding.
-The update check uses full SemVer 2.0 precedence, so:
 
-- `rc.2` is offered as an update to anyone on `rc.1`, and
-- the **final `v0.8.0` supersedes every `v0.8.0-rc.N`** (a release outranks its
-  pre-releases), so RC testers are prompted to move to the real release.
+**Two channels.** `version.json` publishes both `stable` (highest non-pre-release
+tag) and `latest` (highest tag overall, which may be an RC). The update check
+honours the user's channel:
 
-The running version is always visible in **Settings → About** (it reads the
-baked-in `UNIFILE_VERSION`), so an installed PWA self-identifies its exact build.
+- **Stable (default)** — only stable releases are offered. Tagging an RC does
+  **not** prompt regular users.
+- **Release candidates** — opt in via **Settings → Updates → "Receive release
+  candidates"**; the user is then offered `latest` (RCs included).
+
+Either way the comparison uses full SemVer 2.0 precedence, so `rc.2` is offered
+over `rc.1`, and the **final `v0.8.0` supersedes every `v0.8.0-rc.N`** (a release
+outranks its pre-releases) — RC testers are pulled forward to the real release.
+
+Settings → Updates also has a **"Check for updates"** button (cache-busts
+`version.json` to defeat CDN/edge caching), and **Settings → About** shows the
+running `UNIFILE_VERSION`, so an installed PWA self-identifies its exact build.
 
 ### How versioning works under the hood
 
