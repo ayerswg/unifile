@@ -2766,6 +2766,23 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .settings-update-status.is-update { color: var(--accent); }
 .settings-update-status.is-error  { color: var(--warning, #d20f39); }
 
+/* Google Drive file chooser */
+.settings-drive-files:empty { display: none; }
+.settings-drive-files {
+  margin-top: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  max-height: 180px; overflow: auto;
+}
+.settings-drive-empty { padding: 8px 10px; font-size: 12px; color: var(--text-muted); }
+.settings-drive-file {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  background: none; border: none; border-bottom: 1px solid var(--border);
+  color: var(--text); font-family: var(--font-ui); padding: 7px 10px; cursor: pointer;
+}
+.settings-drive-file:last-child { border-bottom: none; }
+.settings-drive-file:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.settings-drive-file .sdf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.settings-drive-file .sdf-date { flex-shrink: 0; font-size: 11px; color: var(--text-muted); }
+
 /* About / version line */
 .settings-about {
   font-size: 13px;

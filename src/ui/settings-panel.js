@@ -9,7 +9,7 @@ import { state, PANELS } from './state.js';
 import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
 import { applyTheme } from './theme.js';
 import { checkForUpdate } from './update-check.js';
-import { isDriveSupported } from '../core/gdrive.js';
+import { isDriveSupported, listAppFiles } from '../core/gdrive.js';
 
 // Stamped by esbuild `define` in build.mjs (from the latest git tag); guard for
 // any non-built context (e.g. raw ESM in tests).
@@ -130,8 +130,10 @@ export class SettingsPanel {
             <div class="settings-update-row">
               <button class="btn btn-ghost" id="settings-drive-push" type="button"${driveSupported ? '' : ' disabled'}>Push to Drive</button>
               <button class="btn btn-ghost" id="settings-drive-pull" type="button"${driveSupported ? '' : ' disabled'}>Pull from Drive</button>
+              <button class="btn btn-ghost" id="settings-drive-choose" type="button"${driveSupported ? '' : ' disabled'}>Choose…</button>
               <span class="settings-update-status" id="settings-drive-status" aria-live="polite"></span>
             </div>
+            <div class="settings-drive-files" id="settings-drive-files"></div>
 
             <!-- ── About ──────────────────────────────────────────────── -->
             <div class="settings-section-label">About</div>
@@ -205,6 +207,29 @@ export class SettingsPanel {
     gclient?.addEventListener('change', persistClient);
     this.el.querySelector('#settings-drive-push')?.addEventListener('click', () => { persistClient(); state.emit('drive-push'); });
     this.el.querySelector('#settings-drive-pull')?.addEventListener('click', () => { persistClient(); state.emit('drive-pull'); });
+    this.el.querySelector('#settings-drive-choose')?.addEventListener('click', () => { persistClient(); this._driveChoose(); });
+  }
+
+  /** List the app's Drive files and let the user pick one to pull. */
+  async _driveChoose() {
+    const filesEl  = this.el.querySelector('#settings-drive-files');
+    const statusEl = this.el.querySelector('#settings-drive-status');
+    if (!filesEl) return;
+    filesEl.innerHTML = '<div class="settings-drive-empty">Loading your Drive files…</div>';
+    try {
+      const files = await listAppFiles({ clientId: loadUserPrefs().googleClientId });
+      if (!files.length) { filesEl.innerHTML = '<div class="settings-drive-empty">No unifile files found in your Drive.</div>'; return; }
+      filesEl.innerHTML = files.map(f => `
+        <button class="settings-drive-file" data-id="${escHtml(f.id)}" type="button">
+          <span class="sdf-name">${escHtml(f.name)}</span>
+          <span class="sdf-date">${escHtml(_fmtDate(f.modifiedTime))}</span>
+        </button>`).join('');
+      filesEl.querySelectorAll('.settings-drive-file').forEach(b =>
+        b.addEventListener('click', () => { filesEl.innerHTML = ''; state.emit('drive-pull', { fileId: b.dataset.id }); }));
+    } catch (e) {
+      filesEl.innerHTML = '';
+      if (statusEl) { statusEl.textContent = e?.message ?? String(e); statusEl.className = 'settings-update-status is-error'; }
+    }
   }
 
   async _checkUpdate() {
@@ -265,4 +290,8 @@ function escHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function _fmtDate(iso) {
+  try { return new Date(iso).toLocaleString(); } catch { return ''; }
 }
