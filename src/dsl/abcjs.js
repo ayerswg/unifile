@@ -17,6 +17,7 @@ import abcjs from 'abcjs';
 import { StreamLanguage } from '@codemirror/language';
 import { registerDSL } from './registry.js';
 import { state } from '../ui/state.js';
+import { parseGlobalFrontMatter } from '../core/front-matter.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -168,6 +169,11 @@ let _engraver = null;
 
 // Full tune objects array from the last renderAbc call; needed for synth init.
 let _tuneObjects = null;
+
+// Raw ABC source of the last render (section-relative).  Needed to scan for
+// `!name!` articulation tokens — abcjs drops unknown decorations, so we read
+// them from the source ourselves; their indices line up with note startChars.
+let _lastAbcSource = '';
 
 // The preview container element; we add/remove 'abc-playing' class on it.
 let _playEl = null;
@@ -321,6 +327,7 @@ async function render(content, el) {
     // Store engraver so editor selections can drive reverse highlighting
     _engraver    = localEngraver;
     _tuneObjects = localTuneObjects;
+    _lastAbcSource = content;
     _playEl      = container;
 
     // If a note from this block was selected before the re-render, restore the
@@ -608,23 +615,158 @@ function _resolveMidiOut() {
  * look-ahead pump.  `startSeconds` is the playback offset; `stopChar` (or null)
  * bounds a range selection.  `meterSize` converts note durations → milliseconds.
  */
-function _startMidiPlayback(out, noteEvents, startSeconds, stopChar, meterSize) {
+// ---------------------------------------------------------------------------
+// Keyswitches → articulations (MIDI-out only)
+//
+// A document can declare a map of articulation name → MIDI action in its global
+// front matter, and mark notes/passages with `!name!` decorations (sticky until
+// the next mark).  When routed to an external instrument we fire the mapped
+// keyswitch note / CC / program-change just before the note whose articulation
+// changed, so a library that understands keyswitches plays the right articulation.
+//
+//   ---
+//   midi:
+//     keyswitches:
+//       legato: 24                    # note number or name (C-1 = 0)
+//       staccato: 25
+//       pizzicato: { cc: 32, value: 6 }
+//       arco: { program: 1 }
+//     lead-ms: 20
+//     hold: momentary                 # momentary | held
+//   ---
+// ---------------------------------------------------------------------------
+
+/** Parse a keyswitch note value: MIDI number, or note name (C-1=0 → C4=60). */
+function _parseKsNote(v) {
+  const s = String(v).trim();
+  if (/^\d+$/.test(s)) { const n = +s; return n >= 0 && n <= 127 ? n : null; }
+  const m = /^([A-Ga-g])([#b]?)(-?\d+)$/.exec(s);
+  if (!m) return null;
+  const base = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 }[m[1].toLowerCase()];
+  const acc  = m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0;
+  const n = base + acc + (parseInt(m[3], 10) + 1) * 12;
+  return n >= 0 && n <= 127 ? n : null;
+}
+
+/** Normalise the front-matter keyswitch map → { artic: {type, …} }. */
+function _normalizeKsMap(raw) {
+  const map = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const key = k.trim().toLowerCase();
+    if (v && typeof v === 'object') {
+      if (v.cc != null)      map[key] = { type: 'cc', cc: +v.cc, value: v.value != null ? +v.value : 127 };
+      else if (v.program != null) map[key] = { type: 'program', program: +v.program };
+    } else {
+      const note = _parseKsNote(v);
+      if (note != null) map[key] = { type: 'note', note };
+    }
+  }
+  return map;
+}
+
+/**
+ * Build the keyswitch plan from the document front matter + the rendered ABC
+ * source.  Returns null when no keyswitches are declared (feature off).
+ */
+function _buildKeyswitchPlan(tune) {
+  let meta;
+  try { meta = parseGlobalFrontMatter(state.currentContent ?? '').meta; } catch { return null; }
+  const midi = meta?.midi;
+  const ksRaw = midi?.keyswitches;
+  if (!ksRaw || typeof ksRaw !== 'object') return null;
+  const map = _normalizeKsMap(ksRaw);
+  if (!Object.keys(map).length) return null;
+
+  const leadMs = Math.max(0, Number(midi['lead-ms'] ?? midi.leadMs ?? 20) || 0);
+  const hold   = String(midi.hold ?? 'momentary').toLowerCase() === 'held' ? 'held' : 'momentary';
+
+  // Articulation switch points, ordered by source index.
+  const pts = [];
+  // (a) `!name!` tokens scanned from the source — abcjs drops these as unknown
+  //     decorations, so we read them ourselves; indices align with note startChars.
+  const re = /!([^!\n]+)!/g;
+  for (let m; (m = re.exec(_lastAbcSource)); ) {
+    const name = m[1].trim().toLowerCase();
+    if (map[name]) pts.push({ index: m.index, artic: name });
+  }
+  // (b) decorations abcjs DOES attach (notably `.` → "staccato"), if mapped.
+  try {
+    for (const line of tune.lines || [])
+      for (const st of line.staff || [])
+        for (const voice of st.voices || [])
+          for (const el of voice) {
+            if (el.el_type !== 'note' || !Array.isArray(el.decoration) || el.startChar == null) continue;
+            for (const d of el.decoration) {
+              const dl = String(d).toLowerCase();
+              if (map[dl]) { pts.push({ index: el.startChar, artic: dl }); break; }
+            }
+          }
+  } catch { /* unexpected tune shape — named tokens still work */ }
+  pts.sort((a, b) => a.index - b.index);
+  return { map, leadMs, hold, tokens: pts };
+}
+
+/** Queue the MIDI bytes for one keyswitch action at absolute time `at` (ms). */
+function _enqueueKeyswitch(msgs, action, at, ch, hold, heldRef) {
+  if (action.type === 'note') {
+    if (hold === 'held' && heldRef.note != null) {
+      msgs.push({ at, status: 0x80 | ch, pitch: heldRef.note, vel: 0 }); // release previous
+    }
+    msgs.push({ at, status: 0x90 | ch, pitch: action.note, vel: 100 });
+    if (hold === 'held') heldRef.note = action.note;
+    else msgs.push({ at: at + 15, status: 0x80 | ch, pitch: action.note, vel: 0 }); // momentary
+  } else if (action.type === 'cc') {
+    msgs.push({ at, status: 0xB0 | ch, pitch: action.cc, vel: Math.max(0, Math.min(127, action.value)) });
+  } else if (action.type === 'program') {
+    msgs.push({ at, bytes: [0xC0 | ch, Math.max(0, Math.min(127, action.program)) ] });
+  }
+}
+
+function _startMidiPlayback(out, noteEvents, startSeconds, stopChar, meterSize, ksPlan) {
   _midiOut = out;
   _midiActiveNotes.clear();
   const t0 = performance.now() + MIDI_PREROLL_MS;
   const msgs = [];
+  const ch = 0;
+  let lastKsArtic;            // undefined → forces an emit at the first played note
+  let tokIdx = 0;            // pointer into ksPlan.tokens (consumed in source order)
+  let currentArtic = null;   // sticky articulation as of the current note
+  const heldRef = { note: null };
 
   for (const ev of noteEvents) {
+    // Advance the (sticky) articulation in SOURCE order, even for notes before
+    // the entry point, so a mid-piece resume starts in the right articulation.
+    // abcjs reports a note's startChar inconsistently (sometimes before its own
+    // leading `!decoration!`), so we assign a token to the note whose span ends
+    // after it — `index < endChar` — rather than comparing against startChar.
+    if (ksPlan) {
+      const endC = ev.endChar ?? ev.endCharArray?.[0] ?? ((ev.startChar ?? 0) + 1);
+      while (tokIdx < ksPlan.tokens.length && ksPlan.tokens[tokIdx].index < endC) {
+        currentArtic = ksPlan.tokens[tokIdx].artic;
+        tokIdx++;
+      }
+    }
+
     const evSec = ev.milliseconds / 1000;
     if (evSec < startSeconds - 1e-6) continue; // note starts before our entry point
     const msPerMeasure = ev.millisecondsPerMeasure || 1000;
     const onAt = t0 + (evSec - startSeconds) * 1000;
 
+    // Keyswitch: if this note's articulation differs from the last one we set,
+    // fire its action `leadMs` before the note (force on the first played note).
+    if (ksPlan && currentArtic !== lastKsArtic) {
+      const action = currentArtic ? ksPlan.map[currentArtic] : null;
+      if (action) {
+        const at = Math.max(performance.now(), onAt - ksPlan.leadMs);
+        _enqueueKeyswitch(msgs, action, at, ch, ksPlan.hold, heldRef);
+      }
+      lastKsArtic = currentArtic;
+    }
+
     for (const p of (ev.midiPitches ?? [])) {
       if (p?.pitch == null) continue;
       // Range mode: skip notes at/after the selection end.
       if (stopChar !== null && p.startChar !== undefined && p.startChar >= stopChar) continue;
-      const ch    = 0; // single channel; downstream instrument decides the sound
       const pitch = Math.round(p.pitch);
       const vel   = Math.max(1, Math.min(127, Math.round(p.volume ?? 92)));
       const durMs = Math.max(40, (p.duration ?? 0.25) * msPerMeasure / meterSize);
@@ -646,10 +788,12 @@ function _midiPump() {
   const now = performance.now();
   while (_midiQueueIdx < _midiQueue.length && _midiQueue[_midiQueueIdx].at <= now + MIDI_LOOKAHEAD_MS) {
     const m = _midiQueue[_midiQueueIdx++];
-    try { _midiOut.send([m.status, m.pitch, m.vel], m.at); } catch { /* port vanished */ }
-    const key = (m.status & 0x0f) + ':' + m.pitch;
-    if ((m.status & 0xf0) === 0x90) _midiActiveNotes.add(key);
-    else _midiActiveNotes.delete(key);
+    const bytes = m.bytes ?? [m.status, m.pitch, m.vel];
+    try { _midiOut.send(bytes, m.at); } catch { /* port vanished */ }
+    // Track sounding notes (incl. held keyswitch notes) so panic can release them.
+    const st = m.status ?? bytes[0];
+    if ((st & 0xf0) === 0x90)      _midiActiveNotes.add((st & 0x0f) + ':' + bytes[1]);
+    else if ((st & 0xf0) === 0x80) _midiActiveNotes.delete((st & 0x0f) + ':' + bytes[1]);
   }
 
   if (_midiQueueIdx >= _midiQueue.length) {
@@ -898,7 +1042,8 @@ async function startPlayback(opts = {}) {
     state.abcPlaying = true;
     state.emit('abc-play-state', { playing: true });
 
-    _startMidiPlayback(midiOut, noteEvents, startSeconds, stopChar, meterSize);
+    const ksPlan = _buildKeyswitchPlan(tune);
+    _startMidiPlayback(midiOut, noteEvents, startSeconds, stopChar, meterSize, ksPlan);
     _timingCallbacks.start(startSeconds, 'seconds');
     _startProgress(startSeconds * 1000);
     return;
