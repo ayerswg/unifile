@@ -636,20 +636,26 @@ function _resolveMidiOut() {
 //   ---
 // ---------------------------------------------------------------------------
 
-/** Parse a keyswitch note value: MIDI number, or note name (C-1=0 → C4=60). */
-function _parseKsNote(v) {
+/**
+ * Parse a keyswitch note value: a raw MIDI number (always literal, 0–127), or a
+ * note name whose octave numbering depends on `midMidiOctave` — the octave that
+ * middle C (MIDI 60) is called.  Kontakt's default is C3, so with octave=3,
+ * `F-1` → 17 (matching Kontakt's display); the scientific convention is C4.
+ */
+function _parseKsNote(v, midMidiOctave = 3) {
   const s = String(v).trim();
-  if (/^\d+$/.test(s)) { const n = +s; return n >= 0 && n <= 127 ? n : null; }
+  if (/^-?\d+$/.test(s)) { const n = +s; return n >= 0 && n <= 127 ? n : null; }
   const m = /^([A-Ga-g])([#b]?)(-?\d+)$/.exec(s);
   if (!m) return null;
   const base = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 }[m[1].toLowerCase()];
   const acc  = m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0;
-  const n = base + acc + (parseInt(m[3], 10) + 1) * 12;
+  // C{midMidiOctave} must equal MIDI 60 → octave offset = 5 − midMidiOctave.
+  const n = base + acc + (parseInt(m[3], 10) + (5 - midMidiOctave)) * 12;
   return n >= 0 && n <= 127 ? n : null;
 }
 
 /** Normalise the front-matter keyswitch map → { artic: {type, …} }. */
-function _normalizeKsMap(raw) {
+function _normalizeKsMap(raw, midMidiOctave) {
   const map = {};
   for (const [k, v] of Object.entries(raw)) {
     const key = k.trim().toLowerCase();
@@ -657,11 +663,17 @@ function _normalizeKsMap(raw) {
       if (v.cc != null)      map[key] = { type: 'cc', cc: +v.cc, value: v.value != null ? +v.value : 127 };
       else if (v.program != null) map[key] = { type: 'program', program: +v.program };
     } else {
-      const note = _parseKsNote(v);
+      const note = _parseKsNote(v, midMidiOctave);
       if (note != null) map[key] = { type: 'note', note };
     }
   }
   return map;
+}
+
+/** Octave that middle C is called, from `midi.octave` (e.g. `c3`, `4`). Default 3 (Kontakt). */
+function _midiOctaveBase(midi) {
+  const m = /(-?\d+)/.exec(String(midi?.octave ?? ''));
+  return m ? parseInt(m[1], 10) : 3;
 }
 
 /**
@@ -674,7 +686,7 @@ function _buildKeyswitchPlan(tune) {
   const midi = meta?.midi;
   const ksRaw = midi?.keyswitches;
   if (!ksRaw || typeof ksRaw !== 'object') return null;
-  const map = _normalizeKsMap(ksRaw);
+  const map = _normalizeKsMap(ksRaw, _midiOctaveBase(midi));
   if (!Object.keys(map).length) return null;
 
   const leadMs = Math.max(0, Number(midi['lead-ms'] ?? midi.leadMs ?? 20) || 0);
