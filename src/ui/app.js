@@ -116,6 +116,11 @@ export class App {
       _draftTimer = setTimeout(() => saveDraft(content, state.headHash), 2000);
     });
 
+    // 5d. Local data file: save/open the document + full history as a small
+    //     plain-text `.unifile.json` (deltas + content, no app/soundfont).
+    state.on('save-data-file', () => this._saveDataFile());
+    state.on('open-data-file', () => this._openDataFile());
+
     // 6. Expose host APIs for plugins (must run before plugins are loaded so that
     //    plugins can use the host's CM6 + state instances instead of bundling copies)
     this._exposeHostAPIs();
@@ -524,6 +529,72 @@ export class App {
     scrollToEditor(false);
     requestAnimationFrame(() => { updatePane(); });
     _mql.addEventListener('change', (e) => { if (e.matches) { scrollToEditor(false); } requestAnimationFrame(() => { updatePane(); }); });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Local data file (.unifile.json) — document + full history as plain text
+  // ---------------------------------------------------------------------------
+
+  /** Build the canonical data object (state.data merged with the live VCS state). */
+  _currentDataObject() {
+    return {
+      ...state.data,
+      ...(state.vcs?.serialize?.() ?? {}),
+      currentContent: state.currentContent,
+      dslType: state.data?.dslType,
+    };
+  }
+
+  /** Download the document + full commit history as a small `.unifile.json`. */
+  _saveDataFile() {
+    const data = this._currentDataObject();
+    const base = (state.title || 'untitled').trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled';
+    downloadFile(JSON.stringify(data, null, 2), `${base}.unifile.json`, 'application/json');
+  }
+
+  /** Prompt for a `.unifile.json`, then load it (replaces the current document). */
+  _openDataFile() {
+    if (state.isDirty && !confirm('You have uncommitted changes. Open another file and discard them?')) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,.unifile.json,application/json';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        if (!data || (data.commits === undefined && data.currentContent === undefined)) {
+          alert('That doesn’t look like a unifile data file.');
+          return;
+        }
+        this._loadDataObject(data);
+      } catch (e) {
+        alert('Could not read that file: ' + (e?.message ?? e));
+      }
+    });
+    input.click();
+  }
+
+  /** Replace the in-memory document with a loaded data object (mirrors init). */
+  _loadDataObject(data) {
+    const vcs = new VCS(data);
+    const currentContent = data.currentContent ?? vcs.headContent;
+    const { meta: fmMeta } = parseGlobalFrontMatter(currentContent);
+    clearDraft();
+    state.update({
+      data,
+      vcs,
+      currentContent,
+      isDirty: false,
+      dsl: this._getDsl(data.dslType),
+      primaryModel:   fmMeta.model  ?? 'flow',
+      secondaryModel: fmMeta.model2 ?? null,
+    });
+    this._loadStoredPlugins(data);
+    this._components.editor?.setValue(currentContent);
+    state.emit('checkout', { hash: vcs.headHash, content: currentContent });
+    state.emit('change');
+    this._saveQuine(this._currentDataObject());  // persist (IDB / file handle)
   }
 
   // ---------------------------------------------------------------------------

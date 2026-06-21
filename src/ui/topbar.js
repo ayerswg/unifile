@@ -185,6 +185,13 @@ export class TopBar {
           <kbd>⌃⇧B</kbd>
         </li>
         <li class="tools-menu-sep" role="separator"></li>
+        <li class="tools-menu-item" id="tb-save-data" title="Save the document + full history as a small .unifile.json text file">
+          ${iconExport()} Save data file…
+        </li>
+        <li class="tools-menu-item" id="tb-open-data" title="Open a .unifile.json data file (replaces the current document)">
+          ${iconImport()} Open data file…
+        </li>
+        <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-export" title="Export document (Ctrl+Shift+E)">
           ${iconExport()} Export…
           <kbd>⌃⇧E</kbd>
@@ -391,6 +398,16 @@ export class TopBar {
         if (state.activePanel === PANELS.BLAME) state.closePanel();
         else state.openPanel(PANELS.BLAME);
       }
+    });
+    this.el.querySelector('#tb-save-data')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      state.emit('save-data-file');
+    });
+    this.el.querySelector('#tb-open-data')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      state.emit('open-data-file');
     });
     this.el.querySelector('#tb-export')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
