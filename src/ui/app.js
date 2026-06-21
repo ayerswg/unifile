@@ -39,6 +39,7 @@ import { DslFooter } from './dsl-footer.js';
 import { mountSiteNav } from './site-nav.js';
 import { checkForUpdate } from './update-check.js';
 import { CommitBar } from './commit-bar.js';
+import { DiffView, DiffBar } from './diff-view.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { MergeDialog } from './merge-dialog.js';
@@ -121,6 +122,13 @@ export class App {
     state.on('save-data-file', () => this._saveDataFile());
     state.on('open-data-file', () => this._openDataFile());
 
+    // 5e. Commit diff view: toggle `data-diff` on the shell so CSS swaps the
+    //     panes for the read-only diff overlay + its bottom picker bar.
+    state.on('diff-change', (diff) => {
+      const r = document.getElementById('unifile-app');
+      if (diff) r?.setAttribute('data-diff', '1'); else r?.removeAttribute('data-diff');
+    });
+
     // 6. Expose host APIs for plugins (must run before plugins are loaded so that
     //    plugins can use the host's CM6 + state instances instead of bundling copies)
     this._exposeHostAPIs();
@@ -194,10 +202,12 @@ export class App {
           </button>
         </div>
         <div id="uf-preview-wrap"></div>
+        <div id="uf-diff" aria-label="Commit diff"></div>
       </div>
       <div id="uf-bottom">
         <div id="uf-transport"></div>
         <div id="uf-commit-bar"></div>
+        <div id="uf-diff-bar"></div>
       </div>
       <div id="uf-panels">
         <div id="uf-commit-panel"   style="display:none"></div>
@@ -251,6 +261,9 @@ export class App {
     this._components.commitBar = new CommitBar(
       document.getElementById('uf-commit-bar'), { onCommit: handlers.onCommit }
     );
+    // Read-only commit diff view + its bottom-bar picker.
+    this._components.diffView = new DiffView(document.getElementById('uf-diff'));
+    this._components.diffBar  = new DiffBar(document.getElementById('uf-diff-bar'));
 
     this._components.commit = new CommitDialog(
       document.getElementById('uf-commit-panel'),

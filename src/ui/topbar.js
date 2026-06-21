@@ -149,7 +149,7 @@ export class TopBar {
     this._commitLogEl.querySelectorAll('.dd-commit-item').forEach(item => {
       item.addEventListener('click', () => {
         const hash = item.dataset.hash;
-        if (hash) this._onCheckout(hash);
+        if (hash) this._onCommitClick(hash);
       });
     });
   }
@@ -444,7 +444,7 @@ export class TopBar {
     this.el.querySelectorAll('.dd-commit-item').forEach(item => {
       item.addEventListener('click', () => {
         const hash = item.dataset.hash;
-        if (hash) this._onCheckout(hash);
+        if (hash) this._onCommitClick(hash);
       });
     });
 
@@ -480,6 +480,22 @@ export class TopBar {
       return stashedContent;
     }
     return baseContent;
+  }
+
+  /**
+   * Clicking a commit opens the read-only diff (clicked commit vs working
+   * state).  Clicking the current commit does nothing.  Actual checkout-to-edit
+   * is the explicit `_onCheckout` path.
+   */
+  _onCommitClick(hash) {
+    this._commitOpen = false;
+    this._syncDropdowns?.();
+    if (!hash) return;
+    // Nothing to compare if this commit's content IS the current working state
+    // (e.g. clicking the head with no uncommitted changes).
+    if (state.vcs?.getContentAt(hash) === state.currentContent) return;
+    // Old (the clicked commit) on the left, new (working state) on the right.
+    state.openDiff(hash, 'WORKING');
   }
 
   _onCheckout(hash) {

@@ -139,6 +139,51 @@ export function applyPatch(oldText, patch) {
 }
 
 /**
+ * Side-by-side line diff for read-only display.  Returns aligned rows where
+ * runs of deletions/insertions are paired into `change` rows (GitHub style).
+ *
+ * @param {string} oldText  left side
+ * @param {string} newText  right side
+ * @returns {Array<{type:'equal'|'add'|'del'|'change', left:string|null, right:string|null, leftNo:number|null, rightNo:number|null}>}
+ */
+export function lineDiff(oldText, newText) {
+  const a = oldText === '' ? [] : oldText.split('\n');
+  const b = newText === '' ? [] : newText.split('\n');
+  const dp = lcsDp(a, b);
+
+  // Backtrack to raw ops, keeping BOTH sides' text.
+  const ops = [];
+  let i = a.length, j = b.length;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) { ops.unshift({ op: '=', left: a[i - 1], right: b[j - 1] }); i--; j--; }
+    else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) { ops.unshift({ op: '+', right: b[j - 1] }); j--; }
+    else { ops.unshift({ op: '-', left: a[i - 1] }); i--; }
+  }
+
+  // Pair consecutive deletions + insertions into change rows.
+  const rows = [];
+  let ln = 1, rn = 1;
+  for (let k = 0; k < ops.length; ) {
+    if (ops[k].op === '=') {
+      rows.push({ type: 'equal', left: ops[k].left, right: ops[k].right, leftNo: ln++, rightNo: rn++ });
+      k++; continue;
+    }
+    const dels = [], adds = [];
+    while (k < ops.length && ops[k].op === '-') dels.push(ops[k++].left);
+    while (k < ops.length && ops[k].op === '+') adds.push(ops[k++].right);
+    const max = Math.max(dels.length, adds.length);
+    for (let x = 0; x < max; x++) {
+      const l = x < dels.length ? dels[x] : null;
+      const r = x < adds.length ? adds[x] : null;
+      if (l != null && r != null) rows.push({ type: 'change', left: l, right: r, leftNo: ln++, rightNo: rn++ });
+      else if (l != null)         rows.push({ type: 'del', left: l, right: null, leftNo: ln++, rightNo: null });
+      else                        rows.push({ type: 'add', left: null, right: r, leftNo: null, rightNo: rn++ });
+    }
+  }
+  return rows;
+}
+
+/**
  * Produce a human-readable unified-diff-like string for display.
  * @param {string} oldText
  * @param {string} newText

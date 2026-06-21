@@ -2135,6 +2135,74 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 }
 #uf-transport:empty { display: none; }
 
+/* ==============================================================
+   COMMIT DIFF VIEW (read-only; opened by clicking a commit)
+   ============================================================== */
+#uf-diff { display: none; }
+#uf-diff-bar { display: none; }
+
+#unifile-app[data-diff] #uf-diff {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg);
+}
+/* Hide the editing panes behind the diff overlay. */
+#unifile-app[data-diff] #uf-editor-wrap,
+#unifile-app[data-diff] #uf-preview-wrap,
+#unifile-app[data-diff] #uf-divider,
+#unifile-app[data-diff] #uf-commit-log { display: none !important; }
+
+/* Bottom bar swaps to the diff picker. */
+#unifile-app[data-diff] #uf-diff-bar { display: block; }
+#unifile-app[data-diff] #uf-transport,
+#unifile-app[data-diff] #uf-commit-bar { display: none !important; }
+
+.dv-head { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.dv-head-label {
+  flex: 1 1 50%; min-width: 0; padding: 6px 10px;
+  font-family: var(--font-ui); font-size: 12px; font-weight: 600; color: var(--text-sub);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dv-head-r { border-left: 1px solid var(--border); }
+
+.dv-scroll { flex: 1; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.dv-table { width: 100%; border-collapse: collapse; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12.5px; line-height: 1.5; }
+.dv-no {
+  width: 1%; text-align: right; padding: 0 6px; vertical-align: top; white-space: nowrap;
+  color: var(--text-muted); user-select: none;
+}
+.dv-code {
+  width: 49%; padding: 0 8px; vertical-align: top;
+  white-space: pre-wrap; word-break: break-word; color: var(--text);
+}
+.dv-code.dv-r { border-left: 1px solid var(--border); }
+
+/* Change colours: red = removed (left), green = added (right). */
+.dv-del   .dv-l { background: rgba(243,139,168,.18); }
+.dv-add   .dv-r { background: rgba(166,227,161,.18); }
+.dv-change .dv-l { background: rgba(243,139,168,.13); }
+.dv-change .dv-r { background: rgba(166,227,161,.13); }
+/* Absent side of an add/del row — show as inert. */
+.dv-del .dv-r, .dv-add .dv-l { background: repeating-linear-gradient(45deg, transparent, transparent 6px, var(--bg-alt) 6px, var(--bg-alt) 7px); }
+
+/* Diff bottom bar */
+.db { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap; font-family: var(--font-ui); }
+.db-label { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.db-pick {
+  flex: 1 1 0; min-width: 0; max-width: 40vw;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); font-family: var(--font-ui); font-size: 13px; padding: 4px 6px;
+}
+.db-swap { color: var(--text-muted); flex-shrink: 0; }
+.db-return {
+  flex-shrink: 0; margin-left: auto;
+  background: var(--accent); border: none; border-radius: var(--radius-sm);
+  color: var(--bg); font-family: var(--font-ui); font-size: 13px; padding: 5px 12px; cursor: pointer;
+}
+
 /* ── Preview footer buttons (.pf-btn) ────────────────────────── */
 .pf-btn {
   display: inline-flex;

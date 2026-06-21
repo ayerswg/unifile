@@ -87,6 +87,9 @@ class AppState extends EventBus {
     /** @type {{ content: string, fromHash: string }|null} Single-slot auto-stash */
     this.stash = null;
 
+    /** @type {{ left: string, right: string }|null} Active diff view (hash | 'WORKING') */
+    this.diff = null;
+
     /** @type {FileSystemFileHandle|null} PWA file handle */
     this.fileHandle = null;
 
@@ -199,6 +202,22 @@ class AppState extends EventBus {
     this.activePanel = PANELS.NONE;
     this.emit('panel-change', PANELS.NONE);
     this.emit('change', this);
+  }
+
+  /**
+   * Enter the read-only commit-diff view comparing two sides. Each side is a
+   * commit hash or the sentinel 'WORKING' (the live editor content).
+   */
+  openDiff(left, right) {
+    this.diff = { left, right };
+    this.emit('diff-change', this.diff);
+  }
+
+  /** Exit the diff view, back to the working editor. */
+  closeDiff() {
+    if (!this.diff) return;
+    this.diff = null;
+    this.emit('diff-change', null);
   }
 }
 
