@@ -65,6 +65,11 @@ const abcLanguage = StreamLanguage.define({
     }
 
     // ── Music body tokens ────────────────────────────────────────────────────
+    // Decorations / dynamics / keyswitch marks: !staccato! !f! !legato! !pizzicato! …
+    // Match the whole `!…!` as one token so its inner letters aren't mis-read as
+    // note pitches (e.g. the g/a in !legato!).
+    if (stream.match(/![^!\n]*!/)) return 'meta';
+
     // Barlines
     if (stream.match(/\|\||\|:|:\||\||\[|\]/)) return 'separator';
 
@@ -908,6 +913,23 @@ function _stopMidiPlayback() {
 // end, highlights the sounding SVG notes, and emits 'abc-play-cursor' so the
 // editor colours the current notes green.
 // ---------------------------------------------------------------------------
+/** Advance `from` past leading whitespace, `!…!` decorations and `.` so the
+ *  play-cursor highlight lands on the note itself, not its preceding marks. */
+function _trimToNoteStart(content, from, to) {
+  let i = from;
+  while (i < to) {
+    const ch = content[i];
+    if (ch === '!') {
+      const end = content.indexOf('!', i + 1);
+      if (end === -1 || end >= to) break;
+      i = end + 1; continue;
+    }
+    if (ch === '.' || /\s/.test(ch)) { i++; continue; }
+    break;
+  }
+  return i;
+}
+
 function _makeVisualEventCallback(stopChar) {
   return (event) => {
     if (!event) { stopPlayback(); return; }
@@ -929,11 +951,21 @@ function _makeVisualEventCallback(stopChar) {
     }
 
     // Editor: emit all voice char ranges for green text-colour highlighting.
+    // abcjs char indices are section-relative → add _sectionOffset to map them to
+    // document positions; and trim leading decorations/whitespace so the green
+    // covers the note, not its `!legato!`/`.` marks (abcjs's startChar can point
+    // at the decoration that precedes the note).
+    const doc = state.currentContent ?? '';
     const starts = event.startCharArray ?? [event.startChar];
     const ends   = event.endCharArray   ?? [event.endChar];
     const ranges = starts
-      .map((s, i) => ({ from: s, to: ends[i] }))
-      .filter(r => r.from !== undefined && r.to !== undefined && r.from < r.to);
+      .map((s, i) => {
+        if (s === undefined || ends[i] === undefined) return null;
+        const to = ends[i] + _sectionOffset;
+        const from = _trimToNoteStart(doc, s + _sectionOffset, to);
+        return { from, to };
+      })
+      .filter(r => r && r.from < r.to);
     state.emit('abc-play-cursor', ranges.length ? ranges : null);
   };
 }

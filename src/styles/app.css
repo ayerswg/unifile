@@ -192,6 +192,13 @@
   :root:not([data-theme]) .cm-play-note { color: #40a02b !important; }
 }
 
+/* YAML front-matter highlighting (keys / fences / comments) — replaces the
+ * section DSL highlighting in the `---` … `---` block. */
+.cm-fm-fence   { color: var(--text-muted); }
+.cm-fm-key     { color: #cba6f7; }              /* mauve — property key */
+[data-theme="light"] .cm-fm-key { color: #8839ef; }
+.cm-fm-comment { color: var(--text-muted); font-style: italic; }
+
 /* #! shebang line decoration — marks DSL section headers as muted/italic */
 .cm-shebang-line { color: var(--accent) !important; opacity: .55; font-style: italic; }
 [data-theme="light"] .cm-shebang-line { color: var(--accent) !important; opacity: .6; }

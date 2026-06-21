@@ -20,7 +20,8 @@ import { EditorView, keymap, highlightActiveLine, Decoration,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
+import { indentOnInput, bracketMatching, Language,
+         codeFolding, foldGutter, foldService } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap } from '@codemirror/search';
@@ -30,6 +31,7 @@ import { highlightTree } from '@lezer/highlight';
 import { state, VIEW_MODES, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
 import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
+import { parseGlobalFrontMatter } from '../core/front-matter.js';
 import {
   accordionField,
   openAccordionEffect,
@@ -295,17 +297,57 @@ function _buildSectionHighlights(editorState) {
     } catch { /* non-fatal: DSL not loaded yet or parse error */ }
   }
 
+  // Global YAML front matter: highlight it as YAML (keys / fences / comments),
+  // NOT with the section DSL — otherwise the ABC tokenizer paints a–g letters
+  // inside keys like `midi`/`legato` as note pitches.
+  const { bodyFrom } = parseGlobalFrontMatter(text);
+  if (bodyFrom > 0) addFrontMatterHighlights(0, bodyFrom);
+  const bodyStart = Math.max(bodyFrom, 0);
+
   if (sections.length === 0) {
-    addHighlights(0, text.length, defaultDslId);
+    addHighlights(bodyStart, text.length, defaultDslId);
   } else {
-    if (sections[0].from > 0) {
-      addHighlights(0, sections[0].from, defaultDslId);
+    if (sections[0].from > bodyStart) {
+      addHighlights(bodyStart, sections[0].from, defaultDslId);
     }
     for (const sect of sections) {
       addHighlights(sect.contentFrom, sect.to, sect.dslId);
     }
   }
   return builder.finish();
+
+  // --- front-matter (YAML) highlighter -------------------------------------
+  function addFrontMatterHighlights(from, to) {
+    let pos = from;
+    for (const raw of text.slice(from, to).split(/(?<=\n)/)) {
+      const lineStart = pos;
+      pos += raw.length;
+      const line = raw.replace(/\r?\n$/, '');
+      const trimmed = line.trimStart();
+      const indent = line.length - trimmed.length;
+      if (trimmed.startsWith('---')) {                       // fence
+        builder.add(lineStart, lineStart + line.length, Decoration.mark({ class: 'cm-fm-fence' }));
+        continue;
+      }
+      // Detect an inline comment first (# preceded by whitespace, or whole-line)
+      // but add marks in source order (key before comment) for RangeSetBuilder.
+      let codeEnd = line.length;
+      let commentAt = -1;
+      const cm = line.match(/(^|\s)#.*$/);
+      if (cm) {
+        const off = cm.index + (cm[1] ? cm[1].length : 0);
+        codeEnd = off; commentAt = lineStart + off;
+      }
+      const km = line.slice(0, codeEnd).match(/^(\s*)([^:\s][^:]*):/);
+      if (km) {
+        const kFrom = lineStart + km[1].length;
+        builder.add(kFrom, kFrom + km[2].length, Decoration.mark({ class: 'cm-fm-key' }));
+      }
+      if (commentAt >= 0) {
+        builder.add(commentAt, lineStart + line.length, Decoration.mark({ class: 'cm-fm-comment' }));
+      }
+    }
+  }
 }
 
 const sectionSyntaxField = StateField.define({
@@ -317,6 +359,21 @@ const sectionSyntaxField = StateField.define({
     return deco.map(tr.changes);
   },
   provide: f => EditorView.decorations.from(f)
+});
+
+// ---------------------------------------------------------------------------
+// Front-matter fold service — fold the `---` … `---` block at the document top.
+// ---------------------------------------------------------------------------
+
+const frontMatterFold = foldService.of((state, lineStart) => {
+  if (lineStart !== 0) return null;                 // only the opening fence
+  const first = state.doc.lineAt(0);
+  if (first.text.trim() !== '---') return null;
+  for (let n = 2; n <= state.doc.lines; n++) {
+    const line = state.doc.line(n);
+    if (line.text.trim() === '---') return { from: first.to, to: line.to };
+  }
+  return null;
 });
 
 // ---------------------------------------------------------------------------
@@ -344,6 +401,12 @@ const baseExtensions = [
   // horizontally inside the editor (cm-scroller) rather than wrapping. On mobile
   // this nests inside the pane scroll-snap strip: swiping the code scrolls it,
   // and at the edge the gesture chains out to snap to the next pane.
+
+  // Collapsible YAML front matter: fold the `---` … `---` block at the top of
+  // the document.  The fold service offers a range on the opening `---` line.
+  codeFolding(),
+  foldGutter(),
+  frontMatterFold,
 
   // DSL range highlight (e.g. from clicking a note in ABC preview)
   dslHighlightField,
