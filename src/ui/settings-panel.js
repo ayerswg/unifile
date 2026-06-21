@@ -9,6 +9,7 @@ import { state, PANELS } from './state.js';
 import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
 import { applyTheme } from './theme.js';
 import { checkForUpdate } from './update-check.js';
+import { isDriveSupported } from '../core/gdrive.js';
 
 // Stamped by esbuild `define` in build.mjs (from the latest git tag); guard for
 // any non-built context (e.g. raw ESM in tests).
@@ -24,6 +25,14 @@ export class SettingsPanel {
       if (panel === PANELS.SETTINGS) this.show();
       else this.hide();
     }));
+
+    // Drive push/pull status (if the panel is open).
+    this._unsub.push(state.on('drive-status', (s) => {
+      const el = this.el.querySelector('#settings-drive-status');
+      if (!el) return;
+      el.textContent = s?.msg ?? '';
+      el.className = 'settings-update-status' + (s?.error ? ' is-error' : s?.ok ? ' is-update' : '');
+    }));
   }
 
   destroy() {
@@ -33,6 +42,7 @@ export class SettingsPanel {
   show() {
     const prefs = loadUserPrefs();
     const theme = prefs.theme ?? 'auto';
+    const driveSupported = isDriveSupported();
 
     this.el.innerHTML = `
       <div class="dialog-overlay" id="settings-overlay">
@@ -104,6 +114,25 @@ export class SettingsPanel {
               <span class="settings-update-status" id="settings-update-status" aria-live="polite"></span>
             </div>
 
+            <!-- ── Sync (Google Drive) ────────────────────────────────── -->
+            <div class="settings-section-label">Sync — Google Drive</div>
+            <p class="settings-intro">
+              Push/pull this document (+ full history) to one file in your own
+              Google Drive. Data goes browser → your Drive directly; this site
+              never sees it.${driveSupported ? '' : ' <strong>Requires the hosted app or installed PWA (not a downloaded file).</strong>'}
+            </p>
+            <div class="form-row">
+              <label class="form-label" for="settings-gclient">Google OAuth client ID</label>
+              <input class="form-input" id="settings-gclient" type="text"
+                value="${escHtml(prefs.googleClientId ?? '')}"
+                placeholder="…apps.googleusercontent.com" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="settings-update-row">
+              <button class="btn btn-ghost" id="settings-drive-push" type="button"${driveSupported ? '' : ' disabled'}>Push to Drive</button>
+              <button class="btn btn-ghost" id="settings-drive-pull" type="button"${driveSupported ? '' : ' disabled'}>Pull from Drive</button>
+              <span class="settings-update-status" id="settings-drive-status" aria-live="polite"></span>
+            </div>
+
             <!-- ── About ──────────────────────────────────────────────── -->
             <div class="settings-section-label">About</div>
             <p class="settings-about">
@@ -169,6 +198,13 @@ export class SettingsPanel {
     // Manual "Check for updates" — forces a cache-busting check.
     this.el.querySelector('#settings-check-update')
       ?.addEventListener('click', () => this._checkUpdate());
+
+    // Google Drive sync.
+    const gclient = this.el.querySelector('#settings-gclient');
+    const persistClient = () => saveUserPrefs({ googleClientId: gclient.value.trim() });
+    gclient?.addEventListener('change', persistClient);
+    this.el.querySelector('#settings-drive-push')?.addEventListener('click', () => { persistClient(); state.emit('drive-push'); });
+    this.el.querySelector('#settings-drive-pull')?.addEventListener('click', () => { persistClient(); state.emit('drive-pull'); });
   }
 
   async _checkUpdate() {

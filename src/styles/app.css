@@ -2764,6 +2764,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .settings-update-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .settings-update-status { font-size: 12px; color: var(--text-muted); }
 .settings-update-status.is-update { color: var(--accent); }
+.settings-update-status.is-error  { color: var(--warning, #d20f39); }
 
 /* About / version line */
 .settings-about {
