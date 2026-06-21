@@ -659,21 +659,53 @@ function _parseKsNote(v, midMidiOctave = 3) {
   return n >= 0 && n <= 127 ? n : null;
 }
 
-/** Normalise the front-matter keyswitch map → { artic: {type, …} }. */
-function _normalizeKsMap(raw, midMidiOctave) {
+// abcjs marking symbols → canonical names used in the map.
+const MARK_ALIAS = { '>': 'accent', '^': 'marcato', '.': 'staccato' };
+
+/** Parse a `velocity:` value → { velAbs | velScale | velBump }. */
+function _parseVel(v) {
+  const s = String(v).trim();
+  if (/^[+-]\d+$/.test(s)) return { velBump: parseInt(s, 10) };           // accent bump (per-note)
+  if (/^\d+$/.test(s))     return { velAbs: Math.max(0, Math.min(127, +s)) }; // dynamic level (sticky)
+  const f = parseFloat(s);
+  if (!Number.isNaN(f))    return { velScale: f };                        // scale of abcjs default
+  return {};
+}
+
+/**
+ * Normalise one map entry → an action object that may combine any of:
+ *   note (keyswitch), cc {cc,value}, program, and a velocity effect
+ *   (velAbs sticky level | velScale | velBump per-note).
+ * A bare scalar value is treated as a keyswitch note (back-compat).
+ */
+function _normalizeEntry(v, octave) {
+  const e = {};
+  if (v && typeof v === 'object') {
+    if (v.note != null)    { const n = _parseKsNote(v.note, octave); if (n != null) e.note = n; }
+    if (v.cc != null)      e.cc = { cc: +v.cc, value: v.value != null ? +v.value : 127 };
+    if (v.program != null) e.program = +v.program;
+    if (v.velocity != null) Object.assign(e, _parseVel(v.velocity));
+  } else if (v != null && v !== '') {
+    const n = _parseKsNote(v, octave); if (n != null) e.note = n;
+  }
+  return e;
+}
+
+/** Normalise a whole `map`/`keyswitches` table → { name: entry }. */
+function _normalizeMap(raw, octave) {
   const map = {};
-  for (const [k, v] of Object.entries(raw)) {
-    const key = k.trim().toLowerCase();
-    if (v && typeof v === 'object') {
-      if (v.cc != null)      map[key] = { type: 'cc', cc: +v.cc, value: v.value != null ? +v.value : 127 };
-      else if (v.program != null) map[key] = { type: 'program', program: +v.program };
-    } else {
-      const note = _parseKsNote(v, midMidiOctave);
-      if (note != null) map[key] = { type: 'note', note };
-    }
+  for (const [k, v] of Object.entries(raw || {})) {
+    const key = String(k).trim().toLowerCase();
+    const e = _normalizeEntry(v, octave);
+    if (Object.keys(e).length) map[key] = e;
   }
   return map;
 }
+
+/** True if an entry switches articulation (fires a keyswitch/CC/program). */
+function _isSwitch(e) { return e && (e.note != null || e.cc != null || e.program != null); }
+/** True if an entry sets a sticky dynamic level (absolute or scaled velocity). */
+function _isLevel(e)  { return e && (e.velAbs != null || e.velScale != null); }
 
 /** Octave that middle C is called, from `midi.octave` (e.g. `c3`, `4`). Default 3 (Kontakt). */
 function _midiOctaveBase(midi) {
@@ -696,32 +728,41 @@ function _buildKeyswitchPlan(tune) {
   const midi = meta?.midi;
   if (!midi || typeof midi !== 'object') return null;
   const hasVoices = midi.voices && typeof midi.voices === 'object';
-  const hasKs = midi.keyswitches && typeof midi.keyswitches === 'object';
-  if (!hasVoices && !hasKs) return null;
+  const hasMap = (midi.map && typeof midi.map === 'object') ||
+                 (midi.keyswitches && typeof midi.keyswitches === 'object');
+  if (!hasVoices && !hasMap) return null;
 
   const octave = _midiOctaveBase(midi);
   const leadMs = Math.max(0, Number(midi['lead-ms'] ?? midi.leadMs ?? 20) || 0);
   const hold   = String(midi.hold ?? 'momentary').toLowerCase() === 'held' ? 'held' : 'momentary';
-  const defaultMap = hasKs ? _normalizeKsMap(midi.keyswitches, octave) : {};
+  const slurName = midi.slur != null ? String(midi.slur).trim().toLowerCase() : null;
+  // `map` is the general table; `keyswitches` is the legacy alias (merged under it).
+  const globalMap = { ..._normalizeMap(midi.keyswitches, octave), ..._normalizeMap(midi.map, octave) };
 
-  // Per-voice config keyed by voice number.
+  // Per-voice config keyed by voice number: channel, mix (volume/pan/velScale),
+  // and a map that merges voice overrides over the global map.
   const voiceConfig = new Map();
   if (hasVoices) {
     for (const [k, v] of Object.entries(midi.voices)) {
       const vn = parseInt(k, 10);
       if (!Number.isFinite(vn) || !v || typeof v !== 'object') continue;
+      const vMap = { ..._normalizeMap(v.keyswitches, octave), ..._normalizeMap(v.map, octave) };
       voiceConfig.set(vn, {
         channel: v.channel != null ? +v.channel : vn,
-        map: v.keyswitches && typeof v.keyswitches === 'object'
-          ? _normalizeKsMap(v.keyswitches, octave) : defaultMap,
+        volume:  v.volume   != null ? Math.max(0, Math.min(127, +v.volume)) : null,
+        pan:     v.pan      != null ? Math.max(0, Math.min(127, +v.pan))    : null,
+        velScale: v.velocity != null ? (parseFloat(v.velocity) || 1) : 1,
+        map: { ...globalMap, ...vMap },
       });
     }
   }
-  const mapForVoice     = (vn) => voiceConfig.get(vn)?.map ?? defaultMap;
-  const channelForVoice = (vn) => ((voiceConfig.get(vn)?.channel ?? vn) - 1) & 0x0f;
+  const cfg             = (vn) => voiceConfig.get(vn);
+  const entryFor        = (vn, name) => cfg(vn)?.map[name] ?? globalMap[name];
+  const channelForVoice = (vn) => ((cfg(vn)?.channel ?? vn) - 1) & 0x0f;
+  const velScaleForVoice = (vn) => cfg(vn)?.velScale ?? 1;
 
-  // Walk the tune → notes with (staff, voice) identity, startChar/endChar,
-  // decorations.  Voice number = score order of distinct (staff,voice) pairs.
+  // Walk the tune → notes (staff/voice identity, startChar/endChar, decorations).
+  // Voice number = score order of distinct (staff,voice) pairs.
   const notes = [];
   const svKeys = new Set();
   try {
@@ -736,57 +777,54 @@ function _buildKeyswitchPlan(tune) {
           }
   } catch { /* tolerate unexpected shapes */ }
   const svToVoice = new Map([...svKeys].sort((a, b) => a - b).map((k, i) => [k, i + 1]));
-  const charToVoiceMap = new Map(notes.map(n => [n.startChar, svToVoice.get(n.sv)]));
-  const charToVoice = (sc) => charToVoiceMap.get(sc) ?? 1;
+  const charToVoice = (sc) => svToVoice.get(notes.find(n => n.startChar === sc)?.sv) ?? 1;
 
-  // Assign each token to a voice (the note whose span contains it, else the next
-  // note) so a `!name!` in one voice's line doesn't leak to another.
+  // Assign each token to the note whose span contains it (else the next note),
+  // so a `!name!` in one voice's line doesn't leak to another.
   const byStart = notes.slice().sort((a, b) => a.startChar - b.startChar);
-  const voiceForIndex = (idx) => {
-    for (const n of byStart) if (n.startChar <= idx && idx < n.endChar) return svToVoice.get(n.sv);
-    for (const n of byStart) if (n.startChar >= idx) return svToVoice.get(n.sv);
-    return byStart.length ? svToVoice.get(byStart[byStart.length - 1].sv) : 1;
-  };
+  const noteForIndex = (idx) =>
+    byStart.find(n => n.startChar <= idx && idx < n.endChar) ??
+    byStart.find(n => n.startChar >= idx) ??
+    byStart[byStart.length - 1] ?? null;
 
-  // Build per-voice, source-ordered articulation tokens.
-  const voiceTokens = new Map();
-  const addTok = (vn, index, artic) => {
-    if (!voiceTokens.has(vn)) voiceTokens.set(vn, []);
-    voiceTokens.get(vn).push({ index, artic });
+  // Per-note marking sets, keyed by the note's startChar.
+  const noteMarks = new Map();
+  const addMark = (sc, name) => {
+    if (sc == null) return;
+    let s = noteMarks.get(sc); if (!s) { s = new Set(); noteMarks.set(sc, s); }
+    s.add(name);
   };
   // (a) `!name!` tokens scanned from source (abcjs drops unknown decorations).
   const re = /!([^!\n]+)!/g;
   for (let m; (m = re.exec(_lastAbcSource)); ) {
-    const name = m[1].trim().toLowerCase();
-    const vn = voiceForIndex(m.index);
-    if (mapForVoice(vn)[name]) addTok(vn, m.index, name);
+    const name = (MARK_ALIAS[m[1].trim()] ?? m[1].trim().toLowerCase());
+    const n = noteForIndex(m.index);
+    if (n) addMark(n.startChar, name);
   }
-  // (b) decorations abcjs DOES attach (notably `.` → "staccato"), per note's voice.
+  // (b) decorations abcjs DOES attach (notably `.` → "staccato").
   for (const n of notes) {
     if (!Array.isArray(n.decoration)) continue;
-    const vn = svToVoice.get(n.sv);
-    const map = mapForVoice(vn);
-    for (const d of n.decoration) { const dl = String(d).toLowerCase(); if (map[dl]) { addTok(vn, n.startChar, dl); break; } }
+    for (const d of n.decoration) addMark(n.startChar, MARK_ALIAS[d] ?? String(d).toLowerCase());
   }
-  for (const arr of voiceTokens.values()) arr.sort((a, b) => a.index - b.index);
 
-  return { leadMs, hold, charToVoice, channelForVoice, mapForVoice, voiceTokens };
+  return {
+    leadMs, hold, slurName, globalMap,
+    charToVoice, channelForVoice, velScaleForVoice, entryFor,
+    noteMarks,
+    voiceMix: voiceConfig,   // Map<vn,{channel,volume,pan,velScale,map}>
+  };
 }
 
-/** Queue the MIDI bytes for one keyswitch action at absolute time `at` (ms). */
-function _enqueueKeyswitch(msgs, action, at, ch, hold, heldRef) {
-  if (action.type === 'note') {
-    if (hold === 'held' && heldRef.heldKs != null) {
-      msgs.push({ at, status: 0x80 | ch, pitch: heldRef.heldKs, vel: 0 }); // release previous
-    }
-    msgs.push({ at, status: 0x90 | ch, pitch: action.note, vel: 100 });
-    if (hold === 'held') heldRef.heldKs = action.note;
-    else msgs.push({ at: at + 15, status: 0x80 | ch, pitch: action.note, vel: 0 }); // momentary
-  } else if (action.type === 'cc') {
-    msgs.push({ at, status: 0xB0 | ch, pitch: action.cc, vel: Math.max(0, Math.min(127, action.value)) });
-  } else if (action.type === 'program') {
-    msgs.push({ at, bytes: [0xC0 | ch, Math.max(0, Math.min(127, action.program)) ] });
+/** Emit the switch parts (keyswitch note / CC / program) of a map entry at `at`. */
+function _emitSwitchEntry(msgs, entry, at, ch, hold, st) {
+  if (entry.note != null) {
+    if (hold === 'held' && st.heldKs != null) msgs.push({ at, status: 0x80 | ch, pitch: st.heldKs, vel: 0 });
+    msgs.push({ at, status: 0x90 | ch, pitch: entry.note, vel: 100 });
+    if (hold === 'held') st.heldKs = entry.note;
+    else msgs.push({ at: at + 15, status: 0x80 | ch, pitch: entry.note, vel: 0 });
   }
+  if (entry.cc) msgs.push({ at, status: 0xB0 | ch, pitch: entry.cc.cc, vel: Math.max(0, Math.min(127, entry.cc.value)) });
+  if (entry.program != null) msgs.push({ at, bytes: [0xC0 | ch, Math.max(0, Math.min(127, entry.program))] });
 }
 
 function _startMidiPlayback(out, noteEvents, startSeconds, stopChar, meterSize, ksPlan) {
@@ -794,15 +832,24 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopChar, meterSize, 
   _midiActiveNotes.clear();
   const t0 = performance.now() + MIDI_PREROLL_MS;
   const msgs = [];
-  // Per-voice keyswitch state (each instrument tracks its own sticky articulation
-  // + token pointer + held keyswitch).  `lastKsArtic` starts undefined so the
-  // first played note of each voice forces an emit.
+
+  // Per-voice state: sticky articulation (switch) + sticky dynamic level +
+  // held keyswitch + which note we last processed marks for (chord de-dupe).
   const vstate = new Map();
   const vget = (vn) => {
     let s = vstate.get(vn);
-    if (!s) { s = { tokIdx: 0, currentArtic: null, lastKsArtic: undefined, heldKs: null }; vstate.set(vn, s); }
+    if (!s) { s = { artic: null, lastArtic: undefined, level: null, heldKs: null, lastSc: -1 }; vstate.set(vn, s); }
     return s;
   };
+
+  // Per-voice mix: send volume (CC7) / pan (CC10) once at the start on the channel.
+  if (ksPlan?.voiceMix) {
+    for (const [vn, c] of ksPlan.voiceMix) {
+      const ch = ksPlan.channelForVoice(vn);
+      if (c.volume != null) msgs.push({ at: t0, status: 0xB0 | ch, pitch: 7,  vel: c.volume });
+      if (c.pan    != null) msgs.push({ at: t0, status: 0xB0 | ch, pitch: 10, vel: c.pan });
+    }
+  }
 
   for (const ev of noteEvents) {
     const evSec = ev.milliseconds / 1000;
@@ -815,41 +862,52 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopChar, meterSize, 
       const sc = p.startChar;
       const voice = ksPlan ? ksPlan.charToVoice(sc) : 1;
       const ch = ksPlan ? ksPlan.channelForVoice(voice) : 0;
+      const st = ksPlan ? vget(voice) : null;
 
-      // Advance this voice's (sticky) articulation in source order — even for
-      // notes before the entry point, so a mid-piece resume is in the right
-      // state.  Assign a token to the note whose span ENDS after it
-      // (`index < endChar`); abcjs reports startChar inconsistently vs a note's
-      // own leading `!decoration!`, so startChar comparison is unreliable.
+      // Per-note velocity bumps (accents) accumulate here; sticky state below.
+      let bump = 0;
+      if (ksPlan && sc !== st.lastSc) {
+        // Process this note's markings once (not per chord-pitch), in source order.
+        st.lastSc = sc;
+        for (const name of ksPlan.noteMarks.get(sc) ?? []) {
+          const e = ksPlan.entryFor(voice, name);
+          if (!e) continue;
+          if (_isSwitch(e)) st.artic = name;       // sticky articulation switch
+          if (_isLevel(e))  st.level = e;          // sticky dynamic level
+        }
+      }
+      // Accent-type bumps apply to THIS note only (re-read each pitch is fine).
       if (ksPlan) {
-        const st = vget(voice);
-        const toks = ksPlan.voiceTokens.get(voice) || [];
-        const endC = p.endChar ?? ((sc ?? 0) + 1);
-        while (st.tokIdx < toks.length && toks[st.tokIdx].index < endC) {
-          st.currentArtic = toks[st.tokIdx].artic;
-          st.tokIdx++;
+        for (const name of ksPlan.noteMarks.get(sc) ?? []) {
+          const e = ksPlan.entryFor(voice, name);
+          if (e?.velBump) bump += e.velBump;
         }
       }
 
-      // Range mode: skip notes at/after the selection end (pointer already moved).
+      // Range mode: skip notes at/after the selection end (state already updated).
       if (stopChar !== null && sc !== undefined && sc >= stopChar) continue;
       if (!played) continue; // before the entry point — no output, state is current
 
-      // Keyswitch on articulation change for this voice, on its own channel.
-      if (ksPlan) {
-        const st = vget(voice);
-        if (st.currentArtic !== st.lastKsArtic) {
-          const action = st.currentArtic ? ksPlan.mapForVoice(voice)[st.currentArtic] : null;
-          if (action) {
-            const at = Math.max(performance.now(), onAt - ksPlan.leadMs);
-            _enqueueKeyswitch(msgs, action, at, ch, ksPlan.hold, st);
-          }
-          st.lastKsArtic = st.currentArtic;
+      // Fire the articulation keyswitch on change (force on first played note).
+      if (ksPlan && st.artic !== st.lastArtic) {
+        const e = st.artic ? ksPlan.entryFor(voice, st.artic) : null;
+        if (e && _isSwitch(e)) {
+          const at = Math.max(performance.now(), onAt - ksPlan.leadMs);
+          _emitSwitchEntry(msgs, e, at, ch, ksPlan.hold, st);
         }
+        st.lastArtic = st.artic;
       }
 
+      // Velocity: dynamic level (abs/scaled) overrides abcjs default, + accent
+      // bump, × per-voice velocity scale.
+      const abcVol = p.volume ?? 92;
+      let base = abcVol;
+      if (st?.level?.velAbs   != null) base = st.level.velAbs;
+      else if (st?.level?.velScale != null) base = abcVol * st.level.velScale;
+      const scale = ksPlan ? ksPlan.velScaleForVoice(voice) : 1;
+      const vel = Math.max(1, Math.min(127, Math.round((base + bump) * scale)));
+
       const pitch = Math.round(p.pitch);
-      const vel   = Math.max(1, Math.min(127, Math.round(p.volume ?? 92)));
       const durMs = Math.max(40, (p.duration ?? 0.25) * msPerMeasure / meterSize);
       const offAt = onAt + durMs * 0.97; // small gap so repeated pitches retrigger
       msgs.push({ at: onAt,  status: 0x90 | ch, pitch, vel });
