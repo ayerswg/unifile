@@ -86,7 +86,9 @@ function _parseSimpleYaml(text) {
       const c = t.indexOf(':');
       if (c < 0) { i++; continue; }
       const key = t.slice(0, c).trim();
-      const val = t.slice(c + 1).trim();
+      // Strip a trailing inline comment.  A `#` only starts a comment when
+      // preceded by whitespace, so note names like `C#3` / `F#-1` are preserved.
+      const val = t.slice(c + 1).replace(/\s+#.*$/, '').trim();
       i++;
       if (!key) continue;
       if (val === '') {
