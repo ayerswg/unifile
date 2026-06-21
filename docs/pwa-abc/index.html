@@ -2,11 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <!-- Same-origin only: no external network. manifest-src is required for the
-       web app manifest to load (without it the manifest falls back to
-       default-src 'none' and is blocked → the PWA isn't installable).
-       connect-src 'self' lets the in-app site-nav fetch /search.json. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:; media-src blob:; frame-src 'none'; object-src 'none';">
+  <!-- Mostly same-origin. manifest-src is required for the web app manifest to
+       load (else it falls back to default-src 'none' → not installable).
+       connect-src 'self' lets the in-app site-nav fetch /search.json.
+       The accounts.google.com / *.googleapis.com entries are ONLY for the
+       optional Google Drive sync (loaded lazily; nothing contacts Google unless
+       you use Drive). Data goes browser → your Drive directly. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://accounts.google.com https://*.googleapis.com https://oauth2.googleapis.com; manifest-src 'self'; worker-src 'self' blob:; media-src blob:; frame-src 'self' https://accounts.google.com; object-src 'none';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Unifile ABC</title>
   <meta name="description" content="Unifile – offline document editor with full version history.">
