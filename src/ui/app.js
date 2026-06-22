@@ -13,7 +13,6 @@ import {
   generateQuine,
   downloadFile,
   loadUserPrefs,
-  saveUserPrefs,
   IS_QUINE,
   saveDraft,
   loadDraft,
@@ -41,7 +40,6 @@ import { mountSiteNav } from './site-nav.js';
 import { checkForUpdate } from './update-check.js';
 import { CommitBar } from './commit-bar.js';
 import { DiffView, DiffBar } from './diff-view.js';
-import * as gdrive from '../core/gdrive.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { MergeDialog } from './merge-dialog.js';
@@ -130,11 +128,6 @@ export class App {
       const r = document.getElementById('unifile-app');
       if (diff) r?.setAttribute('data-diff', '1'); else r?.removeAttribute('data-diff');
     });
-
-    // 5f. Google Drive sync (single file, hosted https only). The Settings panel
-    //     drives these; status is reported back via the 'drive-status' event.
-    state.on('drive-push', () => this._drivePush());
-    state.on('drive-pull', (payload) => this._drivePull(payload?.fileId));
 
     // 6. Expose host APIs for plugins (must run before plugins are loaded so that
     //    plugins can use the host's CM6 + state instances instead of bundling copies)
@@ -615,45 +608,6 @@ export class App {
     state.emit('checkout', { hash: vcs.headHash, content: currentContent });
     state.emit('change');
     this._saveQuine(this._currentDataObject());  // persist (IDB / file handle)
-  }
-
-  // ---------------------------------------------------------------------------
-  // Google Drive sync (single file) — browser ↔ your Drive directly
-  // ---------------------------------------------------------------------------
-
-  /** Push the current document (+ history) to its Drive file (creates on first push). */
-  async _drivePush() {
-    const clientId = loadUserPrefs().googleClientId;
-    const content = JSON.stringify(this._currentDataObject(), null, 2);
-    const base = (state.title || 'untitled').trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled';
-    const fileId = state.data?.driveFileId ?? loadUserPrefs().driveFileId ?? null;
-    try {
-      state.emit('drive-status', { busy: true, msg: 'Pushing to Drive…' });
-      const newId = await gdrive.push({ clientId, fileId, name: `${base}.unifile.json`, content });
-      if (state.data) state.data.driveFileId = newId;
-      saveUserPrefs({ driveFileId: newId });
-      state.emit('drive-status', { ok: true, msg: `Saved to Drive (${fileId ? 'updated' : 'created'}).`, fileId: newId });
-    } catch (e) {
-      state.emit('drive-status', { error: true, msg: e?.message ?? String(e) });
-    }
-  }
-
-  /** Pull from Drive (a given fileId, else the document's stored one) and load it. */
-  async _drivePull(fileId) {
-    const clientId = loadUserPrefs().googleClientId;
-    fileId = fileId ?? state.data?.driveFileId ?? loadUserPrefs().driveFileId ?? null;
-    if (!fileId) { state.emit('drive-status', { error: true, msg: 'No Drive file yet — push first, or pick a file.' }); return; }
-    try {
-      state.emit('drive-status', { busy: true, msg: 'Pulling from Drive…' });
-      const text = await gdrive.pull({ clientId, fileId });
-      const data = JSON.parse(text);
-      data.driveFileId = fileId;
-      this._loadDataObject(data);
-      saveUserPrefs({ driveFileId: fileId });
-      state.emit('drive-status', { ok: true, msg: 'Loaded from Drive.', fileId });
-    } catch (e) {
-      state.emit('drive-status', { error: true, msg: e?.message ?? String(e) });
-    }
   }
 
   // ---------------------------------------------------------------------------
