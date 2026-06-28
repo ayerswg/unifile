@@ -954,17 +954,16 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* The vertical divider has no meaning inside a horizontal strip. */
   #uf-divider { display: none !important; }
 
-  /* Pane position indicator — a thin blue line at the very top whose lit third
-     shows the current pane (left=commit, middle=editor, right=render).  Its
-     margin-top owns the iOS status-bar inset so the bars below sit flush. */
+  /* Pane position indicator — a thin blue line whose lit third shows the current
+     pane (left=commit, middle=editor, right=render).  Sits BELOW the top bar
+     (order -1, after the topbar's -2); the top bar owns the status-bar inset. */
   #uf-pane-rail {
     display: block;
-    order: -3;
+    order: -1;
     flex-shrink: 0;
     position: relative;
     height: 3px;
     background: var(--border);
-    margin-top: env(safe-area-inset-top, 0px);
     overflow: hidden;
   }
   #uf-pane-rail::after {
@@ -979,9 +978,9 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-mobile-pane="editor"] #uf-pane-rail::after { transform: translateX(100%); }
   #unifile-app[data-mobile-pane="render"] #uf-pane-rail::after { transform: translateX(200%); }
 
-  #uf-site-nav { order: -2; }
-  /* MIDI routing is desktop-only — bottom bar is wholly play/scrubber/time. */
-  #pf-midi, .pf-midi-note { display: none !important; }
+  #uf-site-nav { order: -3; }
+  /* Top bar sits above the pane rail and owns the iOS status-bar inset. */
+  #uf-topbar { order: -2; margin-top: env(safe-area-inset-top, 0px); }
 
   /* ── Top bar: hamburger + filename (flexes) + branch/status chip. ── */
   .topbar-right { display: none !important; }
@@ -1017,9 +1016,21 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     white-space: nowrap;
   }
   .tb-status-chip .tb-status-dot { flex: 0 0 auto; font-size: 9px; color: var(--accent); }
+  .tb-status-chip .tb-status-caret { flex: 0 0 auto; font-size: 9px; color: var(--text-muted); }
   .tb-status-chip.dirty { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
   .tb-status-chip.detached { color: var(--warning, #d20f39); border-color: currentColor; }
   .tb-status-chip:active { background: var(--bg-overlay); }
+
+  /* Branch switcher dropdown anchors under the chip (top-right) on mobile. */
+  #tb-branch-dd { right: 8px; left: auto; }
+
+  /* ── Editor gutter: collapse to a thin rail (no line numbers) ──
+     The current line shows as an accent segment; a commented line shows yellow. */
+  .cm-comment-ln .cm-ln-text { display: none; }
+  #uf-editor-wrap .cm-comment-ln { min-width: 0; }
+  #uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; min-width: 6px; }
+  #uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
+  #uf-editor-wrap .cm-comment-ln .cm-has-comments { background: #f9e2af !important; }
 
   /* ── Bottom bar: an IN-FLOW flex child at the end of the #unifile-app column.
      Because the column is exactly `100dvh` (the visible viewport — no browser

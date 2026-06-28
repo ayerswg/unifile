@@ -43,6 +43,13 @@ export class CommitDialog {
     const head = state.vcs?.headCommit;
     const suggestedTag = head?.tag ? incrementPatch(head.tag) : '';
 
+    // Carry over a message/version typed in the mobile commit bar before this
+    // dialog was opened (e.g. because no identity was saved yet).
+    const pending = state.pendingCommit;
+    state.pendingCommit = null;
+    const draftMsg = pending?.message ?? '';
+    const draftTag = pending?.tag ?? suggestedTag;
+
     // ── Identity section ───────────────────────────────────────────────────
     const identitySection = hasCachedIdentity
       ? `<div class="commit-identity-row">
@@ -106,7 +113,7 @@ export class CommitDialog {
                 Commit message <span class="required">*</span>
               </label>
               <textarea class="form-input form-textarea" id="commit-message"
-                placeholder="Describe your changes…" required rows="3"></textarea>
+                placeholder="Describe your changes…" required rows="3">${escHtml(draftMsg)}</textarea>
             </div>
 
             <div class="form-row">
@@ -115,7 +122,7 @@ export class CommitDialog {
                 <span class="form-hint">(optional, e.g. 1.2.3)</span>
               </label>
               <input class="form-input" id="commit-tag" type="text"
-                value="${escHtml(suggestedTag)}"
+                value="${escHtml(draftTag)}"
                 placeholder="1.0.0" pattern="\\d+\\.\\d+\\.\\d+.*">
             </div>
 

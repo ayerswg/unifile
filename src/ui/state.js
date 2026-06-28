@@ -90,6 +90,9 @@ class AppState extends EventBus {
     /** @type {{ left: string, right: string }|null} Active diff view (hash | 'WORKING') */
     this.diff = null;
 
+    /** @type {{ message: string, tag?: string }|null} Draft carried into the commit dialog */
+    this.pendingCommit = null;
+
     /** @type {FileSystemFileHandle|null} PWA file handle */
     this.fileHandle = null;
 

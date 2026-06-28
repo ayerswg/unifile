@@ -19,11 +19,9 @@ export class DslFooter {
     this.el = container;
     this._unsub = [];
     this._lastDsl = null;
-    this._midiRequested = false; // request Web MIDI access lazily, once
     this._dragging = false;      // true while the user drags the scrubber
 
     this._unsub.push(state.on('change',                  () => this._maybeRender()));
-    this._unsub.push(state.on('abc-midi-outputs-change', () => this.render()));
     this._unsub.push(state.on('abc-play-state', ({ playing }) => this._updatePlayBtn(playing)));
     this._unsub.push(state.on('abc-duration',   ({ total })   => this._updateScale(total)));
     this._unsub.push(state.on('abc-progress',   ({ ms, total }) => this._updateProgress(ms, total)));
@@ -66,7 +64,6 @@ export class DslFooter {
         <input type="range" class="pf-scrub" id="pf-scrub" min="0" max="${Math.max(0, total)}"
           value="${Math.min(pos, total)}" step="50" aria-label="Seek">
         <span class="pf-time pf-time-total" id="pf-total">${_fmt(total)}</span>
-        ${this._midiSelectHtml()}
       </div>`;
 
     this.el.querySelector('#pf-play')
@@ -89,13 +86,7 @@ export class DslFooter {
       scrub.addEventListener('pointerup', commit);
     }
 
-    const sel = this.el.querySelector('#pf-midi');
-    if (sel) {
-      sel.addEventListener('pointerdown', () => {
-        if (!this._midiRequested) { this._midiRequested = true; state.emit('abc-midi-refresh'); }
-      });
-      sel.addEventListener('change', () => state.emit('abc-midi-select', { id: sel.value || null }));
-    }
+    // MIDI-output routing lives in Settings → Audio output (not the play bar).
   }
 
   // ---------------------------------------------------------------------------
@@ -127,20 +118,6 @@ export class DslFooter {
     if (cur)   cur.textContent = _fmt(ms);
   }
 
-  /** Build the MIDI-output <select> (or a disabled note when unsupported). */
-  _midiSelectHtml() {
-    if (!state.abcMidiSupported) {
-      return `<span class="pf-midi-note" title="Web MIDI is only available in Chromium-based browsers">Internal piano</span>`;
-    }
-    const outs     = state.abcMidiOutputs ?? [];
-    const selected = state.abcMidiOutId ?? '';
-    const opts = [`<option value=""${selected ? '' : ' selected'}>🔊 Internal piano</option>`]
-      .concat(outs.map(o => {
-        const sel = o.id === selected ? ' selected' : '';
-        return `<option value="${_esc(o.id)}"${sel}>🎹 ${_esc(o.name)}</option>`;
-      }));
-    return `<select id="pf-midi" class="pf-midi-select" title="Audio output — route to an external MIDI instrument (e.g. Kontakt) or use the built-in piano">${opts.join('')}</select>`;
-  }
 }
 
 function _esc(s) {

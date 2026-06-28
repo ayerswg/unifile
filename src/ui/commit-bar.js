@@ -36,22 +36,14 @@ export class CommitBar {
 
   render() {
     const vcs = state.vcs;
-    const branch = state.currentBranch ?? 'main';
     const dirty = state.isDirty;
     const head = vcs?.log?.()?.[0];
     const suggested = head?.tag ? _incPatch(head.tag) : '';
-    const branches = vcs?.listBranches?.() ?? [];
 
+    // Branch + dirty state live in the top-bar chip now; this bar is just the
+    // commit composer (message + optional version + Commit).
     this.el.innerHTML = `
       <div class="cb">
-        <div class="cb-row cb-top">
-          <button class="cb-branch" id="cb-branch" title="Switch branch">
-            ${_iconBranch()}<span class="cb-branch-name">${_esc(branch)}</span><span class="cb-caret">▾</span>
-          </button>
-          <span class="cb-status ${dirty ? 'dirty' : 'clean'}">
-            ${dirty ? '<span class="cb-dot">●</span> uncommitted changes' : '✓ all committed'}
-          </span>
-        </div>
         <div class="cb-row cb-compose">
           <input class="cb-msg" id="cb-msg" type="text" autocomplete="off"
             placeholder="${dirty ? 'Describe your change…' : 'No changes to commit'}"
@@ -61,21 +53,8 @@ export class CommitBar {
             ${dirty ? '' : 'disabled'} aria-label="Version (optional)">
           <button class="cb-commit" id="cb-commit" ${dirty && !this._busy ? '' : 'disabled'}>Commit</button>
         </div>
-        <div class="cb-branch-menu${this._branchOpen ? ' open' : ''}" id="cb-branch-menu">
-          ${this._branchOpen ? branches.map(b => `
-            <button class="cb-branch-item${b.name === branch ? ' current' : ''}" data-branch="${_esc(b.name)}">
-              ${_iconBranch()} ${_esc(b.name)}${b.name === branch ? ' ·' : ''}
-            </button>`).join('') : ''}
-        </div>
       </div>`;
 
-    this.el.querySelector('#cb-branch')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._branchOpen = !this._branchOpen;
-      this.render();
-    });
-    this.el.querySelectorAll('.cb-branch-item').forEach(item =>
-      item.addEventListener('click', () => this._switchBranch(item.dataset.branch)));
     this.el.querySelector('#cb-commit')?.addEventListener('click', () => this._commit());
     // Enter in the message field commits.
     this.el.querySelector('#cb-msg')?.addEventListener('keydown', (e) => {
@@ -89,18 +68,6 @@ export class CommitBar {
     if (enabled !== !!state.isDirty) this.render();
   }
 
-  async _switchBranch(name) {
-    this._branchOpen = false;
-    const vcs = state.vcs;
-    if (!vcs || name === state.currentBranch) { this.render(); return; }
-    try {
-      const content = vcs.switchBranch(name);
-      state.update({ currentContent: content, isDirty: false });
-      state.emit('branch-switch', { name, content });
-    } catch (err) { console.warn('[commit-bar] branch switch failed:', err?.message); }
-    this.render();
-  }
-
   async _commit() {
     if (this._busy || !state.isDirty || !this.onCommit) return;
     const msg = this.el.querySelector('#cb-msg')?.value.trim();
@@ -108,7 +75,9 @@ export class CommitBar {
     const tag = this.el.querySelector('#cb-ver')?.value.trim() || undefined;
     const prefs = loadUserPrefs();
     if (!prefs?.name || !prefs?.email) {
-      // No saved identity → use the full dialog once to capture name/email.
+      // No saved identity → open the full dialog to capture name/email, but
+      // carry the message + version the user already typed so they aren't lost.
+      state.pendingCommit = { message: msg, tag };
       state.openPanel(PANELS.COMMIT);
       return;
     }

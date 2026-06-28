@@ -24,6 +24,24 @@ export class SettingsPanel {
       if (panel === PANELS.SETTINGS) this.show();
       else this.hide();
     }));
+
+    // Repopulate the audio-output picker when MIDI ports change (panel open).
+    this._unsub.push(state.on('abc-midi-outputs-change', () => {
+      const sel = this.el.querySelector('#settings-midi');
+      if (sel) sel.innerHTML = this._midiOptions();
+    }));
+  }
+
+  /** <option>s for the audio-output picker: internal piano + external ports. */
+  _midiOptions() {
+    if (!state.abcMidiSupported) {
+      return '<option value="" selected>Internal piano (Web MIDI unavailable in this browser)</option>';
+    }
+    const outs = state.abcMidiOutputs ?? [];
+    const selected = state.abcMidiOutId ?? '';
+    return [`<option value=""${selected ? '' : ' selected'}>🔊 Internal piano</option>`]
+      .concat(outs.map(o => `<option value="${escHtml(o.id)}"${o.id === selected ? ' selected' : ''}>🎹 ${escHtml(o.name)}</option>`))
+      .join('');
   }
 
   destroy() {
@@ -33,6 +51,7 @@ export class SettingsPanel {
   show() {
     const prefs = loadUserPrefs();
     const theme = prefs.theme ?? 'auto';
+    const isAbc = (state.activeDslId ?? state.data?.dslType) === 'abcjs';
 
     this.el.innerHTML = `
       <div class="dialog-overlay" id="settings-overlay">
@@ -90,6 +109,17 @@ export class SettingsPanel {
 
             <p id="settings-error" class="form-error" hidden></p>
             <p id="settings-saved" class="form-success" hidden>Settings saved.</p>
+
+            ${isAbc ? `
+            <!-- ── Audio output (ABC) ─────────────────────────────────── -->
+            <div class="settings-section-label">Audio output</div>
+            <p class="settings-intro">
+              Play through the built-in piano, or route to an external MIDI
+              instrument (e.g. Kontakt). Web MIDI is Chromium-only.
+            </p>
+            <div class="form-row">
+              <select class="form-input" id="settings-midi" aria-label="Audio output">${this._midiOptions()}</select>
+            </div>` : ''}
 
             <!-- ── Updates ────────────────────────────────────────────── -->
             <div class="settings-section-label">Updates</div>
@@ -169,6 +199,15 @@ export class SettingsPanel {
     // Manual "Check for updates" — forces a cache-busting check.
     this.el.querySelector('#settings-check-update')
       ?.addEventListener('click', () => this._checkUpdate());
+
+    // Audio output (ABC): request MIDI access lazily on first interaction.
+    const midi = this.el.querySelector('#settings-midi');
+    if (midi) {
+      let requested = false;
+      midi.addEventListener('pointerdown', () => { if (!requested) { requested = true; state.emit('abc-midi-refresh'); } });
+      midi.addEventListener('focus',       () => { if (!requested) { requested = true; state.emit('abc-midi-refresh'); } });
+      midi.addEventListener('change',      () => state.emit('abc-midi-select', { id: midi.value || null }));
+    }
   }
 
   async _checkUpdate() {
