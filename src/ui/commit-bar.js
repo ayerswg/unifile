@@ -45,9 +45,9 @@ export class CommitBar {
     this.el.innerHTML = `
       <div class="cb">
         <div class="cb-row cb-compose">
-          <input class="cb-msg" id="cb-msg" type="text" autocomplete="off"
+          <textarea class="cb-msg" id="cb-msg" rows="1" autocomplete="off"
             placeholder="${dirty ? 'Describe your change…' : 'No changes to commit'}"
-            ${dirty ? '' : 'disabled'}>
+            ${dirty ? '' : 'disabled'}></textarea>
           <input class="cb-ver" id="cb-ver" type="text" autocomplete="off"
             placeholder="v ${suggested || '0.0.0'}" value="${_esc(suggested)}"
             ${dirty ? '' : 'disabled'} aria-label="Version (optional)">
@@ -56,10 +56,25 @@ export class CommitBar {
       </div>`;
 
     this.el.querySelector('#cb-commit')?.addEventListener('click', () => this._commit());
-    // Enter in the message field commits.
-    this.el.querySelector('#cb-msg')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); this._commit(); }
-    });
+
+    // Message: word-wraps and auto-grows with the text (capped). Enter commits;
+    // Shift+Enter inserts a newline.
+    const msg = this.el.querySelector('#cb-msg');
+    if (msg) {
+      const grow = () => {
+        if (!msg.offsetParent) return;       // hidden (not on commit pane) — skip
+        if (!msg.value) { msg.style.height = ''; return; }  // empty → 1-row default (placeholder can't inflate it)
+        msg.style.height = '0px';            // collapse first so scrollHeight is exact
+        msg.style.height = Math.min(msg.scrollHeight, 140) + 'px';
+      };
+      msg.addEventListener('input', grow);
+      // Grow once it's actually visible (the commit pane may be off-screen at render).
+      requestAnimationFrame(grow);
+      this._growMsg = grow;
+      msg.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._commit(); }
+      });
+    }
   }
 
   _syncDirty() {

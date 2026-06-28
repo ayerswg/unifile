@@ -1036,13 +1036,30 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* Branch switcher dropdown anchors under the chip (top-right) on mobile. */
   #tb-branch-dd { right: 8px; left: auto; }
 
-  /* ── Editor gutter: collapse to a thin rail (no line numbers) ──
-     The current line shows as an accent segment; a commented line shows yellow. */
+  /* ── Editor gutter: collapse to a SINGLE thin rail (no line numbers, no
+     separate fold column). The current line shows as a full-width accent
+     segment; a commented line shows yellow. Folding the front matter is done
+     by tapping the rail on the `---` line (see editor.js). ── */
   .cm-comment-ln .cm-ln-text { display: none; }
+  #uf-editor-wrap .cm-foldGutter { display: none !important; } /* merge into the one rail */
   #uf-editor-wrap .cm-comment-ln { min-width: 0; }
-  #uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; min-width: 6px; }
+  #uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; min-width: 7px; }
   #uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
   #uf-editor-wrap .cm-comment-ln .cm-has-comments { background: #f9e2af !important; }
+  /* A little breathing room between the rail and the code. */
+  #uf-editor-wrap .cm-content { padding-left: 5px; }
+
+  /* Comments word-wrap within the visible width even though the DSL lines do
+     NOT wrap (they stay horizontally scrollable). The accordion is pinned to
+     the left and sized to the viewport so it doesn't follow the wide content. */
+  #uf-editor-wrap .cm-accordion {
+    position: sticky;
+    left: 0;
+    width: calc(100vw - 8px);
+    max-width: 100vw;
+    box-sizing: border-box;
+  }
+  .ct-msg-body { overflow-wrap: anywhere; }
 
   /* ── Bottom bar: an IN-FLOW flex child at the end of the #unifile-app column.
      Because the column is exactly `100dvh` (the visible viewport — no browser
@@ -1088,9 +1105,12 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .cb-status { font-size: 12px; color: var(--text-muted); margin-left: auto; }
 .cb-status.dirty { color: var(--accent); }
 .cb-status .cb-dot { font-size: 9px; }
-.cb-compose { gap: 6px; }
+.cb-compose { gap: 6px; align-items: flex-end; }   /* keep buttons aligned to the bottom as the message grows */
 .cb-msg { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); color: var(--text); padding: 6px 8px; font-family: var(--font-ui); }
+  border-radius: var(--radius-sm); color: var(--text); padding: 6px 8px; font-family: var(--font-ui);
+  /* auto-growing wrapped textarea */
+  resize: none; overflow: hidden; line-height: 1.4; font-size: 16px; max-height: 140px;
+  white-space: pre-wrap; overflow-wrap: anywhere; }
 .cb-ver { width: 84px; flex-shrink: 0; background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius-sm); color: var(--text); padding: 6px 8px; font-family: var(--font-ui); }
 .cb-commit {

@@ -21,7 +21,8 @@ import { EditorView, keymap, highlightActiveLine, Decoration,
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { indentOnInput, bracketMatching, Language,
-         codeFolding, foldGutter, foldService } from '@codemirror/language';
+         codeFolding, foldGutter, foldService,
+         foldEffect, unfoldEffect, foldedRanges } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap } from '@codemirror/search';
@@ -222,6 +223,26 @@ const commentLineNumbersExt = gutter({
 
   domEventHandlers: {
     click(view, line) {
+      // Front-matter fence line → toggle the fold from the rail itself (the
+      // separate fold-gutter column is hidden on mobile, so the collapse lives
+      // here). Line 1 `---` with a matching closing `---`.
+      const first = view.state.doc.line(1);
+      const ld = view.state.doc.lineAt(line.from);
+      if (ld.from === first.from && first.text.trim() === '---') {
+        let to = null;
+        for (let n = 2; n <= view.state.doc.lines; n++) {
+          const l = view.state.doc.line(n);
+          if (l.text.trim() === '---') { to = l.to; break; }
+        }
+        if (to != null) {
+          const from = first.to;
+          let folded = false;
+          foldedRanges(view.state).between(from, to, () => { folded = true; });
+          view.dispatch({ effects: (folded ? unfoldEffect : foldEffect).of({ from, to }) });
+          return true;
+        }
+      }
+
       const threads = getThreadsForLine(line.from, view.state.doc);
       if (threads.length === 0) return false; // no threads; nothing to open
 
