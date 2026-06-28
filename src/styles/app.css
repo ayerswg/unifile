@@ -962,11 +962,12 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     order: -1;
     flex-shrink: 0;
     position: relative;
-    height: 3px;
+    height: 8px;                /* a bit taller so it's a comfortable tap target */
     background: var(--border);
     overflow: hidden;
+    cursor: pointer;
   }
-  #uf-pane-rail::after {
+  #uf-pane-rail::after {        /* lit third = current pane */
     content: "";
     position: absolute;
     inset: 0;
@@ -974,6 +975,17 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     background: var(--accent);
     transform: translateX(0);
     transition: transform .18s ease;
+  }
+  /* Thin dividers hint the three tappable zones (commit · editor · render). */
+  #uf-pane-rail::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background:
+      linear-gradient(var(--bg), var(--bg)) calc(33.333% - 0.5px) 0 / 1px 100% no-repeat,
+      linear-gradient(var(--bg), var(--bg)) calc(66.666% - 0.5px) 0 / 1px 100% no-repeat;
   }
   #unifile-app[data-mobile-pane="editor"] #uf-pane-rail::after { transform: translateX(100%); }
   #unifile-app[data-mobile-pane="render"] #uf-pane-rail::after { transform: translateX(200%); }

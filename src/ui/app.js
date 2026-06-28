@@ -534,6 +534,15 @@ export class App {
       raf = requestAnimationFrame(() => { raf = 0; updatePane(); });
     }, { passive: true });
 
+    // Tap the pane rail to hop straight to that pane (left=commit · middle=editor
+    // · right=render) without scrolling.
+    document.getElementById('uf-pane-rail')?.addEventListener('click', (e) => {
+      if (!_isMobile()) return;
+      const r = e.currentTarget.getBoundingClientRect();
+      const idx = Math.min(2, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * 3)));
+      scrollToPane(idx, true);
+    });
+
     // The bottom bar is an in-flow flex child at the end of the `100dvh`
     // #unifile-app column (see app.css), so it sits flush at the true visible
     // bottom with no JS — no visualViewport pinning needed.
