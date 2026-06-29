@@ -1045,11 +1045,14 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
      front-matter lines a muted grey. Tap the rail to add/view a line comment. ── */
   .cm-comment-ln .cm-ln-text { display: none; }
   #uf-editor-wrap .cm-comment-ln { min-width: 0; }
-  #uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; min-width: 7px; }
+  #uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; min-width: 9px; }
   #uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
   #uf-editor-wrap .cm-comment-ln .cm-has-comments { background: #f9e2af !important; }
-  /* A little breathing room between the rail and the code. */
-  #uf-editor-wrap .cm-content { padding-left: 5px; }
+  /* Drop the gutter border line; the rail reads as one solid strip. */
+  #uf-editor-wrap .cm-gutters { border-right: none; }
+  /* Start at the very top (no dark gap above the first cell) + a little buffer
+     between the rail and the code. */
+  #uf-editor-wrap .cm-content { padding-top: 0; padding-left: 5px; }
 
   /* Comments word-wrap within the visible width even though the DSL lines do
      NOT wrap (they stay horizontally scrollable). The accordion is pinned to
