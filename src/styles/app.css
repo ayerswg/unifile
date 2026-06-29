@@ -170,6 +170,10 @@
 [data-theme="light"] .cm-cursor         { border-left-color: #1e66f5 !important; }
 [data-theme="light"] .cm-tooltip        { background: #dce0e8 !important; border-color: #ccd0da !important; color: #4c4f69 !important; }
 [data-theme="light"] .cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments { background: rgba(223,142,29,.18) !important; color: #df8e1d !important; }
+
+/* YAML front-matter lines (incl. the --- fences) get a muted grey gutter so the
+   block is visible at a glance.  Active-line + comment highlights take priority. */
+.cm-comment-ln .cm-gutterElement.cm-fm-line { background: rgba(127,132,156,.22); color: var(--text-muted); }
 /* Comment range mark — visible while accordion is open */
 [data-theme="light"] .cm-comment-range        { background: rgba(223,142,29,.12) !important; border-bottom: 1px solid rgba(223,142,29,.45) !important; }
 [data-theme="light"] .cm-comment-range-active { background: rgba(223,142,29,.22) !important; border-bottom: 1px solid rgba(223,142,29,.8)  !important; }
@@ -1036,12 +1040,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* Branch switcher dropdown anchors under the chip (top-right) on mobile. */
   #tb-branch-dd { right: 8px; left: auto; }
 
-  /* ── Editor gutter: collapse to a SINGLE thin rail (no line numbers, no
-     separate fold column). The current line shows as a full-width accent
-     segment; a commented line shows yellow. Folding the front matter is done
-     by tapping the rail on the `---` line (see editor.js). ── */
+  /* ── Editor gutter: a SINGLE thin rail (no line numbers). The current line
+     shows as a full-width accent segment, a commented line yellow, and YAML
+     front-matter lines a muted grey. Tap the rail to add/view a line comment. ── */
   .cm-comment-ln .cm-ln-text { display: none; }
-  #uf-editor-wrap .cm-foldGutter { display: none !important; } /* merge into the one rail */
   #uf-editor-wrap .cm-comment-ln { min-width: 0; }
   #uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; min-width: 7px; }
   #uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }

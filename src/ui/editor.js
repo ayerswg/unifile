@@ -20,9 +20,7 @@ import { EditorView, keymap, highlightActiveLine, Decoration,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { indentOnInput, bracketMatching, Language,
-         codeFolding, foldGutter, foldService,
-         foldEffect, unfoldEffect, foldedRanges } from '@codemirror/language';
+import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap } from '@codemirror/search';
@@ -167,30 +165,35 @@ const shebangDecoField = StateField.define({
 // ---------------------------------------------------------------------------
 
 class LineNumMarker extends GutterMarker {
-  constructor(lineNum, hasThread, isActive) {
+  constructor(lineNum, hasThread, isActive, isFrontMatter) {
     super();
-    this.lineNum   = lineNum;
-    this.hasThread = hasThread;
-    this.isActive  = isActive;
-    // elementClass is applied to the wrapper gutter cell element by CM6
-    this.elementClass = isActive
-      ? 'cm-has-comments cm-accordion-active'
-      : (hasThread ? 'cm-has-comments' : '');
+    this.lineNum        = lineNum;
+    this.hasThread      = hasThread;
+    this.isActive       = isActive;
+    this.isFrontMatter  = isFrontMatter;
+    // elementClass is applied to the wrapper gutter cell element by CM6.
+    // cm-fm-line tints the gutter for YAML front-matter lines (incl. the ---
+    // fences); the active-line + comment classes take visual priority.
+    this.elementClass = [
+      isActive ? 'cm-has-comments cm-accordion-active' : (hasThread ? 'cm-has-comments' : ''),
+      isFrontMatter ? 'cm-fm-line' : '',
+    ].filter(Boolean).join(' ');
   }
 
   toDOM() {
     const el = document.createElement('div');
     el.className = 'cm-ln-text';
     el.textContent = String(this.lineNum);
-    if (this.hasThread) el.title = 'Has comment — click to view';
+    el.title = this.hasThread ? 'Comment — click to view' : 'Click to add a comment';
     return el;
   }
 
   eq(other) {
     return (
-      this.lineNum   === other.lineNum   &&
-      this.hasThread === other.hasThread &&
-      this.isActive  === other.isActive
+      this.lineNum       === other.lineNum   &&
+      this.hasThread     === other.hasThread &&
+      this.isActive      === other.isActive  &&
+      this.isFrontMatter === other.isFrontMatter
     );
   }
 }
@@ -205,6 +208,13 @@ class LineNumSpacer extends GutterMarker {
   }
 }
 
+// End offset of the YAML front matter (0 if none). Recomputed on doc change so
+// the gutter can tint front-matter lines without re-parsing per line.
+const frontMatterEndField = StateField.define({
+  create: (s) => parseGlobalFrontMatter(s.doc.toString()).bodyFrom,
+  update: (val, tr) => tr.docChanged ? parseGlobalFrontMatter(tr.state.doc.toString()).bodyFrom : val,
+});
+
 const commentLineNumbersExt = gutter({
   class: 'cm-lineNumbers cm-comment-ln',
 
@@ -215,51 +225,26 @@ const commentLineNumbersExt = gutter({
     const acc        = view.state.field(accordionField);
     const isActive   = acc.anchorPos !== null &&
       view.state.doc.lineAt(acc.anchorPos).from === lineInfo.from;
-    return new LineNumMarker(lineInfo.number, threads.length > 0, isActive);
+    const fmEnd      = view.state.field(frontMatterEndField, false) ?? 0;
+    const isFm       = fmEnd > 0 && lineInfo.from < fmEnd;
+    return new LineNumMarker(lineInfo.number, threads.length > 0, isActive, isFm);
   },
 
   lineMarkerChange: () => true,
   initialSpacer: () => new LineNumSpacer(),
 
   domEventHandlers: {
+    // Click the gutter → create or view a LINE-LEVEL comment for that line.
+    // (Comments are line-level only; clicking opens the existing thread if any,
+    // else the new-comment form anchored at the line start.)
     click(view, line) {
-      // Front-matter fence line → toggle the fold from the rail itself (the
-      // separate fold-gutter column is hidden on mobile, so the collapse lives
-      // here). Line 1 `---` with a matching closing `---`.
-      const first = view.state.doc.line(1);
-      const ld = view.state.doc.lineAt(line.from);
-      if (ld.from === first.from && first.text.trim() === '---') {
-        let to = null;
-        for (let n = 2; n <= view.state.doc.lines; n++) {
-          const l = view.state.doc.line(n);
-          if (l.text.trim() === '---') { to = l.to; break; }
-        }
-        if (to != null) {
-          const from = first.to;
-          let folded = false;
-          foldedRanges(view.state).between(from, to, () => { folded = true; });
-          view.dispatch({ effects: (folded ? unfoldEffect : foldEffect).of({ from, to }) });
-          return true;
-        }
-      }
-
-      const threads = getThreadsForLine(line.from, view.state.doc);
-      if (threads.length === 0) return false; // no threads; nothing to open
-
-      // Priority: whole-line (point) threads first, then range threads
-      // sorted by their start position (leftmost / earliest on the line).
-      const sorted = [...threads].sort((a, b) => {
-        const aPoint = a.from === a.to ? 0 : 1;
-        const bPoint = b.from === b.to ? 0 : 1;
-        if (aPoint !== bPoint) return aPoint - bPoint; // point before range
-        return a.from - b.from;                        // leftmost range first
-      });
-
       const lineDoc = view.state.doc.lineAt(line.from);
+      const threads = getThreadsForLine(line.from, view.state.doc);
       view.dispatch({
         effects: openAccordionEffect.of({
           anchorPos: lineDoc.to,
-          threadId:  sorted[0].id
+          threadId:  threads[0]?.id ?? null,
+          newRange:  threads.length ? null : { from: lineDoc.from, to: lineDoc.from },
         })
       });
       return true;
@@ -383,26 +368,12 @@ const sectionSyntaxField = StateField.define({
 });
 
 // ---------------------------------------------------------------------------
-// Front-matter fold service — fold the `---` … `---` block at the document top.
-// ---------------------------------------------------------------------------
-
-const frontMatterFold = foldService.of((state, lineStart) => {
-  if (lineStart !== 0) return null;                 // only the opening fence
-  const first = state.doc.lineAt(0);
-  if (first.text.trim() !== '---') return null;
-  for (let n = 2; n <= state.doc.lines; n++) {
-    const line = state.doc.line(n);
-    if (line.text.trim() === '---') return { from: first.to, to: line.to };
-  }
-  return null;
-});
-
-// ---------------------------------------------------------------------------
 // Static base extensions — same for every DSL
 // ---------------------------------------------------------------------------
 
 const baseExtensions = [
-  commentLineNumbersExt,        // replaces lineNumbers(); also handles comment highlighting
+  commentLineNumbersExt,        // replaces lineNumbers(); comment + front-matter gutter
+  frontMatterEndField,          // tracks the YAML front-matter range for the gutter
   accordionField,               // inline accordion widget + range marks
   highlightActiveLineGutter(),
   highlightActiveLine(),
@@ -422,12 +393,6 @@ const baseExtensions = [
   // horizontally inside the editor (cm-scroller) rather than wrapping. On mobile
   // this nests inside the pane scroll-snap strip: swiping the code scrolls it,
   // and at the edge the gesture chains out to snap to the next pane.
-
-  // Collapsible YAML front matter: fold the `---` … `---` block at the top of
-  // the document.  The fold service offers a range on the opening `---` line.
-  codeFolding(),
-  foldGutter(),
-  frontMatterFold,
 
   // DSL range highlight (e.g. from clicking a note in ABC preview)
   dslHighlightField,
@@ -807,31 +772,8 @@ export class Editor {
       view.dispatch({ effects: closeAccordionEffect.of(null) });
     });
 
-    // ── contextmenu: right-click on line-number gutter OR on a text selection
-    this.el.addEventListener('contextmenu', (e) => {
-      const view = this._view;
-      if (!view) return;
-
-      // Right-click on the line-number gutter → "Add comment" for that line
-      if (e.target.closest('.cm-lineNumbers')) {
-        const rawPos  = view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? 0;
-        const safePos = Math.max(0, Math.min(rawPos, view.state.doc.length));
-        const line    = view.state.doc.lineAt(safePos);
-        e.preventDefault();
-        _showContextMenu(view, e.clientX, e.clientY, line.to, null, null);
-        return;
-      }
-
-      // Right-click in editor content with a non-empty selection → "Add comment"
-      const sel = view.state.selection.main;
-      if (sel.empty) return;
-
-      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
-      if (pos === null || pos < sel.from || pos > sel.to) return;
-
-      e.preventDefault();
-      _showContextMenu(view, e.clientX, e.clientY, view.state.doc.lineAt(sel.from).to, sel.from, sel.to);
-    });
+    // Comments are line-level: click the gutter to create/view one (see the
+    // commentLineNumbersExt click handler). No selection/range comment menu.
   }
 
   // ---------------------------------------------------------------------------
