@@ -15,7 +15,7 @@
  *   - Tab / Shift+Tab indent · Ctrl+S → commit · Alt+1/2/3 → view modes
  */
 
-import { EditorView, keymap, highlightActiveLine, Decoration,
+import { EditorView, keymap, Decoration,
          highlightActiveLineGutter, drawSelection,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
@@ -375,8 +375,11 @@ const baseExtensions = [
   commentLineNumbersExt,        // replaces lineNumbers(); comment + front-matter gutter
   frontMatterEndField,          // tracks the YAML front-matter range for the gutter
   accordionField,               // inline accordion widget + range marks
+  // Gutter line-number cell for the active line gets an accent highlight (the
+  // left rail on mobile). We intentionally do NOT highlightActiveLine() the
+  // content background — a full-width line tint fights with the text-selection
+  // highlight and makes the actively selected text hard to see (see app.css).
   highlightActiveLineGutter(),
-  highlightActiveLine(),
   highlightSpecialChars(),
   drawSelection(),
   // NOTE: highlightSelectionMatches() intentionally omitted — selecting text
@@ -581,13 +584,6 @@ export class Editor {
         annotations: Transaction.userEvent.of(DSL_SELECT_EVENT)
       });
       if (!mobile) this._view.focus();
-    }));
-
-    // ABC playback state → suppress active-line background while playing so it
-    // doesn't cover the green play-cursor highlight (editor may be unfocused).
-    this._unsub.push(state.on('abc-play-state', ({ playing }) => {
-      if (!this._view) return;
-      this._view.dom.classList.toggle('abc-play-active', playing);
     }));
 
     // ABC playback cursor → colour the currently sounding notes green.
@@ -808,6 +804,13 @@ export class Editor {
   }
 
   focus() { this._view?.focus(); }
+
+  /**
+   * Ask CodeMirror to re-measure its layout.  Needed after the editor pane is
+   * revealed from `display:none` (mobile pane switch) — CM6 can't measure while
+   * hidden, so the first paint after showing may be stale until we nudge it.
+   */
+  refresh() { this._view?.requestMeasure(); }
 
   /**
    * Expose the underlying CM6 EditorView document for migration etc.
