@@ -502,11 +502,11 @@ export class App {
     return `
       <div id="uf-pane-switch" role="tablist" aria-label="Switch pane">
         <span class="ps-thumb" aria-hidden="true"></span>
-        <button class="ps-btn" data-pane="commit" role="tab" aria-selected="false"
+        <button type="button" class="ps-btn" data-pane="commit" role="tab" aria-selected="false"
           aria-label="Commit history" title="Commits">${_iconCommitPane()}</button>
-        <button class="ps-btn" data-pane="editor" role="tab" aria-selected="true"
+        <button type="button" class="ps-btn" data-pane="editor" role="tab" aria-selected="true"
           aria-label="Code editor" title="Code">${_iconCodePane()}</button>
-        <button class="ps-btn ps-btn-render" data-pane="render" role="tab" aria-selected="false"
+        <button type="button" class="ps-btn ps-btn-render" data-pane="render" role="tab" aria-selected="false"
           aria-label="Preview" title="Preview">${this._paneRenderIcon()}</button>
       </div>`;
   }
