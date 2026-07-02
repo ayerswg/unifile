@@ -2345,10 +2345,27 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   color: var(--text-muted); flex-shrink: 0; min-width: 30px;
 }
 .pf-time-total { text-align: right; }
+/* Scrubber wrapper: layers a base track + a highlighted range band beneath the
+   native range input so the input's thumb (and its progress fill) stay on top. */
+.pf-scrub-wrap {
+  position: relative; flex: 1; min-width: 60px;
+  display: flex; align-items: center;
+}
+.pf-track {
+  position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
+  height: 4px; border-radius: 2px; background: var(--border);
+  pointer-events: none; z-index: 0;
+}
+.pf-range-band {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 4px; border-radius: 2px; pointer-events: none; z-index: 1;
+  background: color-mix(in srgb, var(--accent-2) 60%, transparent);
+}
 .pf-scrub {
-  flex: 1; min-width: 60px; height: 4px; cursor: pointer;
+  position: relative; z-index: 2;
+  flex: 1; min-width: 0; height: 4px; cursor: pointer;
   -webkit-appearance: none; appearance: none;
-  background: var(--border); border-radius: 2px; outline: none;
+  background: transparent; border-radius: 2px; outline: none;
 }
 .pf-scrub::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;

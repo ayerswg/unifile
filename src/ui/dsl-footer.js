@@ -20,11 +20,13 @@ export class DslFooter {
     this._unsub = [];
     this._lastDsl = null;
     this._dragging = false;      // true while the user drags the scrubber
+    this._range = null;          // {startMs,endMs} highlighted band, or null
 
     this._unsub.push(state.on('change',                  () => this._maybeRender()));
     this._unsub.push(state.on('abc-play-state', ({ playing }) => this._updatePlayBtn(playing)));
     this._unsub.push(state.on('abc-duration',   ({ total })   => this._updateScale(total)));
     this._unsub.push(state.on('abc-progress',   ({ ms, total }) => this._updateProgress(ms, total)));
+    this._unsub.push(state.on('abc-range',      (r) => { this._range = r; this._applyRange(); }));
 
     this.render();
   }
@@ -61,8 +63,12 @@ export class DslFooter {
           <span class="pf-icon">${playing ? _iconPause() : _iconPlay()}</span>
         </button>
         <span class="pf-time" id="pf-cur">${_fmt(pos)}</span>
-        <input type="range" class="pf-scrub" id="pf-scrub" min="0" max="${Math.max(0, total)}"
-          value="${Math.min(pos, total)}" step="50" aria-label="Seek">
+        <div class="pf-scrub-wrap">
+          <div class="pf-track"></div>
+          <div class="pf-range-band" id="pf-range" hidden></div>
+          <input type="range" class="pf-scrub" id="pf-scrub" min="0" max="${Math.max(0, total)}"
+            value="${Math.min(pos, total)}" step="50" aria-label="Seek">
+        </div>
         <span class="pf-time pf-time-total" id="pf-total">${_fmt(total)}</span>
       </div>`;
 
@@ -86,6 +92,9 @@ export class DslFooter {
       scrub.addEventListener('pointerup', commit);
     }
 
+    // Restore the range highlight band (survives a structural re-render).
+    this._applyRange();
+
     // MIDI-output routing lives in Settings → Audio output (not the play bar).
   }
 
@@ -107,6 +116,21 @@ export class DslFooter {
     const tot   = this.el.querySelector('#pf-total');
     if (scrub) scrub.max = Math.max(0, total || 0);
     if (tot)   tot.textContent = _fmt(total || 0);
+    this._applyRange();
+  }
+
+  /** Position the highlighted band over the scrubber to mark the range ▶ will play. */
+  _applyRange() {
+    const band = this.el.querySelector('#pf-range');
+    if (!band) return;
+    const total = state.abcDurationMs ?? 0;
+    const r = this._range;
+    if (!r || !total || r.endMs <= r.startMs) { band.hidden = true; return; }
+    const l = Math.max(0, Math.min(100, (r.startMs / total) * 100));
+    const w = Math.max(0, Math.min(100 - l, ((r.endMs - r.startMs) / total) * 100));
+    band.style.left  = l + '%';
+    band.style.width = w + '%';
+    band.hidden = false;
   }
 
   _updateProgress(ms, total) {

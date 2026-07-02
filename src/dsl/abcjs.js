@@ -175,6 +175,12 @@ let _engraver = null;
 // Full tune objects array from the last renderAbc call; needed for synth init.
 let _tuneObjects = null;
 
+// Note-timing events for the last-rendered tune (abcjs TimingCallbacks output,
+// filtered to type==='event').  Cached at render so we can map a section-relative
+// char offset → playback ms (for selection-driven scrubber seeking) without
+// rebuilding the timing table on every cursor move.
+let _noteEvents = [];
+
 // Raw ABC source of the last render (section-relative).  Needed to scan for
 // `!name!` articulation tokens — abcjs drops unknown decorations, so we read
 // them from the source ourselves; their indices line up with note startChars.
@@ -343,11 +349,19 @@ async function render(content, el) {
 
     _setHasTune(!!(tuneObjects?.[0]));
 
-    // Transport: compute total duration for the scrubber and reset position.
-    _totalMs = tuneObjects?.[0] ? _computeDuration(tuneObjects[0]) : 0;
+    // Transport: build the note-timing table (drives duration, the scrubber, and
+    // char→ms mapping for selection-driven seeking) and reset position.
+    if (tuneObjects?.[0]) _buildNoteEvents(tuneObjects[0]);
+    else _noteEvents = [];
+    _totalMs = _durationFromEvents();
     _pausedAtMs = 0;
+    _selRangeMs = null;
     state.abcDurationMs = _totalMs;
     state.emit('abc-duration', { total: _totalMs });
+    state.emit('abc-range', null);
+    // Re-project the current editor selection onto the fresh timing table so a
+    // persisted range highlight / cursor position survives a re-render.
+    _syncTransportToSelection(_lastEditorSel.from, _lastEditorSel.to);
   } catch (e) {
     el.innerHTML = `<pre class="error">ABC parse error:\n${e.message}</pre>`;
     _setHasTune(false);
@@ -390,6 +404,10 @@ state.on('editor-select', ({ from, to }) => {
     // A real text-range selection over ABC content counts as a note selected.
     if (from !== to) _setNoteSelected(true);
   }
+
+  // Move the transport to match: jump the scrubber to the note under the cursor,
+  // or highlight the range a selection will play (and cue its start).
+  _syncTransportToSelection(from, to);
 });
 
 // When the user clicks a note in the ABC preview, 'dsl-select' fires and the
@@ -402,6 +420,8 @@ state.on('editor-select', ({ from, to }) => {
 // this one note".  Range-play is driven solely by editor text selections.
 state.on('dsl-select', ({ from }) => {
   _lastEditorSel = { from, to: from };
+  // Clicking a note in the preview cues the transport to that note.
+  _syncTransportToSelection(from, from);
 });
 
 // ---------------------------------------------------------------------------
@@ -1037,6 +1057,9 @@ let _pausedAtMs    = 0;   // remembered position when paused / sought (ms)
 let _progressRaf   = 0;   // rAF id for progress emission
 let _playOffsetMs  = 0;   // ms position where the current run started
 let _playWallStart = 0;   // performance.now() at the current run's start
+// {startMs,endMs} of the range the current editor selection will play, or null.
+// Drives the scrubber's highlighted band and lets ▶ replay just the range.
+let _selRangeMs    = null;
 
 /** Play a 1-sample silent buffer to unlock audio on iOS within a user gesture. */
 function _unlockAudio(ctx) {
@@ -1049,19 +1072,73 @@ function _unlockAudio(ctx) {
 }
 
 
-/** Compute total tune duration (ms) without playing, for the transport display. */
-function _computeDuration(tune) {
+/** Build the note-timing table for a tune and cache it in `_noteEvents`.
+ *  setUpAudio() populates midiPitches; TimingCallbacks turns them into events
+ *  carrying `milliseconds` + section-relative startChar/endChar (or the *Array
+ *  forms for multi-voice moments). */
+function _buildNoteEvents(tune) {
   try {
     tune.setUpAudio({});
     const tc = new abcjs.TimingCallbacks(tune, { eventCallback: () => {} });
-    const nt = (tc.noteTimings ?? []).filter(e => e.type === 'event');
-    if (!nt.length) return 0;
-    const last = nt[nt.length - 1];
-    // lastMoment is the start of the last event; add ~one beat so the bar
-    // reaches the end as the final note rings out.
-    const beat = last.millisecondsPerMeasure ? last.millisecondsPerMeasure / 4 : 400;
-    return Math.round(last.milliseconds + beat);
-  } catch { return 0; }
+    _noteEvents = (tc.noteTimings ?? []).filter(e => e.type === 'event');
+  } catch { _noteEvents = []; }
+}
+
+/** Total tune duration (ms) from the cached events, for the transport display. */
+function _durationFromEvents() {
+  if (!_noteEvents.length) return 0;
+  const last = _noteEvents[_noteEvents.length - 1];
+  // `milliseconds` is the start of the last event; add ~one beat so the bar
+  // reaches the end as the final note rings out.
+  const beat = last.millisecondsPerMeasure ? last.millisecondsPerMeasure / 4 : 400;
+  return Math.round(last.milliseconds + beat);
+}
+
+/** Section-relative char offset → playback ms: the note spanning `char`, else
+ *  the first note starting at/after it.  null when no event matches. */
+function _charToMs(char) {
+  if (!_noteEvents.length) return null;
+  const startsOf = e => e.startCharArray ?? [e.startChar];
+  const endsOf   = e => e.endCharArray   ?? [e.endChar];
+  const ev =
+    _noteEvents.find(e => {
+      const s = startsOf(e), n = endsOf(e);
+      return s.some((c, i) => c != null && c <= char && n[i] > char);
+    }) ??
+    _noteEvents.find(e => startsOf(e).some(c => c != null && c >= char));
+  return ev ? ev.milliseconds : null;
+}
+
+/**
+ * Project the current editor/preview selection onto the transport bar:
+ *   • collapsed cursor → jump the scrubber to the note at the cursor.
+ *   • range selection  → highlight [startMs, endMs] on the scrubber (the span
+ *     that ▶ will play) and cue the position to the range start.
+ * No-op while playing (don't fight the moving cursor) or off the abcjs DSL.
+ * `from`/`to` are full-document offsets.
+ */
+function _syncTransportToSelection(from, to) {
+  if (state.abcPlaying) return;
+  if ((state.activeDslId ?? state.data?.dslType) !== 'abcjs') return;
+  if (!_noteEvents.length) return;
+
+  const selFrom = Math.max(0, from - _sectionOffset);
+  const selTo   = Math.max(0, to   - _sectionOffset);
+
+  if (to > from) {
+    const startMs = _charToMs(selFrom);
+    if (startMs == null) return;               // selection is past the last note
+    const endMs = _charToMs(selTo) ?? _totalMs; // no note after selTo → end of tune
+    _selRangeMs = { startMs, endMs };
+    _pausedAtMs = startMs;
+    _emitProgress(startMs);
+    state.emit('abc-range', { startMs, endMs, total: _totalMs });
+  } else {
+    _selRangeMs = null;
+    state.emit('abc-range', null);
+    const ms = _charToMs(selFrom);
+    if (ms != null) { _pausedAtMs = ms; _emitProgress(ms); }
+  }
 }
 
 function _emitProgress(ms) {
@@ -1098,6 +1175,11 @@ function togglePlay() {
   if (state.abcPlaying) {
     _pausedAtMs = _currentMs();
     stopPlayback({ keepPosition: true });
+  } else if (_selRangeMs && _pausedAtMs <= _selRangeMs.startMs + 1) {
+    // A range is selected and we're still cued to its start → play just the range
+    // (startPlayback derives start + stop from the editor selection when no
+    // explicit startMs is given).
+    startPlayback();
   } else {
     startPlayback({ startMs: _pausedAtMs });
   }
