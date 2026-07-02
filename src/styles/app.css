@@ -3579,10 +3579,10 @@ noscript .noscript-wrap {
   align-items: center;
   gap: 10px;
   padding: 7px 14px;
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-secondary));
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-alt));
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--text);
   z-index: 10;
 }
 
@@ -3595,20 +3595,34 @@ noscript .noscript-wrap {
   border: none;
   cursor: pointer;
   font-size: 13px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 4px;
-  color: var(--text-secondary);
-  transition: background .1s, color .1s;
+  color: var(--text-sub);
+  transition: background .1s, color .1s, filter .1s;
 }
 
 .draft-banner-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--bg-overlay);
+  color: var(--text);
 }
 
+/* Prominent action: move the work toward durable storage (commit / back up). */
+.draft-banner-primary {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.draft-banner-primary:hover {
+  background: var(--accent);
+  color: var(--bg);
+  filter: brightness(1.08);
+}
+
+/* Discard stays available but deliberately quiet — never the lead action. */
 .draft-banner-discard {
-  color: var(--accent);
-  font-weight: 500;
+  color: var(--text-sub);
+  font-weight: 400;
 }
 
 .draft-banner-close {
