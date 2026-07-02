@@ -45,11 +45,9 @@ export const catppuccinTheme = EditorView.theme(
       fontSize: '12px'
     },
     '.cm-activeLineGutter': { background: '#28283e', color: '#89b4fa' },
-    // Lines
-    '.cm-activeLine': { background: 'rgba(36,36,58,.7)' },
-    // When focused the active-line tint competes with text selection, so clear it.
-    // The cursor position (and blue gutter number) already mark the active line.
-    '&.cm-focused .cm-activeLine': { background: 'transparent !important' },
+    // NOTE: no .cm-activeLine content background — highlightActiveLine() is
+    // disabled (editor.js) because a full-width line tint competes with the
+    // text-selection highlight.  The cursor + blue gutter cell mark the line.
     '.cm-line': { padding: '0 4px 0 0' },
     // Selection — use the accent blue so it's clearly visible against the dark bg.
     // !important is required to beat drawSelection()'s higher-specificity injected
@@ -142,8 +140,6 @@ export const catppuccinThemeLight = EditorView.theme(
       '&': { background: '#eff1f5', color: '#4c4f69' },
       '.cm-gutters': { background: '#e6e9ef', color: '#9ca0b0', borderRight: '1px solid #ccd0da' },
       '.cm-activeLineGutter': { background: '#dce0e8', color: '#1e66f5' },
-      '.cm-activeLine': { background: 'rgba(230,233,239,.6)' },
-      '&.cm-focused .cm-activeLine': { background: 'transparent !important' },
       '.cm-selectionBackground': { background: 'rgba(30,102,245,.18) !important' },
       '&.cm-focused .cm-selectionBackground': { background: 'rgba(30,102,245,.26) !important' },
       '.cm-matchingBracket': { background: '#ccd0da', color: '#1e66f5 !important' },

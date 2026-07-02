@@ -181,7 +181,7 @@ export class App {
   _buildShell() {
     const root = document.getElementById('unifile-app');
     root.innerHTML = `
-      <div id="uf-pane-rail" aria-hidden="true"></div>
+      ${this._paneSwitchHtml()}
       <div id="uf-site-nav"></div>
       <div id="uf-topbar"></div>
       <div id="uf-main">
@@ -490,6 +490,32 @@ export class App {
     document.addEventListener('focusout', () => setTimeout(reset, 50));
   }
 
+  /**
+   * Markup for the mobile pane switcher — a thick segmented slider with an icon
+   * per pane (commit · code · render).  A sliding `.ps-thumb` sits behind the
+   * active button (driven purely by `data-mobile-pane` in CSS).  The render
+   * icon is DSL-specific (a music note for ABC) and refreshed on DSL change.
+   * Portrait: a horizontal bar under the top bar.  Landscape: a vertical rail
+   * pinned to the far right (see the landscape media query in app.css).
+   */
+  _paneSwitchHtml() {
+    return `
+      <div id="uf-pane-switch" role="tablist" aria-label="Switch pane">
+        <span class="ps-thumb" aria-hidden="true"></span>
+        <button class="ps-btn" data-pane="commit" role="tab" aria-selected="false"
+          aria-label="Commit history" title="Commits">${_iconCommitPane()}</button>
+        <button class="ps-btn" data-pane="editor" role="tab" aria-selected="true"
+          aria-label="Code editor" title="Code">${_iconCodePane()}</button>
+        <button class="ps-btn ps-btn-render" data-pane="render" role="tab" aria-selected="false"
+          aria-label="Preview" title="Preview">${this._paneRenderIcon()}</button>
+      </div>`;
+  }
+
+  /** Icon for the render pane, chosen by the active DSL (ABC → music note). */
+  _paneRenderIcon() {
+    return _paneRenderIconFor(state.activeDslId ?? state.data?.dslType ?? 'markdown');
+  }
+
   _setupMobilePanes() {
     this._trackViewportHeight();
     this._lockWindowScroll();
@@ -499,58 +525,49 @@ export class App {
       this._components.topbar.mountCommitLog(logPane);
     }
 
-    const main = document.getElementById('uf-main');
     const root = document.getElementById('unifile-app');
+    const VALID = ['commit', 'editor', 'render'];
 
-    // Scroll the strip to a pane by index (0=commit, 1=editor, 2=render).
-    const PANE_IDX = { commit: 0, editor: 1, render: 2 };
-    const scrollToPane = (idx, smooth = false) => {
-      if (!_isMobile() || !main) return;
-      // Snap by index × pane width — more reliable than offsetLeft, which can be
-      // fractional and land between snap points.
-      const go = () => main.scrollTo({ left: main.clientWidth * idx, behavior: smooth ? 'smooth' : 'auto' });
-      // Run after two frames + a tick so pane widths have settled (fonts, safe-area).
-      requestAnimationFrame(() => requestAnimationFrame(go));
-      setTimeout(go, 120);
-    };
-    const scrollToEditor = (smooth = false) => scrollToPane(PANE_IDX.editor, smooth);
-
-    // The top-bar branch/status chip (mobile) asks to slide to the commit pane.
-    state.on('mobile-goto-pane', (pane) => scrollToPane(PANE_IDX[pane] ?? 1, true));
-
-    // Track which pane is centred so the top bar can adapt per pane on mobile
-    // (commit → branch dropdown, editor → menu+title, render → transport).
-    const updatePane = () => {
-      if (!main) return;
+    // Show a single pane by setting `data-mobile-pane` — CSS displays only that
+    // pane (no horizontal scroll-snap strip; the old pull-between-panes gesture
+    // was unreliable).  Reveal the editor from display:none needs a CM6
+    // re-measure (it can't lay out while hidden).
+    const setPane = (pane) => {
+      if (!VALID.includes(pane)) pane = 'editor';
       if (!_isMobile()) { root.removeAttribute('data-mobile-pane'); return; }
-      const w = main.clientWidth || 1;
-      const idx = Math.round(main.scrollLeft / w);          // 0=commit, 1=editor, 2=render
-      const pane = idx <= 0 ? 'commit' : idx === 1 ? 'editor' : 'render';
-      if (root.getAttribute('data-mobile-pane') !== pane) root.setAttribute('data-mobile-pane', pane);
+      root.setAttribute('data-mobile-pane', pane);
+      document.querySelectorAll('#uf-pane-switch .ps-btn').forEach(b =>
+        b.setAttribute('aria-selected', String(b.dataset.pane === pane)));
+      if (pane === 'editor') requestAnimationFrame(() => this._components.editor?.refresh());
     };
-    let raf = 0;
-    main?.addEventListener('scroll', () => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => { raf = 0; updatePane(); });
-    }, { passive: true });
 
-    // Tap the pane rail to hop straight to that pane (left=commit · middle=editor
-    // · right=render) without scrolling.
-    document.getElementById('uf-pane-rail')?.addEventListener('click', (e) => {
-      if (!_isMobile()) return;
-      const r = e.currentTarget.getBoundingClientRect();
-      const idx = Math.min(2, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * 3)));
-      scrollToPane(idx, true);
+    // Tap a switcher button → jump straight to that pane.
+    document.getElementById('uf-pane-switch')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ps-btn');
+      if (btn) setPane(btn.dataset.pane);
     });
+
+    // Programmatic pane jumps (e.g. topbar status chip → commit pane).
+    state.on('mobile-goto-pane', (pane) => setPane(pane));
+
+    // Keep the render-pane icon in sync with the active DSL (music note ↔ eye).
+    const syncRenderIcon = () => {
+      const btn = document.querySelector('#uf-pane-switch .ps-btn-render');
+      if (btn) btn.innerHTML = this._paneRenderIcon();
+    };
+    state.on('change', syncRenderIcon);
+    state.on('active-section-change', syncRenderIcon);
 
     // The bottom bar is an in-flow flex child at the end of the `100dvh`
     // #unifile-app column (see app.css), so it sits flush at the true visible
     // bottom with no JS — no visualViewport pinning needed.
 
-    // Open centred on the editor, and re-centre whenever we (re)enter mobile.
-    scrollToEditor(false);
-    requestAnimationFrame(() => { updatePane(); });
-    _mql.addEventListener('change', (e) => { if (e.matches) { scrollToEditor(false); } requestAnimationFrame(() => { updatePane(); }); });
+    // Open on the editor; re-assert a valid pane whenever we (re)enter mobile.
+    if (_isMobile()) setPane('editor'); else root.removeAttribute('data-mobile-pane');
+    _mql.addEventListener('change', (e) => {
+      if (e.matches) setPane(root.getAttribute('data-mobile-pane') || 'editor');
+      else root.removeAttribute('data-mobile-pane');
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1011,8 +1028,13 @@ function escHtml(str) {
 // The MediaQueryList is created once; .matches is read on demand.
 // ---------------------------------------------------------------------------
 
-const _mql = window.matchMedia('(max-width: 640px)');
-/** Returns true when the viewport is in phone/narrow mode (<= 640px). */
+// Mobile = a narrow (portrait) viewport OR a short landscape touch screen (a
+// phone turned sideways is wider than 640px but only ~400px tall — we still
+// want the single-pane + switcher layout, just with the switcher on the right).
+const _mql = window.matchMedia(
+  '(max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse)'
+);
+/** Returns true when the viewport is in phone/narrow mode (portrait or landscape). */
 const _isMobile = () => _mql.matches;
 
 // ---------------------------------------------------------------------------
@@ -1047,5 +1069,68 @@ function _chevronRight2() {
     <polyline points="1,1 5,6 1,11"/>
     <polyline points="5,1 9,6 5,11"/>
   </svg>`;
+}
+
+// ---------------------------------------------------------------------------
+// Mobile pane-switcher icons (commit · code · render).  The render icon is
+// DSL-specific — ABC shows a music note, everything else a preview "eye".
+// ---------------------------------------------------------------------------
+
+/** Git-commit node — the commit-history pane. */
+function _iconCommitPane() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="3.5"/>
+    <line x1="1.5" y1="12" x2="8.5" y2="12"/>
+    <line x1="15.5" y1="12" x2="22.5" y2="12"/>
+  </svg>`;
+}
+
+/** Angle brackets `</>` — the code-editor pane. */
+function _iconCodePane() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <polyline points="8,7 3,12 8,17"/>
+    <polyline points="16,7 21,12 16,17"/>
+  </svg>`;
+}
+
+/** Music note — the render pane for ABC notation documents. */
+function _iconMusicNote() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M9 18V5l11-2v13"/>
+    <circle cx="6" cy="18" r="3"/>
+    <circle cx="17" cy="16" r="3"/>
+  </svg>`;
+}
+
+/** Preview "eye" — the render pane for text-ish documents (Markdown, slides…). */
+function _iconEye() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/>
+    <circle cx="12" cy="12" r="3"/>
+  </svg>`;
+}
+
+/** Nodes-and-edges — the render pane for diagram DSLs (Mermaid). */
+function _iconDiagram() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="8" y="3" width="8" height="5" rx="1"/>
+    <rect x="3" y="16" width="7" height="5" rx="1"/>
+    <rect x="14" y="16" width="7" height="5" rx="1"/>
+    <path d="M12 8v4M12 12H6.5v4M12 12h5.5v4"/>
+  </svg>`;
+}
+
+/** Pick the render-pane icon for a DSL id. */
+function _paneRenderIconFor(dslId) {
+  switch (dslId) {
+    case 'abcjs':   return _iconMusicNote();
+    case 'mermaid': return _iconDiagram();
+    default:        return _iconEye();
+  }
 }
 

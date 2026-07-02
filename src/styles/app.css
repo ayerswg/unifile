@@ -164,7 +164,6 @@
 [data-theme="light"] .cm-editor         { background: #eff1f5 !important; color: #4c4f69 !important; }
 [data-theme="light"] .cm-gutters        { background: #e6e9ef !important; color: #9ca0b0 !important; border-right: 1px solid #ccd0da !important; }
 [data-theme="light"] .cm-activeLineGutter { background: #dce0e8 !important; color: #1e66f5 !important; }
-[data-theme="light"] .cm-activeLine     { background: rgba(220,224,232,.6) !important; }
 [data-theme="light"] .cm-selectionBackground                      { background: rgba(30,102,245,.18) !important; }
 [data-theme="light"] .cm-editor.cm-focused .cm-selectionBackground { background: rgba(30,102,245,.26) !important; }
 [data-theme="light"] .cm-cursor         { border-left-color: #1e66f5 !important; }
@@ -210,17 +209,14 @@
   :root:not([data-theme]) .cm-shebang-line { opacity: .6; }
 }
 
-/* Active line disappears when the editor is focused — selection highlight takes over */
-.cm-editor.cm-focused .cm-activeLine { background: transparent !important; }
-/* Active line also disappears during ABC playback (editor may be unfocused after
- * clicking the play button, but the active-line tint would otherwise cover both
- * the static text selection and the green play-cursor highlight). */
-.cm-editor.abc-play-active .cm-activeLine { background: transparent !important; }
+/* The active-line CONTENT background is intentionally not styled: we removed
+ * highlightActiveLine() (editor.js) because a full-width line tint fights with
+ * the text-selection highlight, making selected text hard to read.  Only the
+ * gutter cell (.cm-activeLineGutter — the left rail) marks the current line. */
 
 [data-theme="dark"] .cm-editor          { background: #1e1e2e !important; color: #cdd6f4 !important; }
 [data-theme="dark"] .cm-gutters         { background: #181825 !important; color: #4a4a6a !important; border-right: 1px solid #313244 !important; }
 [data-theme="dark"] .cm-activeLineGutter { background: #28283e !important; color: #89b4fa !important; }
-[data-theme="dark"] .cm-activeLine      { background: rgba(36,36,58,.7) !important; }
 [data-theme="dark"] .cm-selectionBackground               { background: rgba(137,180,250,.28) !important; }
 [data-theme="dark"] .cm-editor.cm-focused .cm-selectionBackground { background: rgba(137,180,250,.38) !important; }
 [data-theme="dark"] .cm-cursor          { border-left-color: #89b4fa !important; }
@@ -275,8 +271,8 @@ html, body {
   overflow: hidden;
 }
 
-/* Pane position indicator is mobile-only (shown in the ≤640px media query). */
-#uf-pane-rail { display: none; }
+/* Pane switcher is mobile-only (shown in the mobile media queries). */
+#uf-pane-switch { display: none; }
 /* Bottom-bar wrapper is transparent on desktop (children flow normally). */
 #uf-bottom { display: contents; }
 #uf-commit-bar { display: none; }
@@ -918,33 +914,30 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 #uf-commit-log { display: none; }
 
 /* ==============================================================
-   MOBILE PANE STRIP (phone-width)
-   On narrow screens #uf-main becomes a horizontal scroll-snap strip with three
-   full-width panes — commit log · editor · preview.  PWAs can't use edge-swipe
-   navigation, so the user scrolls/pulls horizontally to pivot between them.
+   MOBILE — SINGLE-PANE + SWITCHER (phone-width portrait, or landscape phone)
+   Only one pane (commit log · editor · preview) is shown at a time; the pane
+   switcher slider picks which.  The old horizontal scroll-snap strip was
+   unreliable on touch, so it's gone.  Applies to narrow portrait viewports AND
+   short landscape touch screens (a phone turned sideways is wider than 640px
+   but only ~400px tall — see the JS `_mql` and the orientation blocks below).
    ============================================================== */
-@media (max-width: 640px) {
-  #uf-main {
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;          /* the snap dots / panes are the affordance */
-    overscroll-behavior-x: contain;
-  }
-  #uf-main::-webkit-scrollbar { display: none; }
+@media (max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+  #uf-main { overflow: hidden; position: relative; }
 
-  /* Each pane is exactly one screen wide and snaps into place.  The !important
-     overrides the inline display:none/flex the view-mode logic sets on desktop —
-     on mobile all three panes coexist as scroll targets. */
+  /* All three panes share the same box; only the active one is displayed.  The
+     !important overrides the inline display the desktop view-mode logic sets. */
   #uf-commit-log,
   #uf-editor-wrap,
   #uf-preview-wrap {
-    display: flex !important;
-    flex: 0 0 100% !important;
+    display: none !important;
+    flex: 1 1 100% !important;
     width: 100%;
-    min-width: 100%;
-    scroll-snap-align: start;
+    min-width: 0;
+  }
+  #unifile-app[data-mobile-pane="commit"] #uf-commit-log,
+  #unifile-app[data-mobile-pane="editor"] #uf-editor-wrap,
+  #unifile-app[data-mobile-pane="render"] #uf-preview-wrap {
+    display: flex !important;
   }
 
   #uf-commit-log {
@@ -952,50 +945,52 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     overflow-y: auto;
     overscroll-behavior: contain;  /* don't chain to the document (iOS keyboard shift) */
     background: var(--bg);
-    border-right: 1px solid var(--border);
   }
 
-  /* The vertical divider has no meaning inside a horizontal strip. */
+  /* The drag-to-resize divider has no meaning when a single pane is shown. */
   #uf-divider { display: none !important; }
 
-  /* Pane position indicator — a thin blue line whose lit third shows the current
-     pane (left=commit, middle=editor, right=render).  Sits BELOW the top bar
-     (order -1, after the topbar's -2); the top bar owns the status-bar inset. */
-  #uf-pane-rail {
-    display: block;
-    order: -1;
+  /* ── Pane switcher: a thick segmented slider (commit · code · render). ──
+     Shared look here; portrait lays it out horizontally under the top bar,
+     landscape pins it vertically to the far right (orientation blocks below).
+     A `.ps-thumb` slides behind the active button, driven by data-mobile-pane. */
+  #uf-pane-switch {
+    display: flex;
     flex-shrink: 0;
     position: relative;
-    height: 8px;                /* a bit taller so it's a comfortable tap target */
-    background: var(--border);
-    overflow: hidden;
+    background: var(--bg-alt);
+    box-shadow: 0 1px 0 var(--border);
+  }
+  .ps-btn {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text-muted);
     cursor: pointer;
+    position: relative;
+    z-index: 1;                    /* above the sliding thumb */
+    -webkit-tap-highlight-color: transparent;
+    transition: color .18s ease;
   }
-  #uf-pane-rail::after {        /* lit third = current pane */
-    content: "";
+  .ps-btn svg { width: 22px; height: 22px; }
+  .ps-btn[aria-selected="true"] { color: var(--accent); }
+  .ps-btn:active { color: var(--text); }
+  .ps-thumb {
     position: absolute;
-    inset: 0;
-    width: 33.3333%;
-    background: var(--accent);
-    transform: translateX(0);
-    transition: transform .18s ease;
-  }
-  /* Thin dividers hint the three tappable zones (commit · editor · render). */
-  #uf-pane-rail::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: 2;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border-radius: 8px;
+    transition: transform .2s ease;
     pointer-events: none;
-    background:
-      linear-gradient(var(--bg), var(--bg)) calc(33.333% - 0.5px) 0 / 1px 100% no-repeat,
-      linear-gradient(var(--bg), var(--bg)) calc(66.666% - 0.5px) 0 / 1px 100% no-repeat;
   }
-  #unifile-app[data-mobile-pane="editor"] #uf-pane-rail::after { transform: translateX(100%); }
-  #unifile-app[data-mobile-pane="render"] #uf-pane-rail::after { transform: translateX(200%); }
+  /* The switcher is a modal overlay's dead weight during a commit diff — hide it. */
+  #unifile-app[data-diff] #uf-pane-switch { display: none; }
 
   #uf-site-nav { order: -3; }
-  /* Top bar sits above the pane rail and owns the iOS status-bar inset. */
+  /* Top bar sits above the pane switcher and owns the iOS status-bar inset. */
   #uf-topbar { order: -2; margin-top: env(safe-area-inset-top, 0px); }
 
   /* ── Top bar: hamburger + filename (flexes) + branch/status chip. ── */
@@ -1092,12 +1087,64 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-bottom { display: block; }
   #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-transport { display: flex; }
 
-  /* Crisp pane snapping — each pull settles on exactly one pane. */
-  #uf-commit-log, #uf-editor-wrap, #uf-preview-wrap { scroll-snap-stop: always; }
-
   /* iOS: ≥16px on focusable controls prevents Safari's zoom-on-focus. */
   .cm-content, .topbar-title, .pf-midi-select, .usn-input,
   input, select, textarea { font-size: 16px; }
+}
+
+/* ── Pane switcher — PORTRAIT: horizontal bar under the top bar ── */
+@media (max-width: 640px) {
+  #uf-pane-switch {
+    order: -1;                 /* between the top bar (-2) and the panes */
+    flex-direction: row;
+    height: 46px;
+  }
+  .ps-thumb {
+    top: 5px;
+    bottom: 5px;
+    left: 0;
+    width: 33.3333%;
+    transform: translateX(0);
+  }
+  #unifile-app[data-mobile-pane="editor"] .ps-thumb { transform: translateX(100%); }
+  #unifile-app[data-mobile-pane="render"] .ps-thumb { transform: translateX(200%); }
+}
+
+/* ── Pane switcher — LANDSCAPE (phone on its side): a vertical rail pinned to
+   the far right so the user can flick between panes one-handed.  It's absolutely
+   positioned relative to the fixed #unifile-app and vertically centred, so it
+   never covers the top bar / status chip; #uf-main reserves a right gutter for
+   it (plus the landscape notch inset). ── */
+@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+  #uf-main { padding-right: calc(52px + env(safe-area-inset-right, 0px)); }
+  #unifile-app[data-diff] #uf-main { padding-right: 0; }
+
+  #uf-pane-switch {
+    position: absolute;
+    top: 50%;
+    right: calc(6px + env(safe-area-inset-right, 0px));
+    transform: translateY(-50%);
+    width: 46px;
+    flex-direction: column;
+    gap: 6px;
+    padding: 5px;
+    border-radius: 12px;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 16px rgba(0,0,0,.28);
+    z-index: 50;
+  }
+  .ps-btn { flex: 0 0 auto; height: 44px; width: 100%; }
+  .ps-thumb {
+    left: 5px;
+    right: 5px;
+    top: 5px;
+    height: 44px;
+    transform: translateY(0);
+  }
+  /* Buttons are 44px tall with a 6px gap → step = 50px. */
+  #unifile-app[data-mobile-pane="editor"] .ps-thumb { transform: translateY(50px); }
+  #unifile-app[data-mobile-pane="render"] .ps-thumb { transform: translateY(100px); }
 }
 
 /* ── Mobile commit bar ───────────────────────────────────────── */
@@ -1300,7 +1347,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     border-right-color: #ccd0da;
   }
   #uf-editor-wrap .cm-activeLineGutter { background: #dce0e8; color: #1e66f5; }
-  #uf-editor-wrap .cm-activeLine { background: rgba(230,233,239,.6); }
   #uf-editor-wrap .cm-cursor { border-left-color: #1e66f5; }
   #uf-editor-wrap .cm-selectionBackground              { background: rgba(30,102,245,.18); }
   #uf-editor-wrap.cm-focused .cm-selectionBackground  { background: rgba(30,102,245,.26); }
