@@ -11,12 +11,15 @@ import {
   loadEmbeddedData,
   captureTemplate,
   generateQuine,
-  downloadFile,
   loadUserPrefs,
   IS_QUINE,
   saveDraft,
   loadDraft,
   clearDraft,
+  shareOrDownloadFile,
+  requestPersistentStorage,
+  markBackedUp,
+  loadBackupMark,
 } from '../core/storage.js';
 import { isEncrypted, decryptData } from '../core/crypto.js';
 import { getDSL, registerDSL, deregisterDSL } from '../dsl/registry.js';
@@ -156,18 +159,23 @@ export class App {
     // 10b-ii. Wire the mobile far-left commit-log pane + horizontal pane nav.
     this._setupMobilePanes();
 
-    // 10c. Show draft-restored banner if we recovered unsaved content
+    // 10c. Show the persistence banner if we recovered unsaved content, or if
+    //      committed work is sitting un-backed-up in the local sandbox.
     if (this._pendingDraftSavedAt) {
-      this._showDraftBanner(this._pendingDraftSavedAt);
+      this._draftSavedAt = this._pendingDraftSavedAt;
       this._pendingDraftSavedAt = null;
     }
+    this._refreshPersistenceBanner();
 
     // 11. Global keyboard shortcuts
     this._bindGlobalKeys();
 
-    // 12. PWA: register service worker
+    // 12. PWA: register service worker + request durable storage so the OS is
+    //     less likely to evict IndexedDB (best-effort; the real backstop is a
+    //     user-exported .unifile.json — see the backup nudge below).
     if (!IS_QUINE && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js').catch(console.warn);
+      requestPersistentStorage();
     }
 
     // 13. Offer an upgrade if a newer release has been published (non-blocking).
@@ -325,9 +333,14 @@ export class App {
 
         // Draft is now committed — drop the crash-recovery copy.
         clearDraft();
+        this._draftSavedAt = null;
 
         // Auto-save quine
         await this._saveQuine(newData);
+
+        // Committed, but still only in the local (evictable) sandbox — surface
+        // the quiet "back up" nudge for this new head.
+        this._refreshPersistenceBanner();
       },
 
       onMerge: async ({ importedData, branchName, strategy }) => {
@@ -584,11 +597,35 @@ export class App {
     };
   }
 
-  /** Download the document + full commit history as a small `.unifile.json`. */
-  _saveDataFile() {
+  /** Per-document key for the backup watermark (PWA docId, else the page URL). */
+  _backupScope() {
+    return state.docId ?? location.href;
+  }
+
+  /**
+   * Export the document + full commit history as a small plain-text
+   * `.unifile.json`, out of the browser sandbox.  On iOS this opens the share
+   * sheet ("Save to Files" → iCloud Drive); elsewhere it downloads.  On success
+   * we record the backed-up head so the persistence nudge can stand down.
+   *
+   * The filename carries the short head hash + date so successive snapshots in
+   * the Files app don't clobber each other and form a natural version trail.
+   * @returns {Promise<'shared'|'downloaded'|'cancelled'>}
+   */
+  async _saveDataFile() {
     const data = this._currentDataObject();
     const base = (state.title || 'untitled').trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled';
-    downloadFile(JSON.stringify(data, null, 2), `${base}.unifile.json`, 'application/json');
+    const hash = state.headHash ? '.' + state.headHash.slice(0, 7) : '';
+    const date = _localDateStamp();
+    const filename = `${base}${hash}.${date}.unifile.json`;
+    const result = await shareOrDownloadFile(JSON.stringify(data, null, 2), filename, 'application/json');
+    // 'cancelled' = the user backed out of the share sheet without choosing a
+    // target, so the data never actually left — don't mark it backed up.
+    if (result !== 'cancelled' && !state.isDirty && state.headHash) {
+      markBackedUp(this._backupScope(), state.headHash);
+      this._refreshPersistenceBanner();
+    }
+    return result;
   }
 
   /** Prompt for a `.unifile.json`, then load it (replaces the current document). */
@@ -664,35 +701,106 @@ export class App {
   }
 
   // ---------------------------------------------------------------------------
-  // Draft recovery banner
+  // Persistence banner
+  //
+  // A single quiet bar under the topbar whose whole job is to make sure the user
+  // never *unknowingly* leaves work living only in the evictable browser
+  // sandbox.  Two situations surface it, and in both the prominent action moves
+  // the work toward durable storage (commit → back up) rather than throwing it
+  // away:
+  //   • 'draft' – an unsaved draft was recovered on load (crash / accidental
+  //               close).  Primary: Commit…  Secondary (quiet): Discard.
+  //   • 'nudge' – committed work has not yet been exported to a .unifile.json.
+  //               Primary: Back up.
+  // It is always dismissible and deliberately does NOT appear while the user is
+  // actively editing (dirty-but-no-recovered-draft) — the commit bar already
+  // signals that — so it nudges without getting in the way.
   // ---------------------------------------------------------------------------
 
-  _showDraftBanner(savedAt) {
-    const existing = document.getElementById('uf-draft-banner');
-    if (existing) existing.remove();
+  /** Decide which banner variant (if any) to show for the current state. */
+  _refreshPersistenceBanner() {
+    const dirty     = state.isDirty;
+    const headHash  = state.headHash;
+    const hasCommits = (state.vcs?.log?.().length ?? 0) > 0;
+    const mark      = loadBackupMark(this._backupScope());
+    const backedUp  = !!mark && mark.headHash === headHash && !dirty;
 
-    const age   = _formatAge(savedAt);
-    const el    = document.createElement('div');
-    el.id       = 'uf-draft-banner';
+    let variant = null;
+    if (this._draftSavedAt && dirty) {
+      variant = 'draft';
+    } else if (!IS_QUINE && !dirty && hasCommits && !backedUp && this._nudgeDismissedForHash !== headHash) {
+      // The back-up nudge is a PWA concern: quine mode's durable copy is the
+      // .html file itself, so "iOS can clear this storage" wouldn't apply.
+      variant = 'nudge';
+    }
+
+    if (!variant) { document.getElementById('uf-draft-banner')?.remove(); return; }
+    this._renderPersistenceBanner(variant, mark);
+  }
+
+  _renderPersistenceBanner(variant, mark) {
+    document.getElementById('uf-draft-banner')?.remove();
+
+    const el = document.createElement('div');
+    el.id = 'uf-draft-banner';
     el.className = 'draft-banner';
+
+    let msg, primaryLabel;
+    if (variant === 'draft') {
+      msg = `Unsaved draft restored from ${_formatAge(this._draftSavedAt)} ago — not committed or backed up.`;
+      primaryLabel = 'Commit…';
+    } else {
+      const behind = this._commitsSinceBackup(mark);
+      const n = behind === 1 ? '1 change' : `${behind} changes`;
+      msg = `Saved on this device only — ${n} not backed up. iOS can clear this storage.`;
+      primaryLabel = 'Back up';
+    }
+
     el.innerHTML = `
-      <span class="draft-banner-msg">Unsaved draft restored from ${age} ago.</span>
-      <button class="draft-banner-btn draft-banner-discard" type="button">Discard</button>
+      <span class="draft-banner-msg">${_escBanner(msg)}</span>
+      <button class="draft-banner-btn draft-banner-primary" type="button">${primaryLabel}</button>
+      ${variant === 'draft'
+        ? '<button class="draft-banner-btn draft-banner-discard" type="button">Discard</button>'
+        : ''}
       <button class="draft-banner-btn draft-banner-close" type="button" aria-label="Dismiss">×</button>
     `;
 
-    el.querySelector('.draft-banner-discard').addEventListener('click', () => {
+    el.querySelector('.draft-banner-primary').addEventListener('click', () => {
+      if (variant === 'draft') {
+        // Move toward durable storage: open the commit UI (captures a message +
+        // identity).  After the commit lands, onCommit re-runs the refresh and
+        // the 'back up' nudge takes over.
+        state.openPanel(PANELS.COMMIT);
+      } else {
+        this._saveDataFile();
+      }
+    });
+
+    el.querySelector('.draft-banner-discard')?.addEventListener('click', () => {
       // Revert to the last committed content and wipe the draft.
       state.setContent(state.vcs.headContent);
       clearDraft();
-      el.remove();
+      this._draftSavedAt = null;
+      this._refreshPersistenceBanner();
     });
 
-    el.querySelector('.draft-banner-close').addEventListener('click', () => el.remove());
+    el.querySelector('.draft-banner-close').addEventListener('click', () => {
+      if (variant === 'draft') this._draftSavedAt = null;
+      else this._nudgeDismissedForHash = state.headHash; // re-nudges after the next commit
+      el.remove();
+    });
 
     // Insert just below the topbar.
     const main = document.getElementById('uf-main');
     main?.parentElement?.insertBefore(el, main);
+  }
+
+  /** How many commits on the current branch are newer than the last backup. */
+  _commitsSinceBackup(mark) {
+    const log = state.vcs?.log?.() ?? []; // root → head
+    if (!mark) return log.length;
+    const idx = log.findIndex(c => c.hash === mark.headHash);
+    return idx >= 0 ? log.length - 1 - idx : log.length;
   }
 
   // ---------------------------------------------------------------------------
@@ -1051,6 +1159,17 @@ function _formatAge(ts) {
   if (m < 90)   return `${m} minute${m !== 1 ? 's' : ''}`;
   const h = Math.round(m / 60);
   return `${h} hour${h !== 1 ? 's' : ''}`;
+}
+
+/** Local-time YYYY-MM-DD stamp for backup filenames. */
+function _localDateStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function _escBanner(str) {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function _chevronRight() {

@@ -120,6 +120,62 @@ export function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+/**
+ * Save a text file OUT of the browser sandbox using the native share sheet when
+ * available, falling back to a plain download.
+ *
+ * This is the durable-backup path, and it exists mainly for iOS: there is no
+ * File System Access API on iOS Safari, and `<a download>` blobs land awkwardly
+ * in Downloads.  `navigator.share({ files })` opens the OS share sheet, whose
+ * "Save to Files" → iCloud Drive target puts the bytes somewhere the user
+ * controls and iOS actually backs up — i.e. outside the evictable web sandbox.
+ * Must be called from a user gesture (a button tap).
+ *
+ * @param {string} content   File contents (text)
+ * @param {string} filename  Suggested filename
+ * @param {string} [mime='application/json']
+ * @returns {Promise<'shared'|'downloaded'|'cancelled'>}
+ *   'shared'     – handed to the OS share sheet (user may still cancel the
+ *                  target picker, but the data left the app's control path)
+ *   'downloaded' – fell back to a browser download (desktop / no share support)
+ *   'cancelled'  – user dismissed the share sheet before choosing a target
+ */
+export async function shareOrDownloadFile(content, filename, mime = 'application/json') {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.canShare && typeof File !== 'undefined') {
+      const file = new File([content], filename, { type: mime });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename });
+        return 'shared';
+      }
+    }
+  } catch (e) {
+    // AbortError = user backed out of the share sheet; don't also download.
+    if (e && e.name === 'AbortError') return 'cancelled';
+    // Any other share failure (rare) → fall through to a plain download.
+  }
+  downloadFile(content, filename, mime);
+  return 'downloaded';
+}
+
+/**
+ * Best-effort request for durable ("persistent") storage so the browser is less
+ * likely to evict IndexedDB under storage pressure.  Safe to call repeatedly.
+ * On iOS this is granted more readily for installed (Home Screen) PWAs, but is
+ * never a hard guarantee — it only reduces the eviction risk; the real backstop
+ * is a user-exported .unifile.json (see shareOrDownloadFile).
+ * @returns {Promise<boolean>} whether storage is now persisted
+ */
+export async function requestPersistentStorage() {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage?.persist) {
+      if (await navigator.storage.persisted?.()) return true;
+      return await navigator.storage.persist();
+    }
+  } catch { /* not supported / blocked */ }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // PWA IndexedDB storage
 // ---------------------------------------------------------------------------
@@ -297,6 +353,45 @@ export function loadDraft() {
  */
 export function clearDraft() {
   try { localStorage.removeItem(_draftKey()); } catch { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// Backup watermark (which committed state was last exported to durable storage)
+// ---------------------------------------------------------------------------
+
+// Records the head hash that was last written OUT of the browser (via
+// shareOrDownloadFile).  The app compares it against the current head to know
+// whether committed work still lives only in the evictable sandbox, so it can
+// nudge the user to back up — without nagging once they already have.
+const BACKUP_KEY_PREFIX = 'unifile_backup:';
+
+function _backupKey(scope) {
+  return BACKUP_KEY_PREFIX + (scope || location.href);
+}
+
+/**
+ * Record that `headHash` has been exported to durable storage.
+ * @param {string} scope     Per-document key (PWA docId, else the page URL)
+ * @param {string} headHash  The committed head that was backed up
+ */
+export function markBackedUp(scope, headHash) {
+  try {
+    localStorage.setItem(_backupKey(scope), JSON.stringify({ headHash, at: Date.now() }));
+  } catch { /* storage full or unavailable */ }
+}
+
+/**
+ * Load the last backup watermark for a document.
+ * @param {string} scope
+ * @returns {{ headHash: string, at: number } | null}
+ */
+export function loadBackupMark(scope) {
+  try {
+    const raw = localStorage.getItem(_backupKey(scope));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
