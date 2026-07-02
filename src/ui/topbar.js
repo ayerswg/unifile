@@ -176,6 +176,10 @@ export class TopBar {
     const dslName = DSL_HELP[activeDslId]?.name ?? activeDslId;
     return `
       <ul class="tools-menu-list">
+        <li class="tools-menu-item" id="tb-new-doc" title="Discard this document and start a new one">
+          ${iconNewDoc()} New document…
+        </li>
+        <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-dsl-help" title="Syntax reference for ${escHtml(dslName)}">
           ${iconHelp()} ${escHtml(dslName)} help…
         </li>
@@ -385,6 +389,13 @@ export class TopBar {
   }
 
   _bindDropdownEvents() {
+    // New document — confirmation modal (with backup/commit prompts) then reset.
+    this.el.querySelector('#tb-new-doc')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      showNewDocumentModal(this.handlers);
+    });
+
     // DSL help modal — uses active section DSL or document default
     this.el.querySelector('#tb-dsl-help')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
@@ -629,6 +640,98 @@ function iconHelp() {
     <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
     <path d="M5.255 5.786a.237.237 0 0 0 .241.247h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286zm1.557 5.763c0 .533.425.927 1.01.927.609 0 1.028-.394 1.028-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94z"/>
   </svg>`;
+}
+
+function iconNewDoc() {
+  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M9 1H4a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5V5.5L9 1zm0 1.414L12.086 5.5H9.5A.5.5 0 0 1 9 5V2.414zM4 2h4v3a1.5 1.5 0 0 0 1.5 1.5h3v7a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5v-11A.5.5 0 0 1 4 2z"/>
+    <path d="M8 8a.5.5 0 0 1 .5.5V10h1.5a.5.5 0 0 1 0 1H8.5v1.5a.5.5 0 0 1-1 0V11H6a.5.5 0 0 1 0-1h1.5V8.5A.5.5 0 0 1 8 8z"/>
+  </svg>`;
+}
+
+// ---------------------------------------------------------------------------
+// New-document confirmation modal
+//
+// Starting a new document replaces the ENTIRE current document — content,
+// branches, commits and comments — so before the user commits to that we make
+// it easy to keep the current work (commit any dirty changes, and/or export a
+// durable .unifile.json copy) and require an explicit destructive confirm.
+// ---------------------------------------------------------------------------
+
+function showNewDocumentModal(handlers) {
+  const overlay = document.createElement('div');
+  overlay.className = 'dsl-help-overlay';
+
+  const commitCount = state.vcs?.log?.().length ?? 0;
+  const dirty = state.isDirty;
+  const historyNote = commitCount === 0
+    ? 'The current document has no commits yet.'
+    : `This discards the current document and its entire history — ${commitCount} commit${commitCount === 1 ? '' : 's'}.`;
+
+  overlay.innerHTML = `
+    <div class="dsl-help-modal newdoc-modal" role="dialog" aria-modal="true" aria-label="Start a new document" tabindex="-1">
+      <div class="dsl-help-header">
+        <div class="dsl-help-title">Start a new document</div>
+        <button class="dsl-help-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="dsl-help-body newdoc-body">
+        <p class="newdoc-warn">${escHtml(historyNote)} <strong>This can’t be undone.</strong></p>
+        ${dirty ? '<p class="newdoc-dirty">⚠ You have uncommitted changes that will be lost.</p>' : ''}
+        <p class="newdoc-hint">Keep this work first — commit it and/or save a copy — then start fresh.</p>
+        <div class="newdoc-actions">
+          ${dirty ? '<button class="newdoc-btn" id="newdoc-commit">Commit…</button>' : ''}
+          <button class="newdoc-btn" id="newdoc-save">Save data file…</button>
+        </div>
+        <p class="newdoc-status" id="newdoc-status" aria-live="polite"></p>
+      </div>
+      <div class="dsl-help-footer newdoc-footer">
+        <button class="newdoc-btn newdoc-cancel" id="newdoc-cancel">Cancel</button>
+        <button class="newdoc-btn newdoc-danger" id="newdoc-confirm">Discard &amp; start new</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const setStatus = (msg, ok = false) => {
+    const s = overlay.querySelector('#newdoc-status');
+    if (s) { s.textContent = msg; s.classList.toggle('ok', ok); }
+  };
+
+  overlay.querySelector('.dsl-help-close')?.addEventListener('click', close);
+  overlay.querySelector('#newdoc-cancel')?.addEventListener('click', close);
+
+  // Commit path: hand off to the full commit UI (the new-doc modal steps aside).
+  overlay.querySelector('#newdoc-commit')?.addEventListener('click', () => {
+    close();
+    state.openPanel(PANELS.COMMIT);
+  });
+
+  // Backup path: export a .unifile.json and report the outcome; the modal stays
+  // open so the user can then discard with confidence.
+  overlay.querySelector('#newdoc-save')?.addEventListener('click', async () => {
+    setStatus('Saving…');
+    try {
+      const result = await (handlers.onSaveDataFile?.() ?? Promise.resolve('downloaded'));
+      if (result === 'cancelled') setStatus('Save cancelled — nothing was exported.');
+      else setStatus('✓ Saved. Safe to start a new document.', true);
+    } catch (e) {
+      setStatus('Save failed: ' + (e?.message ?? e));
+    }
+  });
+
+  // Destructive confirm: the user has accepted the loss of unbacked-up work.
+  overlay.querySelector('#newdoc-confirm')?.addEventListener('click', () => {
+    close();
+    handlers.onNewDocument?.();
+  });
+
+  overlay.querySelector('.newdoc-modal')?.focus?.();
 }
 
 // ---------------------------------------------------------------------------

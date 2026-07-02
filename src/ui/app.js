@@ -410,8 +410,53 @@ export class App {
         const data = state.data;
         if (data.plugins) delete data.plugins[id];
         state.update({ data, isDirty: true });
-      }
+      },
+
+      // Export the document + history as a .unifile.json; returns the outcome so
+      // the "new document" modal can confirm a backup happened before discarding.
+      onSaveDataFile: () => this._saveDataFile(),
+
+      // Discard the current document and start a fresh, empty one. The confirm +
+      // backup prompts live in the New-document modal (topbar.js); this only runs
+      // once the user has accepted that unbacked-up work will be lost.
+      onNewDocument: () => this._newDocument(),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // New document
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Replace the entire in-memory document — content, branches, commits and
+   * comments — with a blank one seeded from this build's default DSL. Installed
+   * plugins and their configured extension slots are preserved so the user keeps
+   * their toolset. Mirrors _loadDataObject (the opened-file path).
+   */
+  _newDocument() {
+    const data = {
+      version: state.data?.version,
+      title: 'Untitled Document',
+      dslType: state.data?.dslType ?? 'markdown',
+      currentBranch: 'main',
+      branches: { main: { name: 'main', head: null } },
+      commits: {},
+      comments: {},
+      commentThreads: {},
+      password: null,
+      currentContent: '',
+      // Keep the user's installed plugins + their configuration.
+      ...(state.data?.plugins          ? { plugins: { ...state.data.plugins } } : {}),
+      ...(state.data?.pluginExtensions ? { pluginExtensions: { ...state.data.pluginExtensions } } : {}),
+    };
+
+    // Clear any diff/detached/draft state left over from the old document.
+    state.closeDiff?.();
+    this._draftSavedAt = null;
+    this._nudgeDismissedForHash = null;
+
+    this._loadDataObject(data);
+    this._refreshPersistenceBanner();
   }
 
   // ---------------------------------------------------------------------------
