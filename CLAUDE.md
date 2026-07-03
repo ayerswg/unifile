@@ -162,10 +162,10 @@ iOS-specific behavior can't be verified in the local Chromium preview — verify
 
 ## Versioning & releases
 
-Version is the **latest git tag** (`git describe --tags --abbrev=0`, strip `v`), stamped into the bundle (`UNIFILE_VERSION`) and `docs/version.json`.
+Version is the **latest git tag** (`git describe --tags --abbrev=0`, strip `v`), stamped into the bundle (`UNIFILE_VERSION`) and `docs/version.json`. **When git tags aren't available at build time — which is the case on Cloudflare Pages (its checkout has no tags) — `detectVersion` falls back to `package.json`'s `version`.** So `package.json` MUST be bumped to match each release, or the deployed `version.json`/`UNIFILE_VERSION` will be stale (and the in-app update prompt won't fire).
 
-**Release flow:** `git tag vX.Y.Z` → `npm run build:site` → commit `docs/` → `git push origin main vX.Y.Z`.
-**Release candidates:** tag `vX.Y.Z-rc.N` per candidate, cut the bare `vX.Y.Z` when ready.
+**Release flow:** `npm version X.Y.Z --no-git-tag-version` (bump package.json) → `git tag vX.Y.Z` → `npm run build:site` → commit → `git push origin main vX.Y.Z`. The site is served by **Cloudflare Pages** (project `unifile`, `unifile-8yt.pages.dev`), which auto-builds on push with `npm run build:site && npm run site:preview` → `docs/_site`.
+**Release candidates:** tag `vX.Y.Z-rc.N` per candidate, cut the bare `vX.Y.Z` when ready. (RC channel precedence needs the git tag list, which Cloudflare lacks — RCs are exercised locally / on GitHub where tags exist.)
 
 `sync-site.mjs` writes `version.json = { version(=stable), stable, latest, released }` (stable = highest non-pre-release tag; latest = highest overall). `update-check.js` compares with full **SemVer 2.0 precedence** (`_parse`/`_cmp`): `rc.2 > rc.1`, and a release outranks its pre-releases (`1.0.0 > 1.0.0-rc.2`). Users on the **stable** channel are only offered `stable`; opt into RCs in **Settings → Updates**. The check cache-busts `version.json` (`?_=ts`) to beat CDN staleness. **Settings → About** shows the running version.
 
