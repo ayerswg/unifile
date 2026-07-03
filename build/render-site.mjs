@@ -155,7 +155,7 @@ function renderLauncher(t) {
   <p class="launch-tagline">${esc(t.tagline || '')}</p>
   <div id="launch" class="launch-actions" data-pwa="${rel(t.pwa)}" data-download="${rel(t.download)}" data-title="${esc(t.title)}">
     <a class="launch-btn primary" href="${rel(t.pwa)}">Open / install the app</a>
-    <a class="launch-btn" href="${rel(t.download)}" download>Download single .html</a>
+    <a class="launch-btn" href="${rel(t.download)}" download="${esc((t.download || '').split('/').pop())}">Download single .html</a>
   </div>
   <div class="launch-overview"><p>${esc(t.overview || '')}</p>
     <ul class="launch-features">\n${feats}\n</ul>

@@ -8,7 +8,7 @@
        data-title="{{ t.title }}">
     <!-- Populated by launch.js based on device; these are the no-JS fallback. -->
     <a class="launch-btn primary" href="{{ t.pwa | relative_url }}">Open / install the app</a>
-    <a class="launch-btn" href="{{ t.download | relative_url }}" download>Download single .html</a>
+    <a class="launch-btn" href="{{ t.download | relative_url }}" download="{{ t.download | split: '/' | last }}">Download single .html</a>
   </div>
 
   <div class="launch-overview">

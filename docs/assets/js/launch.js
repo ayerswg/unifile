@@ -13,6 +13,10 @@
   const pwa   = el.dataset.pwa;
   const dl    = el.dataset.download;
   const title = el.dataset.title || "the app";
+  // Force the saved filename: Cloudflare Pages 308-redirects /foo.html → /foo
+  // (clean URLs), so a bare `download` would save the quine without its .html
+  // extension. An explicit download="name" keeps the original filename.
+  const dlName = (dl || "").split("/").pop();
 
   const ua = navigator.userAgent || "";
   const isIOS = /iPad|iPhone|iPod/.test(ua) ||
@@ -44,7 +48,7 @@
     } else {
       html =
         `<button class="launch-btn primary" id="launch-install">Install app</button>` +
-        `<a class="launch-btn" href="${dl}" download>Download single .html</a>` +
+        `<a class="launch-btn" href="${dl}" download="${dlName}">Download single .html</a>` +
         `<a class="launch-btn ghost" href="${pwa}">Open in browser</a>`;
     }
     el.innerHTML = html;
