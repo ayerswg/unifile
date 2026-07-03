@@ -21,8 +21,8 @@ Two shipping shapes per content "type":
 ### Non-negotiable principles
 1. **Offline & self-contained.** Every library is bundled by esbuild. No runtime
    CDN fetches. The only network call is the update check (`GET /version.json`).
-2. **Privacy: nothing leaves the device.** unifile.app is static GitHub Pages —
-   it stores nothing. No telemetry, no analytics. Keep it that way.
+2. **Privacy: nothing leaves the device.** unifile.app is a static site (Cloudflare
+   Pages) — it stores nothing. No telemetry, no analytics. Keep it that way.
 3. **Plain-text, portable data.** The VCS (branches, commits-as-diffs) is plain
    JSON. A document + full history round-trips through a tiny `.unifile.json`.
 4. **Strict same-origin CSP.** See `templates/pwa.html` / `quine.html`. Adding a
@@ -67,10 +67,10 @@ src/
 build/
   build.mjs          esbuild pipeline (one quine + PWA per dedicated DSL variant)
   sync-site.mjs      Builds variants + copies into docs/ + writes docs/version.json
-  render-site.mjs    No-Ruby local mirror of the Jekyll site
+  render-site.mjs    No-Ruby site renderer (docs/ → docs/_site); Cloudflare's production build
   gen-soundfont.mjs  One-off: fetch FluidR3 piano → src/assets/piano-soundfont.js (network!)
 templates/           quine.html, pwa.html, sw.js, manifest.json
-docs/                The website (Jekyll on GitHub Pages) + committed build artifacts
+docs/                The website (Cloudflare Pages; rendered by render-site.mjs) + committed build artifacts
 dist/                Build output (gitignored)
 ```
 
@@ -175,9 +175,13 @@ Version is the **latest git tag** (`git describe --tags --abbrev=0`, strip `v`),
 
 ## The website (`docs/`)
 
-Jekyll on GitHub Pages (Deploy from `main` `/docs`, custom domain in `docs/CNAME`). Navigation is a **command-bar** (type to jump; index = `docs/search.json`). Per-type front doors (`/get/`=Markdown, `/mermaid/`, `/abc/`) device-detect and route (install PWA on mobile; PWA or `.html` on desktop). `npm run build:site` builds every variant and copies artifacts into `docs/dl/unifile.<abbrev>.html` + `docs/pwa-<abbrev>/` (committed so Pages serves them); it also deletes any stale universal artifacts.
+**Hosted on Cloudflare Pages** (as of 2026-07; migrated off GitHub Pages, which was flaky/queue-stuck). Project `unifile` → `unifile-8yt.pages.dev`, custom domain **`unifile.app`**. Cloudflare **auto-builds on every push to `main`** with build command `npm run build:site && npm run site:preview` and output dir **`docs/_site`**. No queue, no Ruby. GitHub Pages is unpublished; `docs/CNAME` was removed (Cloudflare manages the custom domain via a proxied `CNAME` record in its own DNS — the domain's DNS lives on Cloudflare, registrar stays Namecheap).
 
-**Keep templates + `search.json` to core Liquid only** (no `where_exp`, no plugins) — the classic Pages builder is Jekyll 3.x and chokes otherwise. Local preview without Ruby: `npm run site:preview` then serve `docs/_site`.
+**The site is rendered by `build/render-site.mjs`** (`npm run site:preview`) — a **no-Ruby Node renderer** (uses `marked`) that reads `docs/` (top-level `*.md` pages, `_posts`, `_data/{apps,types}.yml`, the `launcher` include), writes rendered HTML + `search.json` into `docs/_site`, and copies through `assets/`, `dl/`, `pwa-{md,mer,abc}/`, `version.json`. It was formerly just a local preview mirror; **it is now the production build**, so if you change layouts/includes you must update `render-site.mjs` (it only understands a small hand-rolled Liquid subset — the post/app-list loops + the launcher include — not full Jekyll). `docs/_site/` is a build output (gitignored). Note: `npm run build:site` still regenerates + commits `docs/dl/*` and `docs/pwa-*/`, but Cloudflare rebuilds them from source anyway, so committing them is now redundant (candidate cleanup).
+
+Navigation is a **command-bar** (type to jump; index = `docs/search.json`). Per-type front doors (`/get/`=Markdown, `/mermaid/`, `/abc/`) device-detect and route via `launcher.html` + `assets/js/launch.js` (install PWA on mobile; PWA or `.html` on desktop).
+
+**Cloudflare clean-URL gotcha:** Pages 308-redirects `/foo.html` → `/foo`, which would strip the `.html` off a downloaded quine. The download links therefore set an explicit `download="unifile.<abbrev>.html"` (in `launch.js` + both no-JS launcher fallbacks) so the saved filename is preserved.
 
 ---
 
@@ -185,7 +189,7 @@ Jekyll on GitHub Pages (Deploy from `main` `/docs`, custom domain in `docs/CNAME
 
 - **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site.
 - **Verifying UI changes:** use the preview tools against a build (`node build/build.mjs --dsl=abcjs --no-pwa`, serve `dist/` — see `.claude/launch.json`, port 8765). Resize to 375px for mobile. **Always build the variant you're testing.**
-- **When testing something users will run, remember to `build:site`** — source-only commits leave the deployed `docs/` artifacts stale (this has bitten us: a feature "didn't work" because the deployed build didn't have it).
+- **Deploying is automatic on push:** Cloudflare Pages rebuilds from source (`build:site && site:preview`) on every push to `main`, so a source-only commit deploys correctly — no need to pre-run `build:site` for the deployed site to be current (that old footgun is gone). You still build the specific variant locally to *test* UI changes in the preview.
 - **Deploying:** commit + push are done only when asked; branch off `main` if not already the intent.
 
 ---
