@@ -1241,19 +1241,20 @@ function _updateScoreRange() {
     rect.setAttribute('height', h);
     _rangeGroup.appendChild(rect);
   }
-  // Start + end edge bars.
-  const edge = (ms) => {
+  // Start + end markers drawn as framing brackets ([ … ]) so the span's bounds
+  // read as more than just the highlight, without a busy dashed line.
+  const CAP = 9;   // viewBox units — length of each bracket end-cap
+  const bracket = (ms, dir) => {   // dir: +1 → opening "[" (start), -1 → closing "]" (end)
     const p = _scorePosForMs(ms);
     if (!p) return;
     const { y, h } = _lineExtent(p.line);
-    const l = document.createElementNS(_SVG_NS, 'line');
-    l.setAttribute('class', 'uf-abc-range-edge');
-    l.setAttribute('x1', p.x); l.setAttribute('x2', p.x);
-    l.setAttribute('y1', y);   l.setAttribute('y2', y + h);
-    _rangeGroup.appendChild(l);
+    const path = document.createElementNS(_SVG_NS, 'path');
+    path.setAttribute('class', 'uf-abc-range-edge');
+    path.setAttribute('d', `M${p.x + dir * CAP} ${y} L${p.x} ${y} L${p.x} ${y + h} L${p.x + dir * CAP} ${y + h}`);
+    _rangeGroup.appendChild(path);
   };
-  edge(r.startMs);
-  edge(r.endMs);
+  bracket(r.startMs, 1);
+  bracket(r.endMs, -1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1269,6 +1270,7 @@ let _playWallStart = 0;   // performance.now() at the current run's start
 // {startMs,endMs} of the range the current editor selection will play, or null.
 // Drives the scrubber's highlighted band and lets ▶ replay just the range.
 let _selRangeMs    = null;
+let _scrubbing     = false;  // true while the user drags the scrubber (live bar preview)
 
 /** Play a 1-sample silent buffer to unlock audio on iOS within a user gesture. */
 function _unlockAudio(ctx) {
@@ -1375,7 +1377,9 @@ function _emitProgress(ms) {
   state.abcPositionMs = ms;
   state.emit('abc-progress', { ms, total: _totalMs });
   // The score-level playback bar tracks the true scrubber position (no lead).
-  _updateScoreCursor(ms);
+  // While the user is dragging the scrubber, the bar follows the drag preview
+  // instead (see 'abc-seek-preview'), so don't let the progress loop fight it.
+  if (!_scrubbing) _updateScoreCursor(ms);
 }
 
 function _startProgress(offsetMs) {
@@ -1699,8 +1703,14 @@ function stopPlayback(opts = {}) {
   state.emit('abc-play-cursor', null);
 
   // Transport position: a real stop / natural end resets to the start; a pause
-  // or seek (keepPosition) leaves _pausedAtMs where the caller set it.
-  if (!opts.keepPosition) { _pausedAtMs = 0; _emitProgress(0); }
+  // or seek (keepPosition) leaves _pausedAtMs where the caller set it.  When a
+  // range is selected, "the start" is the start of that span (so finishing a
+  // range playback re-cues the span for an immediate replay), else the tune start.
+  if (!opts.keepPosition) {
+    const resetMs = _selRangeMs ? _selRangeMs.startMs : 0;
+    _pausedAtMs = resetMs;
+    _emitProgress(resetMs);
+  }
 
   // Restore range-selection highlight if the user had a text range selected.
   // For note-click selections (collapsed _lastEditorSel), abcjs's own
@@ -1718,7 +1728,10 @@ function stopPlayback(opts = {}) {
 
 // Transport controls (emitted by the persistent abc footer).
 state.on('abc-play', () => togglePlay());
-state.on('abc-seek', ({ ms }) => seekTo(ms));
+state.on('abc-seek', ({ ms }) => { _scrubbing = false; seekTo(ms); });
+// Live drag: move the score playback bar to the dragged position without
+// committing an audio seek (that happens on release via 'abc-seek').
+state.on('abc-seek-preview', ({ ms }) => { _scrubbing = true; _updateScoreCursor(ms); });
 
 async function renderToString(content) {
   const tmp = document.createElement('div');

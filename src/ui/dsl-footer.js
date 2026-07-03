@@ -82,6 +82,8 @@ export class DslFooter {
       scrub.addEventListener('input', () => {
         const cur = this.el.querySelector('#pf-cur');
         if (cur) cur.textContent = _fmt(+scrub.value);
+        // Move the score's playback bar live while dragging (don't wait for release).
+        state.emit('abc-seek-preview', { ms: +scrub.value });
       });
       const commit = () => {
         if (!this._dragging) return;

@@ -1409,10 +1409,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 }
 .uf-abc-range-band { fill: var(--accent); opacity: .13; }
 .uf-abc-range-edge {
+  fill: none;
   stroke: var(--accent);
-  stroke-width: 1.5;
-  opacity: .6;
-  stroke-dasharray: 5 3;
+  stroke-width: 2;
+  opacity: .85;
   vector-effect: non-scaling-stroke;
 }
 
