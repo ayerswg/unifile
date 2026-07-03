@@ -360,9 +360,14 @@ async function render(content, el) {
     state.abcDurationMs = _totalMs;
     state.emit('abc-duration', { total: _totalMs });
     state.emit('abc-range', null);
+    // Score-level overlay: the playback cursor bar + range band that span the
+    // staves in the render pane.  Created against the freshly-rendered SVG.
+    _setupScoreCursor(container);
     // Re-project the current editor selection onto the fresh timing table so a
     // persisted range highlight / cursor position survives a re-render.
     _syncTransportToSelection(_lastEditorSel.from, _lastEditorSel.to);
+    _updateScoreRange();
+    _updateScoreCursor(_pausedAtMs);
   } catch (e) {
     el.innerHTML = `<pre class="error">ABC parse error:\n${e.message}</pre>`;
     _setHasTune(false);
@@ -1053,6 +1058,19 @@ const VISUAL_LEAD_MS = 40;
 let _visualStopChar = null;  // range-end char while playing (null = whole tune)
 let _visualIdx      = -1;    // last-highlighted event index (skip redundant work)
 
+// ── Score-level cursor + range overlay (render pane) ───────────────────────
+// A separate <svg> layered over the abcjs SVG (kept OUT of the dark-mode invert
+// filter so its colours are correct) sharing the abcjs viewBox, so note-timing
+// x-coordinates map 1:1.  Holds a vertical playback bar that tracks the scrubber
+// position across the staves, plus a translucent band + edge bars for the
+// currently selected playback range.
+let _overlaySvg     = null;  // our overlay <svg class="uf-abc-overlay-svg">
+let _abcSvgEl       = null;  // the abcjs <svg> (for per-line getBBox lookups)
+let _cursorLine     = null;  // <line> playback position bar
+let _rangeGroup     = null;  // <g> range band + edge bars
+let _lineExtents    = null;  // Map<lineIndex, {y, h}> — cached per render
+let _overlayResizeObs = null;// keeps the overlay box aligned to the responsive SVG
+
 /** Highlight the note(s) sounding at `targetMs` (= audio position + lead). */
 function _applyVisualAt(targetMs) {
   if (!_noteEvents.length) return;
@@ -1082,6 +1100,160 @@ function _makeVisualEventCallback(stopChar) {
       if (chars.length > 0 && chars.every(c => c >= stopChar)) { stopPlayback(); return; }
     }
   };
+}
+
+const _SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Build the overlay <svg> over the freshly-rendered abcjs SVG. */
+function _setupScoreCursor(container) {
+  _overlaySvg = _abcSvgEl = _cursorLine = _rangeGroup = null;
+  _lineExtents = new Map();
+  _overlayResizeObs?.disconnect();
+  _overlayResizeObs = null;
+
+  const svg = container?.querySelector('svg');
+  const viewBox = svg?.getAttribute('viewBox');
+  if (!svg || !viewBox) return;
+  _abcSvgEl = svg;
+
+  const ov = document.createElementNS(_SVG_NS, 'svg');
+  ov.setAttribute('class', 'uf-abc-overlay-svg');
+  ov.setAttribute('viewBox', viewBox);
+  ov.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  ov.setAttribute('aria-hidden', 'true');
+
+  const rg = document.createElementNS(_SVG_NS, 'g');
+  rg.setAttribute('class', 'uf-abc-range');
+  const ln = document.createElementNS(_SVG_NS, 'line');
+  ln.setAttribute('class', 'uf-abc-cursor');
+  ln.style.display = 'none';
+  ov.appendChild(rg);   // band behind
+  ov.appendChild(ln);   // cursor in front
+  container.appendChild(ov);
+
+  _overlaySvg = ov;
+  _rangeGroup = rg;
+  _cursorLine = ln;
+
+  // Keep the overlay box exactly over the abcjs SVG (which scales responsively).
+  // SVG elements have no offset* geometry, so measure with getBoundingClientRect
+  // relative to the shared parent (the positioned .abc-preview-wrap container).
+  const sync = () => {
+    if (!_overlaySvg || !_abcSvgEl) return;
+    const pr = container.getBoundingClientRect();
+    const sr = _abcSvgEl.getBoundingClientRect();
+    if (!sr.width || !sr.height) return;   // not laid out yet
+    _overlaySvg.style.left   = (sr.left - pr.left) + 'px';
+    _overlaySvg.style.top    = (sr.top  - pr.top)  + 'px';
+    _overlaySvg.style.width  = sr.width  + 'px';
+    _overlaySvg.style.height = sr.height + 'px';
+  };
+  sync();
+  try {
+    _overlayResizeObs = new ResizeObserver(sync);
+    _overlayResizeObs.observe(_abcSvgEl);
+  } catch { /* ResizeObserver unsupported — box set once above */ }
+}
+
+/** Vertical extent {y, h} (viewBox units) of a rendered line/system. */
+function _lineExtent(line) {
+  if (_lineExtents?.has(line)) return _lineExtents.get(line);
+  let ext = null;
+  try {
+    const g = _abcSvgEl?.querySelector(`.abcjs-l${line}`);
+    if (g) { const b = g.getBBox(); if (b.height > 0) ext = { y: b.y, h: b.height }; }
+  } catch { /* getBBox can throw if not laid out */ }
+  if (!ext) {
+    const vb = _abcSvgEl?.getAttribute('viewBox')?.split(/\s+/).map(Number);
+    ext = (vb && vb.length === 4) ? { y: vb[1], h: vb[3] } : { y: 0, h: 100 };
+  }
+  _lineExtents?.set(line, ext);
+  return ext;
+}
+
+/** Interpolated score position {x, line} (viewBox units) at playback ms. */
+function _scorePosForMs(ms) {
+  if (!_noteEvents.length) return null;
+  const placed = e => e.left != null;      // skip bar/end entries without geometry
+  let i = -1;
+  for (let k = 0; k < _noteEvents.length; k++) {
+    const e = _noteEvents[k];
+    if (e.milliseconds > ms) break;
+    if (placed(e)) i = k;
+  }
+  if (i < 0) {                              // before the first note → sit at its left
+    const f = _noteEvents.find(placed);
+    return f ? { x: f.left, line: f.line ?? 0 } : null;
+  }
+  const ev = _noteEvents[i];
+  const next = _noteEvents.slice(i + 1).find(placed);
+  let x = ev.left;
+  const endX = ev.endX ?? (next ? next.left : ev.left);
+  const gap = next ? (next.milliseconds - ev.milliseconds) : 0;
+  if (gap > 0 && endX > ev.left) {
+    const frac = Math.min(1, Math.max(0, (ms - ev.milliseconds) / gap));
+    x = ev.left + frac * (endX - ev.left);
+  }
+  return { x, line: ev.line ?? 0 };
+}
+
+/** Position the playback cursor bar at `ms` (the true scrubber position). */
+function _updateScoreCursor(ms) {
+  if (!_cursorLine) return;
+  const p = _scorePosForMs(ms);
+  if (!p) { _cursorLine.style.display = 'none'; return; }
+  const { y, h } = _lineExtent(p.line);
+  _cursorLine.setAttribute('x1', p.x);
+  _cursorLine.setAttribute('x2', p.x);
+  _cursorLine.setAttribute('y1', y);
+  _cursorLine.setAttribute('y2', y + h);
+  _cursorLine.style.display = '';
+}
+
+/** Draw (or clear) the selected-range band + start/end edge bars in the score. */
+function _updateScoreRange() {
+  if (!_rangeGroup) return;
+  while (_rangeGroup.firstChild) _rangeGroup.removeChild(_rangeGroup.firstChild);
+  const r = _selRangeMs;
+  if (!r || !_noteEvents.length) return;
+
+  // Notes that will actually play (onset within [startMs, endMs)); the stop note
+  // at endMs is excluded so the band ends where playback stops.
+  const inRange = _noteEvents.filter(
+    e => e.left != null && e.milliseconds >= r.startMs - 0.5 && e.milliseconds < r.endMs - 0.5
+  );
+  // One band per line the range spans (handles line wraps).
+  const byLine = new Map();
+  for (const e of inRange) {
+    const c = byLine.get(e.line) ?? { min: Infinity, max: -Infinity };
+    c.min = Math.min(c.min, e.left);
+    c.max = Math.max(c.max, e.endX ?? e.left);
+    byLine.set(e.line, c);
+  }
+  for (const [line, c] of byLine) {
+    if (!(c.max > c.min)) continue;
+    const { y, h } = _lineExtent(line);
+    const rect = document.createElementNS(_SVG_NS, 'rect');
+    rect.setAttribute('class', 'uf-abc-range-band');
+    rect.setAttribute('x', c.min);
+    rect.setAttribute('y', y);
+    rect.setAttribute('width', c.max - c.min);
+    rect.setAttribute('height', h);
+    _rangeGroup.appendChild(rect);
+  }
+  // Start + end edge bars.
+  const edge = (ms) => {
+    const p = _scorePosForMs(ms);
+    if (!p) return;
+    const { y, h } = _lineExtent(p.line);
+    const l = document.createElementNS(_SVG_NS, 'line');
+    l.setAttribute('class', 'uf-abc-range-edge');
+    l.setAttribute('x1', p.x); l.setAttribute('x2', p.x);
+    l.setAttribute('y1', y);   l.setAttribute('y2', y + h);
+    _rangeGroup.appendChild(l);
+  };
+  edge(r.startMs);
+  edge(r.endMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -1195,11 +1367,15 @@ function _syncTransportToSelection(from, to) {
     _pausedAtMs = ms;
     _emitProgress(ms);
   }
+  // Reflect the new (or cleared) range in the score overlay.
+  _updateScoreRange();
 }
 
 function _emitProgress(ms) {
   state.abcPositionMs = ms;
   state.emit('abc-progress', { ms, total: _totalMs });
+  // The score-level playback bar tracks the true scrubber position (no lead).
+  _updateScoreCursor(ms);
 }
 
 function _startProgress(offsetMs) {

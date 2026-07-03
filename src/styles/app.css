@@ -1384,16 +1384,37 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .abc-preview-wrap {
   padding: 16px;
   border-radius: var(--radius);
+  position: relative;   /* positioning context for the score-cursor overlay */
 }
 .abc-preview-wrap svg { max-width: 100%; }
 /* In dark mode abcjs renders black strokes — invert to white for readability.
    Reset color to black first so inherited CSS color doesn't contaminate the
-   SVG fill before the filter is applied (which would invert it to a dark tone). */
+   SVG fill before the filter is applied (which would invert it to a dark tone).
+   The cursor overlay (.uf-abc-overlay-svg) is EXCLUDED so its accent colours are
+   not inverted. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .abc-preview-wrap svg { color: black; filter: invert(1) hue-rotate(180deg); }
+  :root:not([data-theme="light"]) .abc-preview-wrap svg:not(.uf-abc-overlay-svg) { color: black; filter: invert(1) hue-rotate(180deg); }
 }
-[data-theme="dark"] .abc-preview-wrap svg { color: black; filter: invert(1) hue-rotate(180deg); }
-[data-theme="light"] .abc-preview-wrap svg { filter: none; }
+[data-theme="dark"] .abc-preview-wrap svg:not(.uf-abc-overlay-svg) { color: black; filter: invert(1) hue-rotate(180deg); }
+[data-theme="light"] .abc-preview-wrap svg:not(.uf-abc-overlay-svg) { filter: none; }
+
+/* Score-level playback cursor + range overlay (drawn over the abcjs SVG, in a
+   separate <svg> so it escapes the dark-mode invert filter above).  Positioned
+   to the abcjs SVG box in JS; shares its viewBox so coordinates map 1:1. */
+.uf-abc-overlay-svg { position: absolute; pointer-events: none; overflow: visible; }
+.uf-abc-cursor {
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;   /* constant px width regardless of scale */
+}
+.uf-abc-range-band { fill: var(--accent); opacity: .13; }
+.uf-abc-range-edge {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: .6;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+}
 
 /* Clickable note/rest elements get a pointer cursor */
 .abc-preview-wrap svg g[class*="abcjs-note"],
