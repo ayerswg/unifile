@@ -235,6 +235,11 @@ function _scheduleRangeHighlight(adjFrom, adjTo) {
 let _synth = null;
 let _timingCallbacks = null;
 let _audioContext = null;
+// iOS: backgrounding the app interrupts the audio session and leaves the
+// AudioContext dead — resume() reports success but no sound comes out until the
+// context is rebuilt. Set when the OS interrupts us (see the statechange /
+// visibility handlers) so the next play recreates the context inside its gesture.
+let _audioInterrupted = false;
 let _stopping = false;   // re-entrancy guard for stopPlayback (synth onEnded)
 // Web Audio oscillators scheduled for the current playback.
 let _scheduledOscs = [];
@@ -1318,6 +1323,33 @@ function _unlockAudio(ctx) {
   } catch { /* ignore */ }
 }
 
+/** Return a live, unlocked AudioContext, rebuilding it if a prior one was killed
+ *  by an iOS background interruption (or closed). MUST be called inside a user
+ *  gesture: a freshly-created context can only be unlocked from a gesture on iOS,
+ *  and a dead-context rebuild is exactly what recovers audio after backgrounding.
+ *  We still reuse ONE context across normal plays (recreating per play is what
+ *  silenced the iOS PWA originally) — only a real interruption forces a rebuild. */
+function _acquireAudioContext() {
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  const dead = _audioContext &&
+    (_audioInterrupted || _audioContext.state === 'closed' || _audioContext.state === 'interrupted');
+  if (_audioContext && dead) {
+    try { _audioContext.close(); } catch { /* ignore */ }
+    _audioContext = null;
+  }
+  if (!_audioContext) {
+    _audioContext = new Ctor();
+    // 'interrupted' is iOS-only; flag it so the next play rebuilds rather than
+    // trusting a resume() that quietly yields silence.
+    _audioContext.onstatechange = () => {
+      if (_audioContext && _audioContext.state === 'interrupted') _audioInterrupted = true;
+    };
+    _unlockAudio(_audioContext);   // silent buffer, within the gesture
+  }
+  _audioInterrupted = false;
+  return _audioContext;
+}
+
 
 /** Build the note-timing table for a tune and cache it in `_noteEvents`.
  *  setUpAudio() populates midiPitches; TimingCallbacks turns them into events
@@ -1618,13 +1650,11 @@ async function startPlayback(opts = {}) {
   try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* unsupported */ }
 
   try {
-    // Reuse ONE persistent AudioContext for the whole session.  iOS Safari (esp.
-    // installed PWAs) won't reliably start a freshly-created/closed context after
-    // the gesture; a single context unlocked once on the first tap keeps working.
-    if (!_audioContext) {
-      _audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      _unlockAudio(_audioContext);   // iOS: unlock within the user gesture
-    }
+    // Reuse ONE persistent AudioContext across plays (recreating per play is what
+    // silenced the iOS PWA); _acquireAudioContext only rebuilds it when a prior
+    // context was killed by an iOS background interruption, recovering audio that
+    // would otherwise stay dead until the app is force-quit.
+    _acquireAudioContext();
     await _audioContext.resume();
   } catch {
     _audioContext = null;
@@ -1783,6 +1813,24 @@ state.on('abc-seek', ({ ms }) => { _scrubbing = false; seekTo(ms); });
 // Live drag: move the score playback bar to the dragged position without
 // committing an audio seek (that happens on release via 'abc-seek').
 state.on('abc-seek-preview', ({ ms }) => { _scrubbing = true; _updateScoreCursor(ms); });
+
+// iOS PWA audio recovery: leaving the app (backgrounding) interrupts the audio
+// session; on return the AudioContext is often dead until it's rebuilt. Mark it
+// interrupted while hidden so the next play recreates it inside its gesture, and
+// on return best-effort resume + re-assert the 'playback' session in case it was
+// only a recoverable suspend (no gesture needed for that path).
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (_audioContext) _audioInterrupted = true;
+      return;
+    }
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* unsupported */ }
+    if (_audioContext && _audioContext.state !== 'running') {
+      _audioContext.resume().catch(() => { /* rebuilt on next play */ });
+    }
+  });
+}
 
 async function renderToString(content) {
   const tmp = document.createElement('div');
