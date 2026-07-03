@@ -20,7 +20,7 @@
 import { state, PANELS } from './state.js';
 import { shortHash } from '../core/hash.js';
 import { showArchivedCommentsModal } from './comments.js';
-import { listDSLs, getDSL } from '../dsl/registry.js';
+import { listDSLs } from '../dsl/registry.js';
 import {
   getExtensionMeta,
   setTextExtension,
@@ -205,9 +205,10 @@ export class TopBar {
           ${iconImport()} Import & merge…
           <kbd>⌃⇧M</kbd>
         </li>
-        <li class="tools-menu-item" id="tb-manage-plugins" title="Manage installed DSL plugins">
-          ${iconPlugin()} Manage plugins…
-        </li>
+        ${listDSLs().some(d => (d.extensionSlots?.length ?? 0) > 0) ? `
+        <li class="tools-menu-item" id="tb-extensions" title="Configure DSL extensions">
+          ${iconPlugin()} Extensions…
+        </li>` : ''}
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-archived-comments" title="Browse archived comment threads">
           ${iconComment()} Archived comments…
@@ -434,10 +435,10 @@ export class TopBar {
       if (state.activePanel === PANELS.MERGE) state.closePanel();
       else state.openPanel(PANELS.MERGE);
     });
-    this.el.querySelector('#tb-manage-plugins')?.addEventListener('click', () => {
+    this.el.querySelector('#tb-extensions')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
-      showManagePluginsModal(this.handlers);
+      showExtensionsModal();
     });
 
     this.el.querySelector('#tb-archived-comments')?.addEventListener('click', () => {
@@ -1151,79 +1152,35 @@ function showDslHelpModal(dslType) {
   overlay.querySelector('.dsl-help-modal').focus?.();
 }
 
-function showManagePluginsModal(handlers) {
+// Modal to configure a built-in DSL's extension slots (e.g. the ABC soundfont).
+// There is no runtime plugin installation — every build bundles its one DSL — so
+// this only surfaces the extensionSlots declared by the DSLs in this build.
+function showExtensionsModal() {
   const overlay = document.createElement('div');
   overlay.className = 'dsl-help-overlay';
 
-  // ---------------------------------------------------------------------------
-  // Build the HTML for one plugin row (with optional extension slots expander)
-  // ---------------------------------------------------------------------------
-
-  // Render a row for an installed (removable) plugin.
-  const renderPluginRow = (id) => {
-    let dslName = id;
-    let slots   = [];
-    try {
-      const dsl = getDSL(id);
-      dslName = dsl?.name ?? id;
-      slots   = dsl?.extensionSlots ?? [];
-    } catch { /* plugin may not be registered yet */ }
-
-    const slotsHtml = _renderSlots(id, slots);
-
-    return `
-      <div class="plugin-mgr-row" data-id="${escHtml(id)}">
-        <div class="plugin-mgr-row-header">
-          <code class="plugin-mgr-shebang">#!${escHtml(id)}</code>
-          <span class="plugin-mgr-name">${escHtml(dslName)}</span>
-          <button class="plugin-mgr-remove" data-id="${escHtml(id)}" title="Remove plugin">Remove</button>
-        </div>
-        ${slotsHtml}
-      </div>
-    `;
-  };
-
-  // Render a row for a built-in DSL that declares extensionSlots (non-removable).
-  const renderBuiltinRow = (dsl) => {
-    const slotsHtml = _renderSlots(dsl.id, dsl.extensionSlots ?? []);
-    return `
+  const renderRow = (dsl) => `
       <div class="plugin-mgr-row plugin-mgr-row--builtin" data-id="${escHtml(dsl.id)}">
         <div class="plugin-mgr-row-header">
           <code class="plugin-mgr-shebang">#!${escHtml(dsl.id)}</code>
           <span class="plugin-mgr-name">${escHtml(dsl.name ?? dsl.id)}</span>
-          <span class="plugin-mgr-builtin-badge">built-in</span>
         </div>
-        ${slotsHtml}
+        ${_renderSlots(dsl.id, dsl.extensionSlots ?? [])}
       </div>
     `;
-  };
 
   const renderContent = () => {
-    const installedIds = Object.keys(state.data?.plugins ?? {});
-
-    // Built-in DSLs that declare extensionSlots and aren't also installed as plugins.
-    const builtinWithSlots = listDSLs().filter(
-      d => (d.extensionSlots?.length ?? 0) > 0 && !installedIds.includes(d.id)
-    );
-
-    const installedRows = installedIds.map(renderPluginRow).join('');
-    const builtinRows   = builtinWithSlots.map(renderBuiltinRow).join('');
-    const allRows       = builtinRows + installedRows;
-    const hasAny        = installedIds.length > 0 || builtinWithSlots.length > 0;
-
+    const dslsWithSlots = listDSLs().filter(d => (d.extensionSlots?.length ?? 0) > 0);
     return `
-      <div class="dsl-help-modal" role="dialog" aria-modal="true" aria-label="Manage plugins" tabindex="-1">
+      <div class="dsl-help-modal" role="dialog" aria-modal="true" aria-label="Extensions" tabindex="-1">
         <div class="dsl-help-header">
-          <div class="dsl-help-title">Manage Plugins</div>
+          <div class="dsl-help-title">Extensions</div>
           <button class="dsl-help-close" aria-label="Close">&times;</button>
         </div>
         <div class="dsl-help-body plugin-mgr-body">
-          ${!hasAny
-            ? '<p class="plugin-mgr-empty">No plugins installed. Use the button below to install a .plugin.js file.</p>'
-            : `<div class="plugin-mgr-list">${allRows}</div>`}
-        </div>
-        <div class="dsl-help-footer plugin-mgr-footer">
-          <button class="plugin-mgr-install-btn" id="plugin-mgr-install">Install plugin…</button>
+          ${dslsWithSlots.length
+            ? `<div class="plugin-mgr-list">${dslsWithSlots.map(renderRow).join('')}</div>`
+            : '<p class="plugin-mgr-empty">This build has no configurable extensions.</p>'}
         </div>
       </div>
     `;
@@ -1247,14 +1204,6 @@ function showManagePluginsModal(handlers) {
   };
 
   const bindActions = () => {
-    overlay.querySelectorAll('.plugin-mgr-remove').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = btn.dataset.id;
-        handlers.onRemovePlugin?.(id);
-        refresh();
-      });
-    });
-
     // ── Text slot: save on Enter or blur ──────────────────────────────────
     overlay.querySelectorAll('.plugin-ext-text-input').forEach(input => {
       const { dslId, slotId } = input.dataset;
@@ -1275,31 +1224,8 @@ function showManagePluginsModal(handlers) {
       btn.addEventListener('click', async () => {
         const { dslId, slotId } = btn.dataset;
         await clearExtension(dslId, slotId);
-        // Full refresh so all event bindings stay clean.
-        refresh();
+        refresh(); // full refresh so all event bindings stay clean
       });
-    });
-
-    overlay.querySelector('#plugin-mgr-install')?.addEventListener('click', () => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.js';
-      input.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
-      document.body.appendChild(input);
-      input.addEventListener('change', async () => {
-        const file = input.files?.[0];
-        input.remove();
-        if (!file) return;
-        const code = await file.text();
-        if (!code.includes('@unifile-plugin')) {
-          // eslint-disable-next-line no-alert
-          alert(`"${file.name}" does not appear to be a unifile plugin.\n\nExpected a file containing a "@unifile-plugin" header comment.`);
-          return;
-        }
-        handlers.onInstallPlugin?.(code, file.name);
-        refresh();
-      });
-      input.click();
     });
   };
 

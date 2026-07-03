@@ -8,11 +8,17 @@
 #   kind: pwa      → an installable offline web app
 
 # ── Front-door hubs (primary) ──
-- title: Unifile
+- title: Markdown
   url: /get/
   kind: app
   pinned: true
-  excerpt: The universal editor — overview, then install the app or download the file.
+  excerpt: Markdown editor — overview, then install the app or download the file.
+
+- title: Mermaid
+  url: /mermaid/
+  kind: app
+  pinned: true
+  excerpt: Mermaid diagram editor — overview, then install the app or download the file.
 
 - title: ABC Notation
   url: /abc/
@@ -21,20 +27,30 @@
   excerpt: ABC music notation — overview, then install the app or download the file.
 
 # ── Direct links (searchable) ──
-- title: Unifile — download (.html)
-  url: /dl/unifile.html
+- title: Markdown — download (.html)
+  url: /dl/unifile.md.html
   kind: download
-  excerpt: Standalone single-file editor; save and open offline.
+  excerpt: Standalone single-file Markdown editor; save and open offline.
+
+- title: Mermaid — download (.html)
+  url: /dl/unifile.mer.html
+  kind: download
+  excerpt: Standalone single-file Mermaid diagram editor; save and open offline.
 
 - title: ABC Notation — download (.html)
   url: /dl/unifile.abc.html
   kind: download
   excerpt: Standalone ABC build with offline piano + MIDI.
 
-- title: Unifile — install (PWA)
-  url: /pwa/
+- title: Markdown — install (PWA)
+  url: /pwa-md/
   kind: pwa
-  excerpt: Install the universal editor as an offline app.
+  excerpt: Install the Markdown editor as an offline app.
+
+- title: Mermaid — install (PWA)
+  url: /pwa-mer/
+  kind: pwa
+  excerpt: Install the Mermaid diagram editor as an offline app.
 
 - title: ABC Notation — install (PWA)
   url: /pwa-abc/

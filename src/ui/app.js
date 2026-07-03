@@ -22,17 +22,8 @@ import {
   loadBackupMark,
 } from '../core/storage.js';
 import { isEncrypted, decryptData } from '../core/crypto.js';
-import { getDSL, registerDSL, deregisterDSL } from '../dsl/registry.js';
+import { getDSL } from '../dsl/registry.js';
 import { parseGlobalFrontMatter, serializeGlobalFrontMatter } from '../core/front-matter.js';
-
-// Host API surface — exposed on globalThis.__uf so that installed plugins can
-// import the same module instances as the host instead of bundling their own.
-// Without this, plugins end up with isolated copies of CodeMirror facets and
-// a separate state singleton, breaking syntax highlighting and cross-component
-// events (abcjs playback, note-click→editor jump, etc.).
-import { catppuccinHighlight } from './editor-theme.js';
-import { StreamLanguage, syntaxHighlighting } from '@codemirror/language';
-import { tags as lezerTags, Tag as lezerTag, highlightTree } from '@lezer/highlight';
 
 import { initTheme } from './theme.js';
 import { TopBar } from './topbar.js';
@@ -132,23 +123,12 @@ export class App {
       if (diff) r?.setAttribute('data-diff', '1'); else r?.removeAttribute('data-diff');
     });
 
-    // 6. Expose host APIs for plugins (must run before plugins are loaded so that
-    //    plugins can use the host's CM6 + state instances instead of bundling copies)
-    this._exposeHostAPIs();
-
-    // 7. Load any stored DSL plugins from the quine data (before mounting components
-    //    so the topbar renders with all plugins already registered)
-    this._loadStoredPlugins(data);
-
-    // 8. Render the shell
+    // 6. Render the shell
     this._buildShell();
 
-    // 8b. Site-nav bar — only renders when viewed in a browser tab on the web
+    // 6b. Site-nav bar — only renders when viewed in a browser tab on the web
     //     (hidden for installed PWAs and file:// downloads); see site-nav.js.
     mountSiteNav(document.getElementById('uf-site-nav'));
-
-    // 9. Bind plugin drag-and-drop handler
-    this._bindPluginDrop();
 
     // 10. Mount components
     this._mountComponents();
@@ -384,34 +364,6 @@ export class App {
         return this._components.preview?.exportSlidesPptx();
       },
 
-      /**
-       * Install a plugin from a .plugin.js file selected via the menu picker.
-       * @param {string} code  Raw plugin JS source
-       * @param {string} [filename]  Original filename (for error messages)
-       */
-      onInstallPlugin: (code, filename = 'plugin') => {
-        try {
-          this._evalPlugin(code);
-        } catch (e) {
-          // eslint-disable-next-line no-alert
-          alert(`Failed to load plugin "${filename}":\n${e.message}`);
-          return;
-        }
-        const data = state.data;
-        data.plugins ??= {};
-        const m = code.match(/@unifile-plugin\s+([\w-]+)/);
-        if (m) data.plugins[m[1]] = code;
-        state.update({ data, isDirty: true });
-        state.emit('plugin-added');
-      },
-
-      onRemovePlugin: (id) => {
-        deregisterDSL(id);
-        const data = state.data;
-        if (data.plugins) delete data.plugins[id];
-        state.update({ data, isDirty: true });
-      },
-
       // Export the document + history as a .unifile.json; returns the outcome so
       // the "new document" modal can confirm a backup happened before discarding.
       onSaveDataFile: () => this._saveDataFile(),
@@ -429,9 +381,9 @@ export class App {
 
   /**
    * Replace the entire in-memory document — content, branches, commits and
-   * comments — with a blank one seeded from this build's default DSL. Installed
-   * plugins and their configured extension slots are preserved so the user keeps
-   * their toolset. Mirrors _loadDataObject (the opened-file path).
+   * comments — with a blank one seeded from this build's default DSL. Configured
+   * extension slots are preserved so the user keeps their setup. Mirrors
+   * _loadDataObject (the opened-file path).
    */
   _newDocument() {
     const data = {
@@ -445,8 +397,7 @@ export class App {
       commentThreads: {},
       password: null,
       currentContent: '',
-      // Keep the user's installed plugins + their configuration.
-      ...(state.data?.plugins          ? { plugins: { ...state.data.plugins } } : {}),
+      // Keep the user's configured extension slots (e.g. abc soundfont).
       ...(state.data?.pluginExtensions ? { pluginExtensions: { ...state.data.pluginExtensions } } : {}),
     };
 
@@ -711,7 +662,6 @@ export class App {
       primaryModel:   fmMeta.model  ?? 'flow',
       secondaryModel: fmMeta.model2 ?? null,
     });
-    this._loadStoredPlugins(data);
     this._components.editor?.setValue(currentContent);
     state.emit('checkout', { hash: vcs.headHash, content: currentContent });
     state.emit('change');
@@ -846,98 +796,6 @@ export class App {
     if (!mark) return log.length;
     const idx = log.findIndex(c => c.hash === mark.headHash);
     return idx >= 0 ? log.length - 1 - idx : log.length;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Plugin infrastructure
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Expose the host's module instances on globalThis.__uf so that installed
-   * plugins can use them instead of bundling their own isolated copies.
-   *
-   * Without this:
-   *   - Plugin's @codemirror/language is a different module instance → CM6 facets
-   *     don't match the host's → syntax highlighting broken in the language compartment.
-   *   - Plugin's state.js is a different EventEmitter copy → plugin event listeners
-   *     (editor-select, dsl-select, abc-play …) never fire on host events → playback,
-   *     note-click-to-jump, and reverse-highlight all silently fail.
-   *
-   * Must be called before _loadStoredPlugins() so stubs resolve correctly.
-   */
-  _exposeHostAPIs() {
-    globalThis.__uf = {
-      state,
-      catppuccinHighlight,
-      cmLanguage:    { StreamLanguage, syntaxHighlighting },
-      lezerHighlight: { tags: lezerTags, Tag: lezerTag, highlightTree },
-    };
-  }
-
-  /**
-   * Eval and register all DSL plugins stored in the quine data.
-   * Called before components mount so the topbar renders with all DSLs.
-   * @param {object} data  The loaded quine data object
-   */
-  _loadStoredPlugins(data) {
-    const plugins = data?.plugins ?? {};
-    for (const [id, code] of Object.entries(plugins)) {
-      try {
-        this._evalPlugin(code);
-      } catch (e) {
-        console.warn(`[unifile] Failed to load stored plugin "${id}":`, e);
-      }
-    }
-  }
-
-  /**
-   * Evaluate a plugin function-expression string and register it.
-   * Plugin format: `(function(register) { ... })` — a function expression that
-   * accepts the register callback and calls it with the plugin object.
-   * @param {string} code  Raw plugin JS source
-   */
-  _evalPlugin(code) {
-    // eslint-disable-next-line no-new-func
-    const fn = new Function(`return (${code})`)();
-    fn(registerDSL);
-  }
-
-  /**
-   * Listen for .plugin.js files dropped anywhere on the page.
-   * Validates, evals, stores the plugin code, and emits 'plugin-added'.
-   */
-  _bindPluginDrop() {
-    document.body.addEventListener('dragover', (e) => {
-      if ([...e.dataTransfer.types].includes('Files')) e.preventDefault();
-    });
-
-    document.body.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      const file = [...e.dataTransfer.files].find(f => f.name.endsWith('.plugin.js'));
-      if (!file) return;
-
-      const code = await file.text();
-      // Safety check: only process files that are self-identified unifile plugins
-      if (!code.includes('@unifile-plugin')) {
-        console.warn('[unifile] Dropped file does not appear to be a unifile plugin (missing @unifile-plugin header)');
-        return;
-      }
-
-      try {
-        this._evalPlugin(code);
-      } catch (e) {
-        console.warn('[unifile] Failed to load dropped plugin:', e);
-        return;
-      }
-
-      // Persist in quine data so the plugin survives save/reload and self-export
-      const data = state.data;
-      data.plugins ??= {};
-      const m = code.match(/@unifile-plugin\s+([\w-]+)/);
-      if (m) data.plugins[m[1]] = code;
-      state.update({ data, isDirty: true });
-      state.emit('plugin-added');
-    });
   }
 
   // ---------------------------------------------------------------------------

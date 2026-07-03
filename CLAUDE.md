@@ -65,7 +65,7 @@ src/
     theme.js, editor-theme.js, plugin-extensions.js, update-check.js
   styles/app.css     All app CSS (single file; mobile rules in @media(max-width:640px))
 build/
-  build.mjs          esbuild pipeline (quines, PWAs, plugin bundles)
+  build.mjs          esbuild pipeline (one quine + PWA per dedicated DSL variant)
   sync-site.mjs      Builds variants + copies into docs/ + writes docs/version.json
   render-site.mjs    No-Ruby local mirror of the Jekyll site
   gen-soundfont.mjs  One-off: fetch FluidR3 piano → src/assets/piano-soundfont.js (network!)
@@ -80,10 +80,11 @@ dist/                Build output (gitignored)
 
 esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
-- `node build/build.mjs` → universal quine `dist/unifile.html` + PWA `dist/pwa/` + drag-drop plugin bundles.
-- `--dsl=<variant>` → **dedicated single-DSL build** (DSL bundled in, no runtime plugins). Variants in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `universal`(uni). Output `dist/unifile.<abbrev>.html` + `dist/pwa-<abbrev>/`.
-- `--plugins` → build only the drag-drop plugin bundles (fast).
+- **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
+- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
+- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model.
 
 **Compile-time defines** (esbuild `define`, referenced as globals; guard with `typeof … !== 'undefined'`):
 - `UNIFILE_MODE` = `"quine"` | `"pwa"` → `IS_QUINE` in storage.js.
@@ -91,13 +92,13 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 **Two build targets per variant:** `buildQuine()` embeds the JS **gzip+base64** into the HTML template's `<script id="unifile-data">` region (so plain-text grep won't find code strings in a quine — grep the PWA's `app.js` instead). `buildPWA()` writes plain files + a service worker whose cache name is namespaced per type (`unifile-abc`, etc.) with a content hash so updates supersede cleanly.
 
-**Direction (2026-06):** moving toward dedicated PWA/standalone builds per content type, away from runtime plugins. `npm run build:abcjs` is the flagship (ships the offline piano).
+**Direction (2026-07):** dedicated per-content-type builds only — the universal multi-DSL app and the runtime drag-drop plugin system were removed. `npm run build:abcjs` is the flagship (ships the offline piano).
 
 ---
 
 ## Runtime architecture
 
-**Entry:** `main.js` → `new App().init()`. In quine mode the app is on `window.__unifile`. The build also exposes `globalThis.__uf = { state, … }` for plugins/tests.
+**Entry:** `main.js` → `new App().init()`. In quine mode the app is on `window.__unifile`. The build also exposes `globalThis.__uf = { state }` for tests/preview automation.
 
 **State (`state.js`)** is a tiny EventBus singleton (`state`). Mutate via `state.update(patch)` (broadcasts `change`) or `state.emit(event, payload)`; subscribe with `state.on(event, fn)`. Key fields: `data` (the full serialized doc), `vcs`, `currentContent`, `isDirty`, `viewMode`, `activePanel`, `diff`, `pendingCommit`, `user`. Getters: `headHash`, `currentBranch`, `isDetached`.
 
@@ -174,7 +175,7 @@ Version is the **latest git tag** (`git describe --tags --abbrev=0`, strip `v`),
 
 ## The website (`docs/`)
 
-Jekyll on GitHub Pages (Deploy from `main` `/docs`, custom domain in `docs/CNAME`). Navigation is a **command-bar** (type to jump; index = `docs/search.json`). Per-type front doors (`/abc/`, `/get/`) device-detect and route (install PWA on mobile; PWA or `.html` on desktop). `npm run build:site` builds the apps and copies artifacts into `docs/dl/*.html`, `docs/pwa/`, `docs/pwa-abc/` (committed so Pages serves them).
+Jekyll on GitHub Pages (Deploy from `main` `/docs`, custom domain in `docs/CNAME`). Navigation is a **command-bar** (type to jump; index = `docs/search.json`). Per-type front doors (`/get/`=Markdown, `/mermaid/`, `/abc/`) device-detect and route (install PWA on mobile; PWA or `.html` on desktop). `npm run build:site` builds every variant and copies artifacts into `docs/dl/unifile.<abbrev>.html` + `docs/pwa-<abbrev>/` (committed so Pages serves them); it also deletes any stale universal artifacts.
 
 **Keep templates + `search.json` to core Liquid only** (no `where_exp`, no plugins) — the classic Pages builder is Jekyll 3.x and chokes otherwise. Local preview without Ruby: `npm run site:preview` then serve `docs/_site`.
 
@@ -182,7 +183,7 @@ Jekyll on GitHub Pages (Deploy from `main` `/docs`, custom domain in `docs/CNAME
 
 ## Conventions & workflows
 
-- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add it to `DSL_META`/`PLUGIN_DSLS` in `build.mjs` if it needs a dedicated build or plugin bundle; import in `main.js` for dev.
+- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site.
 - **Verifying UI changes:** use the preview tools against a build (`node build/build.mjs --dsl=abcjs --no-pwa`, serve `dist/` — see `.claude/launch.json`, port 8765). Resize to 375px for mobile. **Always build the variant you're testing.**
 - **When testing something users will run, remember to `build:site`** — source-only commits leave the deployed `docs/` artifacts stale (this has bitten us: a feature "didn't work" because the deployed build didn't have it).
 - **Deploying:** commit + push are done only when asked; branch off `main` if not already the intent.

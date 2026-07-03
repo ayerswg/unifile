@@ -606,13 +606,6 @@ export class Editor {
         }
       }
     }));
-
-    // Plugin installed → existing #!dslId sections now have a language → rebuild
-    this._unsub.push(state.on('plugin-added', () => {
-      if (this._view) {
-        this._view.dispatch({ effects: rebuildSectionHighlightsEffect.of(null) });
-      }
-    }));
   }
 
   destroy() {

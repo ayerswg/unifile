@@ -5,19 +5,31 @@
 #   pwa      → installable Progressive Web App directory
 #   download → standalone single-file .html
 
-- id: universal
-  title: Unifile
-  tagline: One file. Every format. Fully offline.
+- id: markdown
+  title: Unifile Markdown
+  tagline: Markdown notes with built-in version history — fully offline.
   overview: >
-    The universal editor. Markdown by default, with Mermaid diagrams, ABC music,
-    and Fountain screenplays available per section — all in a single file that
-    works with no server and no account, and keeps its own version history.
+    A dedicated Markdown editor in a single file that works with no server and
+    no account, and keeps its own git-style version history.
   features:
     - Works 100% offline — no server, no account, no sync
     - Built-in git-style branches, commits, and history
-    - Mix formats per section with #!shebang lines
-  pwa: /pwa/
-  download: /dl/unifile.html
+    - Live preview with document / slides layouts
+  pwa: /pwa-md/
+  download: /dl/unifile.md.html
+
+- id: mermaid
+  title: Unifile Mermaid
+  tagline: Diagrams as text — versioned, live, and offline.
+  overview: >
+    A dedicated Mermaid diagram editor with a live preview, in a single file
+    that works with no server and no account, and keeps its own version history.
+  features:
+    - Works 100% offline — no server, no account, no sync
+    - Live Mermaid preview (flowcharts, sequence, gantt, …)
+    - Built-in git-style branches, commits, and history
+  pwa: /pwa-mer/
+  download: /dl/unifile.mer.html
 
 - id: abc
   title: ABC Notation

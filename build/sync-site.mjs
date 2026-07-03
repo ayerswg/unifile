@@ -3,15 +3,17 @@
  *
  * The site (docs/) is served by GitHub Pages.  The command bar lists downloads
  * and PWAs (docs/_data/apps.yml); this step makes those URLs resolve by copying
- * the built files out of dist/ into docs/:
+ * each dedicated build's files out of dist/ into docs/:
  *
- *   dist/unifile.html      → docs/dl/unifile.html        (universal download)
- *   dist/unifile.abc.html  → docs/dl/unifile.abc.html    (ABC download)
- *   dist/pwa/              → docs/pwa/                    (universal PWA)
- *   dist/pwa-abc/          → docs/pwa-abc/                (ABC PWA)
+ *   dist/unifile.md.html   → docs/dl/unifile.md.html      (Markdown download)
+ *   dist/unifile.mer.html  → docs/dl/unifile.mer.html     (Mermaid download)
+ *   dist/unifile.abc.html  → docs/dl/unifile.abc.html     (ABC download)
+ *   dist/pwa-md/           → docs/pwa-md/                  (Markdown PWA)
+ *   dist/pwa-mer/          → docs/pwa-mer/                 (Mermaid PWA)
+ *   dist/pwa-abc/          → docs/pwa-abc/                 (ABC PWA)
  *
  * Run:  npm run build:site
- * (builds the universal + abcjs variants first, then copies)
+ * (builds every dedicated variant first, then copies)
  */
 
 import { execSync } from 'child_process';
@@ -79,23 +81,36 @@ function detectChannels() {
 }
 
 const FILES = [
-  ['unifile.html',     'dl/unifile.html'],
+  ['unifile.md.html',  'dl/unifile.md.html'],
+  ['unifile.mer.html', 'dl/unifile.mer.html'],
   ['unifile.abc.html', 'dl/unifile.abc.html'],
 ];
 const DIRS = [
-  ['pwa',     'pwa'],
+  ['pwa-md',  'pwa-md'],
+  ['pwa-mer', 'pwa-mer'],
   ['pwa-abc', 'pwa-abc'],
 ];
+
+// Stale universal artifacts to delete from docs/ (the universal build is gone).
+const REMOVE_FILES = ['dl/unifile.html'];
+const REMOVE_DIRS  = ['pwa'];
 
 async function exists(p) {
   try { await access(p); return true; } catch { return false; }
 }
 
 async function main() {
-  // 1. Build the variants (default = universal quine + PWA + plugins; then abcjs).
+  // 1. Build every dedicated variant (markdown, mermaid, abcjs → quine + PWA each).
   console.log('Building site artifacts…');
-  execSync('node build/build.mjs',            { cwd: ROOT, stdio: 'inherit' });
-  execSync('node build/build.mjs --dsl=abcjs', { cwd: ROOT, stdio: 'inherit' });
+  execSync('node build/build.mjs', { cwd: ROOT, stdio: 'inherit' });
+
+  // 1b. Remove any stale universal artifacts left from the old multi-DSL build.
+  for (const rel of REMOVE_FILES) {
+    await rm(join(DOCS, rel), { force: true });
+  }
+  for (const rel of REMOVE_DIRS) {
+    await rm(join(DOCS, rel), { recursive: true, force: true });
+  }
 
   // 2. Copy standalone downloads.
   await mkdir(join(DOCS, 'dl'), { recursive: true });

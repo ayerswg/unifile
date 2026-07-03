@@ -7,25 +7,23 @@
  * The website lives in docs/ (Jekyll, GitHub Pages).  This build only produces
  * the app artifacts; `npm run build:site` copies them into docs/ for hosting.
  *
+ * Every content type ships as its OWN dedicated build — one DSL bundled in per
+ * quine / PWA, no runtime plugins.  There is no "universal" multi-DSL app.
+ *
  * Outputs
  * -------
- *   (default, no flags)
- *   dist/unifile.html        universal quine  (markdown built-in; others via plugins)
- *   dist/pwa/                installable PWA  (universal)
- *   dist/plugins/            drag-and-drop DSL plugin bundles
+ *   (default, no flags)  builds every dedicated variant in DSL_META:
+ *   dist/unifile.<abbrev>.html   standalone quine for each DSL
+ *   dist/pwa-<abbrev>/            installable PWA for each DSL
  *
- *   --dsl=<variant>          dedicated single-DSL build (DSL bundled in, no plugins)
- *   dist/unifile.<abbrev>.html   standalone quine for that DSL
- *   dist/pwa-<abbrev>/            PWA for that DSL (universal → dist/pwa/)
- *     variants: markdown | mermaid | abcjs | universal
+ *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs)
  *     e.g. `node build/build.mjs --dsl=abcjs` → dist/unifile.abc.html (offline piano)
  *
  * npm scripts
  * -----------
- *   npm run build            default (universal quine + PWA + plugins)
+ *   npm run build            default (all dedicated variants: quine + PWA each)
  *   npm run build:dev        default, unminified + inline source maps
  *   npm run build:abcjs      dedicated ABC notation build (--dsl=abcjs)
- *   npm run build:plugins    all DSL plugin bundles
  *   npm run build:site       build app artifacts + copy into docs/ for hosting
  *   npm run site:preview     render docs/ → docs/_site (no-Ruby local preview)
  *   npm run gen:soundfont    refresh the bundled offline piano soundfont
@@ -117,24 +115,19 @@ const DEV       = args.includes('--dev');
 const BUILD_PWA = !args.includes('--no-pwa');
 const dslArg    = args.find(a => a.startsWith('--dsl='))?.split('=')[1]?.toLowerCase() ?? null;
 
-// Baseline plugins always bundled into the universal app (markdown is built-in).
-// All other DSLs are loaded at runtime via drag-and-drop plugin bundles.
-const BASE_PLUGINS     = ['markdown'];
+// Fallback default DSL when makeInitialData is called without one (each variant
+// passes its own meta.defaultDslType, so this is only a safety net).
 const DEFAULT_DSL_TYPE = 'markdown';
 
-// DSL metadata for dedicated `--dsl=<variant>` builds.  `plugins` is the set of
-// DSL modules bundled directly into the output (no runtime plugin loading);
-// `defaultDslType` seeds new documents; `abbrev` names the quine output file.
+// DSL metadata for dedicated builds.  Every content type is its own build with a
+// single DSL bundled directly in (no runtime plugins).  `plugins` is the set of
+// DSL modules bundled into the output; `defaultDslType` seeds new documents;
+// `abbrev` names the output files (unifile.<abbrev>.html / pwa-<abbrev>/).
 const DSL_META = {
   markdown:  { abbrev: 'md',  plugins: ['markdown'],            defaultDslType: 'markdown', label: 'Unifile Markdown' },
   mermaid:   { abbrev: 'mer', plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid',  label: 'Unifile Mermaid'  },
   abcjs:     { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs',    label: 'Unifile ABC'      },
-  // Universal: markdown-only baseline; other DSLs installed at runtime via drag-drop.
-  universal: { abbrev: 'uni', plugins: ['markdown'],            defaultDslType: 'markdown', label: 'Unifile' },
 };
-
-// DSLs that can be built as standalone plugin bundles (drag-and-drop installation)
-const PLUGIN_DSLS = ['mermaid', 'abcjs', 'fountain'];
 
 if (dslArg && !DSL_META[dslArg]) {
   console.error(`Unknown --dsl: "${dslArg}". Choose: ${Object.keys(DSL_META).join(' | ')}`);
@@ -151,18 +144,9 @@ async function generateEntry(plugins, mode, tag) {
 ${plugins.map(p => `import './dsl/${p}.js';`).join('\n')}
 import { App } from './ui/app.js';
 import { state as _state } from './ui/state.js';
-import * as _cmLanguage from '@codemirror/language';
-import { tags as _tags, Tag as _Tag, highlightTree as _highlightTree } from '@lezer/highlight';
-import { catppuccinHighlight as _cpHL } from './ui/editor-theme.js';
 
-// Expose host-bundle singletons so dynamically-installed plugins can share them.
-// Plugins stub-resolve these imports to globalThis.__uf.* at bundle eval time.
-globalThis.__uf = {
-  state:               _state,
-  cmLanguage:          _cmLanguage,
-  lezerHighlight:      { tags: _tags, Tag: _Tag, highlightTree: _highlightTree },
-  catppuccinHighlight: _cpHL,
-};
+// Expose the state singleton for tests / preview automation (window.__uf.state).
+globalThis.__uf = { state: _state };
 
 async function main() {
   const app = new App();
@@ -296,17 +280,15 @@ async function buildQuine(plugins, defaultDslType, outName, tag) {
 /**
  * @param {string[]} plugins         DSL modules bundled in.
  * @param {object}   meta            { abbrev, defaultDslType, label }.
- * @param {string}   tag             Build tag ('universal' or a DSL id).
+ * @param {string}   tag             Build tag (the DSL id) for the temp entry.
  *
  * Each build type gets its OWN PWA directory and its own cache namespace so that
- * installing several unifile PWAs on one origin (universal, abc, …) keeps them
+ * installing several unifile PWAs on one origin (markdown, abc, …) keeps them
  * independent — each updates itself without disturbing the others.
- *   • universal → dist/pwa/         cache prefix "unifile-uni"
  *   • --dsl=abc → dist/pwa-abc/     cache prefix "unifile-abc"
  */
 async function buildPWA(plugins, meta, tag) {
-  const isUniversal = tag === 'universal';
-  const dirName     = isUniversal ? 'pwa' : `pwa-${meta.abbrev}`;
+  const dirName     = `pwa-${meta.abbrev}`;
   const cachePrefix = `unifile-${meta.abbrev}`;
   const appName     = meta.label || 'Unifile';
   console.log(`\nBuilding PWA [${dirName}]…`);
@@ -368,244 +350,22 @@ async function buildPWA(plugins, meta, tag) {
 }
 
 // ---------------------------------------------------------------------------
-// Build plugin bundle
-//
-// Creates a standalone <dslId>.plugin.js file that can be drag-dropped onto
-// a running unifile quine to install the DSL at runtime.
-//
-// Plugin format (the file IS a function expression, not self-invoked):
-//   /* @unifile-plugin <id>@<version> */
-//   (function(register) { ... all deps bundled ... })
-//
-// Mechanism: the DSL module calls registerDSL() at module-eval time.
-// We stub the registry so registerDSL() calls globalThis.__uf_pending_register,
-// which the plugin wrapper sets to the host's register callback before eval.
-// globalThis property names survive minification (they're string lookups).
-// ---------------------------------------------------------------------------
-
-async function buildPlugin(dslId) {
-  console.log(`\nBuilding plugin [dsl=${dslId}]…`);
-
-  const pluginDir = join(DIST, 'plugins');
-  await mkdir(pluginDir, { recursive: true });
-
-  // Entry lives in SRC so relative DSL imports resolve correctly.
-  const entrySource = `// Auto-generated plugin entry for ${dslId} — do not edit
-import './dsl/${dslId}.js';
-// The DSL module calls registerDSL() → stubbed to globalThis.__uf_pending_register
-`;
-  const entryPath = join(SRC, `_plugin_entry_${dslId}.js`);
-  await writeFile(entryPath, entrySource, 'utf8');
-
-  // Stub the registry: registerDSL() delegates to __uf_pending_register (set by wrapper).
-  const registryStubPlugin = {
-    name: 'registry-stub',
-    setup(build) {
-      // DSL files live in src/dsl/ and import the registry as './registry.js'.
-      // The original filter /dsl\/registry/ only matched '../dsl/registry.js' style
-      // paths, missing the intra-dsl './registry.js' imports.  This broader filter
-      // catches both by matching any relative import whose path ends in 'registry'.
-      build.onResolve({ filter: /registry(\.js)?$/ }, (args) => {
-        // Only intercept relative imports (starts with ./ or ../) to avoid stubbing
-        // unrelated third-party packages that happen to have 'registry' in their name.
-        if (args.path.startsWith('.')) {
-          return { path: 'registry-stub', namespace: 'registry-stub' };
-        }
-        return null;
-      });
-      build.onLoad({ filter: /.*/, namespace: 'registry-stub' }, () => ({
-        contents: `
-export function registerDSL(plugin) {
-  if (typeof globalThis.__uf_pending_register === "function") {
-    globalThis.__uf_pending_register(plugin);
-  }
-}
-export function listDSLs()  { return []; }
-export function getDSL()    { throw new Error("getDSL not available in plugin"); }
-export function detectDSL() { return null; }
-`,
-        loader: 'js',
-      }));
-    },
-  };
-
-  // Stub host APIs: instead of bundling isolated copies of state.js,
-  // editor-theme.js, and @codemirror/language, plugins delegate to
-  // globalThis.__uf which the host sets up in App._exposeHostAPIs()
-  // before loading any plugins.  This ensures:
-  //   • state.on/emit routes through the host's singleton → events work cross-component
-  //   • catppuccinHighlight + StreamLanguage use the host's CM6 module instances
-  //     → language compartment reconfigure produces valid syntax highlighting
-  const hostApiStubPlugin = {
-    name: 'host-api-stubs',
-    setup(build) {
-      // ── state.js ──────────────────────────────────────────────────────────
-      build.onResolve({ filter: /[/\\]ui[/\\]state(\.js)?$/ }, (args) => {
-        if (args.path.startsWith('.')) {
-          return { path: 'uf-state-stub', namespace: 'uf-host-stub' };
-        }
-        return null;
-      });
-
-      // ── editor-theme.js ───────────────────────────────────────────────────
-      build.onResolve({ filter: /editor-theme(\.js)?$/ }, (args) => {
-        if (args.path.startsWith('.')) {
-          return { path: 'uf-editor-theme-stub', namespace: 'uf-host-stub' };
-        }
-        return null;
-      });
-
-      // ── @codemirror/language ──────────────────────────────────────────────
-      // StreamLanguage.define and syntaxHighlighting must use the host's module
-      // instances so that the resulting CM6 Extension objects are recognised by
-      // the host's EditorState (same Facet references).
-      //
-      // IMPORTANT: Only stub when imported from OUR source files (src/dsl/…),
-      // NOT from node_modules.  Transitive deps like @codemirror/autocomplete
-      // and @codemirror/lang-markdown also import from @codemirror/language
-      // and need the full real module — our minimal stub would break them.
-      build.onResolve({ filter: /^@codemirror\/language$/ }, (args) => {
-        // args.importer is the absolute path of the file doing the importing.
-        // node_modules paths contain '/node_modules/'; our DSL source files don't.
-        if (args.importer && !args.importer.includes('node_modules')) {
-          return { path: 'uf-cm-language-stub', namespace: 'uf-host-stub' };
-        }
-        return null; // Let esbuild resolve normally for transitive node_modules deps
-      });
-
-      // ── @lezer/highlight ──────────────────────────────────────────────────
-      // tags, HighlightStyle etc. must be the host's instances so that token
-      // types from a plugin's StreamLanguage match the host's highlight rules.
-      // Same importer guard as above — only stub our DSL source, not node_modules.
-      build.onResolve({ filter: /^@lezer\/highlight$/ }, (args) => {
-        if (args.importer && !args.importer.includes('node_modules')) {
-          return { path: 'uf-lezer-stub', namespace: 'uf-host-stub' };
-        }
-        return null;
-      });
-
-      // ── Load all stubs from a single namespace ────────────────────────────
-      build.onLoad({ filter: /.*/, namespace: 'uf-host-stub' }, (args) => {
-        const stubs = {
-          'uf-state-stub': `
-// Plugin state → host's state singleton via globalThis.__uf
-export const state = globalThis.__uf?.state;
-// VIEW_MODES / PANELS not used by DSL plugins; provide empty stubs for safety
-export const VIEW_MODES = {};
-export const PANELS = {};
-`,
-          'uf-editor-theme-stub': `
-// Plugin editor-theme → host's catppuccinHighlight instance
-export const catppuccinHighlight = globalThis.__uf?.catppuccinHighlight;
-export const catppuccinTheme = null;
-export const catppuccinThemeLight = null;
-`,
-          'uf-cm-language-stub': `
-// Plugin @codemirror/language → host's CM6 module instances
-const _l = globalThis.__uf?.cmLanguage ?? {};
-export const StreamLanguage    = _l.StreamLanguage;
-export const syntaxHighlighting = _l.syntaxHighlighting;
-`,
-          'uf-lezer-stub': `
-// Plugin @lezer/highlight → host's tags/Tag/highlightTree instances
-const _l = globalThis.__uf?.lezerHighlight ?? {};
-export const tags         = _l.tags;
-export const Tag          = _l.Tag;
-export const highlightTree = _l.highlightTree;
-`,
-        };
-        return {
-          contents: stubs[args.path] ?? '',
-          loader: 'js',
-        };
-      });
-    },
-  };
-
-  const esbuildPlugins = [registryStubPlugin, hostApiStubPlugin];
-  if (dslId === 'mermaid') esbuildPlugins.push(elkjsStubPlugin);
-  if (dslId === 'abcjs')   esbuildPlugins.push(loadNoteOverridePlugin);
-
-  const result = await esbuild.build({
-    entryPoints: [entryPath],
-    bundle: true,
-    format: 'esm',   // plain top-level JS (no auto-IIFE from esbuild)
-    minify: !DEV,
-    write: false,
-    logLevel: 'info',
-    external: ['buffer'],
-    define: { 'process.env.NODE_ENV': DEV ? '"development"' : '"production"' },
-    logOverride: { 'indirect-require': 'silent' },
-    plugins: esbuildPlugins,
-  });
-  await unlink(entryPath).catch(() => {});
-
-  const version = '1.0.0';
-  const bundleCode = result.outputFiles[0].text;
-
-  // Wrap: the host calls (pluginFn)(registerDSL) which sets __uf_pending_register,
-  // then the bundled module code runs and calls registerDSL → our callback.
-  const wrappedCode = `/* @unifile-plugin ${dslId}@${version} */
-(function(register) {
-globalThis.__uf_pending_register = register;
-try {
-${bundleCode}
-} finally {
-delete globalThis.__uf_pending_register;
-}
-})`;
-
-  const outPath = join(pluginDir, `unifile-${dslId}.plugin.js`);
-  await writeFile(outPath, wrappedCode, 'utf8');
-  const kb = Math.round(wrappedCode.length / 1024);
-  console.log(`  ✓ ${outPath}  (${kb} KB)`);
-}
-
-// ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
 
+/** Build one dedicated variant: its quine + (optionally) its PWA. */
+async function buildVariant(id) {
+  const meta = DSL_META[id];
+  await buildQuine(meta.plugins, meta.defaultDslType, `unifile.${meta.abbrev}.html`, id);
+  if (BUILD_PWA) await buildPWA(meta.plugins, meta, id);
+}
+
 async function main() {
-  // --plugins flag: build only plugin bundles (fast, no quine/PWA rebuild)
-  if (args.includes('--plugins')) {
-    try {
-      for (const dslId of PLUGIN_DSLS) {
-        await buildPlugin(dslId);
-      }
-      console.log('\nPlugin builds complete.');
-    } catch (err) {
-      console.error('\nPlugin build failed:', err.message);
-      process.exit(1);
-    }
-    return;
-  }
-
-  // --dsl=<variant>: dedicated single-DSL build (DSL bundled in, no plugins).
-  if (dslArg) {
-    try {
-      const meta = DSL_META[dslArg];
-      const outName = `unifile.${meta.abbrev}.html`;
-      await buildQuine(meta.plugins, meta.defaultDslType, outName, dslArg);
-      if (BUILD_PWA) await buildPWA(meta.plugins, meta, dslArg);
-      console.log(`\nDedicated ${dslArg} build complete. Fully self-contained and offline.`);
-    } catch (err) {
-      console.error('\nBuild failed:', err.message);
-      process.exit(1);
-    }
-    return;
-  }
-
-  // Default: build universal quine + PWA + all plugin bundles so dist/ is always
-  // coherent.  Plugin source changes are picked up on every build.  (The website
-  // is the Jekyll site in docs/ — there is no separate dist/ landing page.)
   try {
-    await buildQuine(BASE_PLUGINS, DEFAULT_DSL_TYPE, 'unifile.html', 'universal');
-    if (BUILD_PWA) await buildPWA(BASE_PLUGINS, DSL_META.universal, 'universal');
-    console.log('\nBuilding plugins…');
-    for (const dslId of PLUGIN_DSLS) {
-      await buildPlugin(dslId);
-    }
-    console.log('\nBuild complete. All outputs are fully self-contained and offline.');
+    // --dsl=<variant>: build just that variant.  Otherwise build them all.
+    const variants = dslArg ? [dslArg] : Object.keys(DSL_META);
+    for (const id of variants) await buildVariant(id);
+    console.log('\nBuild complete. Every variant is a self-contained, offline single-DSL app.');
   } catch (err) {
     console.error('\nBuild failed:', err.message);
     process.exit(1);

@@ -1,6 +1,6 @@
 {
-  "name": "Unifile",
-  "short_name": "Unifile",
+  "name": "Unifile Markdown",
+  "short_name": "Unifile Markdown",
   "description": "Offline document editor with built-in version history",
   "start_url": "./",
   "display": "standalone",

@@ -1,8 +1,8 @@
 ---
 layout: page
-title: Markdown
-type: markdown
-permalink: /get/
+title: Mermaid
+type: mermaid
+permalink: /mermaid/
 nav_exclude: true
 ---
 

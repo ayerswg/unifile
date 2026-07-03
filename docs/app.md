@@ -8,13 +8,15 @@ Unifile is a single HTML file that runs entirely in your browser. No server, no 
 
 ## Get it
 
-Download the latest build and open it directly, or use the hosted version at [unifile.app/app](/app/).
+Each format is its own dedicated app — install it as an offline PWA or download the standalone `.html`:
+
+- **[Markdown](/get/)** — prose and notes
+- **[Mermaid](/mermaid/)** — diagrams as text
+- **[ABC Notation](/abc/)** — music, with a bundled offline piano
 
 ## What it does
 
-Unifile gives every section of your document its own syntax — Markdown for prose, Mermaid for diagrams, ABC for music notation, Fountain for screenplays — all in one file, one editor.
-
-Switch between them with a shebang line at the top of any section:
+Each app is focused on one format, with a built-in git-style version history (branches, commits, diffs) — all in a single file that works fully offline. Prose sections use Markdown; a `#!shebang` at the top of a section switches it to that app's format:
 
 ```
 #!markdown

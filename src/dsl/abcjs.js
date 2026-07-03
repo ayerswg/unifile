@@ -1711,7 +1711,7 @@ const abcjsDSL = {
 
   /**
    * Extension slots — configurable sub-capabilities exposed in the
-   * Manage Plugins modal.  Each slot is a user-configurable input that
+   * Extensions modal.  Each slot is a user-configurable input that
    * the DSL can read at runtime via plugin-extensions.js helpers.
    */
   extensionSlots: [
