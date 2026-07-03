@@ -235,6 +235,7 @@ function _scheduleRangeHighlight(adjFrom, adjTo) {
 let _synth = null;
 let _timingCallbacks = null;
 let _audioContext = null;
+let _stopping = false;   // re-entrancy guard for stopPlayback (synth onEnded)
 // Web Audio oscillators scheduled for the current playback.
 let _scheduledOscs = [];
 
@@ -1008,43 +1009,78 @@ function _trimToNoteStart(content, from, to) {
   return i;
 }
 
+// Highlight one timing "moment" (its simultaneous notes) in the SVG and emit its
+// char ranges for the editor's green play-cursor.  `event` is a noteTimings entry
+// (or null to clear).  Driven by the wall-clock visual loop below.
+function _highlightEvent(event) {
+  if (_playEl) {
+    _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
+      el.classList.remove('abcjs-note_playing')
+    );
+    if (event?.elements) {
+      event.elements.flat().forEach(svgEl => svgEl?.classList.add('abcjs-note_playing'));
+    }
+  }
+  if (!event) { state.emit('abc-play-cursor', null); return; }
+
+  // Editor: emit all voice char ranges for green text-colour highlighting.
+  // abcjs char indices are section-relative → add _sectionOffset to map them to
+  // document positions; and trim leading decorations/whitespace so the green
+  // covers the note, not its `!legato!`/`.` marks (abcjs's startChar can point
+  // at the decoration that precedes the note).
+  const doc = state.currentContent ?? '';
+  const starts = event.startCharArray ?? [event.startChar];
+  const ends   = event.endCharArray   ?? [event.endChar];
+  const ranges = starts
+    .map((s, i) => {
+      if (s === undefined || ends[i] === undefined) return null;
+      const to = ends[i] + _sectionOffset;
+      const from = _trimToNoteStart(doc, s + _sectionOffset, to);
+      return { from, to };
+    })
+    .filter(r => r && r.from < r.to);
+  state.emit('abc-play-cursor', ranges.length ? ranges : null);
+}
+
+// Wall-clock visual driver.  abcjs's own TimingCallbacks fire the cursor on a
+// clock that can trail the audio (rAF granularity plus the 60ms setTimeout
+// jogger fallback when a frame is dropped), so the highlight was landing
+// slightly BEHIND the sound.  We drive the highlight from the transport's
+// wall-clock progress loop instead, and fire it a small lead ahead of the audio
+// position so the note lights up as it sounds rather than just after.  The lead
+// compensates render + audio-output latency; tune on-device if needed.
+const VISUAL_LEAD_MS = 40;
+let _visualStopChar = null;  // range-end char while playing (null = whole tune)
+let _visualIdx      = -1;    // last-highlighted event index (skip redundant work)
+
+/** Highlight the note(s) sounding at `targetMs` (= audio position + lead). */
+function _applyVisualAt(targetMs) {
+  if (!_noteEvents.length) return;
+  // Events are sorted by onset: the active moment is the last one at/before now.
+  let idx = -1;
+  for (let i = 0; i < _noteEvents.length; i++) {
+    if (_noteEvents[i].milliseconds <= targetMs) idx = i; else break;
+  }
+  // Range mode: never light a note at/after the range end (matches playback stop).
+  if (_visualStopChar !== null) {
+    const startsOf = e => e.startCharArray ?? [e.startChar];
+    while (idx >= 0 && startsOf(_noteEvents[idx]).every(c => c != null && c >= _visualStopChar)) idx--;
+  }
+  if (idx === _visualIdx) return;
+  _visualIdx = idx;
+  _highlightEvent(idx >= 0 ? _noteEvents[idx] : null);
+}
+
+// abcjs TimingCallbacks still runs during playback to detect the end of the tune
+// and the range stop point; the visual cursor is handled by _applyVisualAt.
 function _makeVisualEventCallback(stopChar) {
   return (event) => {
     if (!event) { stopPlayback(); return; }
-
     // Range mode: stop when all voices have passed the selection end.
     if (stopChar !== null) {
       const chars = event.startCharArray ?? (event.startChar !== undefined ? [event.startChar] : []);
       if (chars.length > 0 && chars.every(c => c >= stopChar)) { stopPlayback(); return; }
     }
-
-    // SVG: highlight all simultaneously-playing note elements.
-    if (_playEl) {
-      _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
-        el.classList.remove('abcjs-note_playing')
-      );
-      if (event.elements) {
-        event.elements.flat().forEach(svgEl => svgEl?.classList.add('abcjs-note_playing'));
-      }
-    }
-
-    // Editor: emit all voice char ranges for green text-colour highlighting.
-    // abcjs char indices are section-relative → add _sectionOffset to map them to
-    // document positions; and trim leading decorations/whitespace so the green
-    // covers the note, not its `!legato!`/`.` marks (abcjs's startChar can point
-    // at the decoration that precedes the note).
-    const doc = state.currentContent ?? '';
-    const starts = event.startCharArray ?? [event.startChar];
-    const ends   = event.endCharArray   ?? [event.endChar];
-    const ranges = starts
-      .map((s, i) => {
-        if (s === undefined || ends[i] === undefined) return null;
-        const to = ends[i] + _sectionOffset;
-        const from = _trimToNoteStart(doc, s + _sectionOffset, to);
-        return { from, to };
-      })
-      .filter(r => r && r.from < r.to);
-    state.emit('abc-play-cursor', ranges.length ? ranges : null);
   };
 }
 
@@ -1055,6 +1091,7 @@ function _makeVisualEventCallback(stopChar) {
 let _totalMs       = 0;   // total tune duration (ms) — drives the scrubber
 let _pausedAtMs    = 0;   // remembered position when paused / sought (ms)
 let _progressRaf   = 0;   // rAF id for progress emission
+let _progressJog   = 0;   // setTimeout id: jogger fallback when rAF is throttled
 let _playOffsetMs  = 0;   // ms position where the current run started
 let _playWallStart = 0;   // performance.now() at the current run's start
 // {startMs,endMs} of the range the current editor selection will play, or null.
@@ -1109,6 +1146,18 @@ function _charToMs(char) {
   return ev ? ev.milliseconds : null;
 }
 
+/** Section-relative char → ms where a range that ENDS at `char` stops: the onset
+ *  of the first note starting at/after `char` (the note playback halts on), else
+ *  the tune end.  Unlike _charToMs this never resolves a trailing space / barline
+ *  back to the preceding note, so a range whose end isn't on a note still yields
+ *  endMs > startMs (otherwise the scrubber band collapses and disappears). */
+function _rangeStopMs(char) {
+  if (!_noteEvents.length) return _totalMs;
+  const startsOf = e => e.startCharArray ?? [e.startChar];
+  const ev = _noteEvents.find(e => startsOf(e).some(c => c != null && c >= char));
+  return ev ? ev.milliseconds : _totalMs;
+}
+
 /**
  * Project the current editor/preview selection onto the transport bar:
  *   • collapsed cursor → jump the scrubber to the note at the cursor.
@@ -1128,7 +1177,10 @@ function _syncTransportToSelection(from, to) {
   if (to > from) {
     const startMs = _charToMs(selFrom);
     if (startMs == null) return;               // selection is past the last note
-    const endMs = _charToMs(selTo) ?? _totalMs; // no note after selTo → end of tune
+    // Range end → the onset of the note playback will stop on (first note at/after
+    // selTo).  Using _rangeStopMs (not _charToMs) keeps the band visible when the
+    // selection ends on a space / barline rather than exactly on a note.
+    const endMs = _rangeStopMs(selTo);
     _selRangeMs = { startMs, endMs };
     _pausedAtMs = startMs;
     _emitProgress(startMs);
@@ -1136,8 +1188,12 @@ function _syncTransportToSelection(from, to) {
   } else {
     _selRangeMs = null;
     state.emit('abc-range', null);
-    const ms = _charToMs(selFrom);
-    if (ms != null) { _pausedAtMs = ms; _emitProgress(ms); }
+    // Cursor → the note under it, or the start of the tune when it doesn't land
+    // on a note (e.g. parked in the front matter or a header) so ▶ plays from the
+    // beginning by default rather than from a stale position.
+    const ms = _charToMs(selFrom) ?? 0;
+    _pausedAtMs = ms;
+    _emitProgress(ms);
   }
 }
 
@@ -1149,16 +1205,28 @@ function _emitProgress(ms) {
 function _startProgress(offsetMs) {
   _playOffsetMs  = offsetMs;
   _playWallStart = performance.now();
+  _visualIdx     = -1;
   cancelAnimationFrame(_progressRaf);
+  clearTimeout(_progressJog);
   const tick = () => {
     const ms = _playOffsetMs + (performance.now() - _playWallStart);
-    _emitProgress(_totalMs ? Math.min(ms, _totalMs) : ms);
-    if (state.abcPlaying) _progressRaf = requestAnimationFrame(tick);
+    const clamped = _totalMs ? Math.min(ms, _totalMs) : ms;
+    _emitProgress(clamped);
+    // Drive the note highlight a small lead ahead of the audio position.
+    _applyVisualAt(clamped + VISUAL_LEAD_MS);
   };
-  _progressRaf = requestAnimationFrame(tick);
+  const raf = () => { tick(); if (state.abcPlaying) _progressRaf = requestAnimationFrame(raf); };
+  // setTimeout jogger: keeps the cursor + highlight moving when rAF is throttled
+  // (background tab / some mobile states), mirroring abcjs's TimingCallbacks.
+  const jog = () => { if (!state.abcPlaying) return; tick(); _progressJog = setTimeout(jog, 60); };
+  _progressRaf = requestAnimationFrame(raf);
+  _progressJog = setTimeout(jog, 60);
 }
 
-function _stopProgress() { cancelAnimationFrame(_progressRaf); _progressRaf = 0; }
+function _stopProgress() {
+  cancelAnimationFrame(_progressRaf); _progressRaf = 0;
+  clearTimeout(_progressJog);         _progressJog = 0;
+}
 
 /** Current playback position (ms): live while playing, else the paused point. */
 function _currentMs() {
@@ -1171,7 +1239,10 @@ function _currentMs() {
 
 /** Play/pause toggle used by the transport footer. */
 function togglePlay() {
-  if ((state.activeDslId ?? state.data?.dslType) !== 'abcjs') return;
+  // Play whenever an abcjs tune is loaded.  The cursor may be parked in the front
+  // matter or a non-abcjs section (activeDslId !== 'abcjs'); that must NOT disable
+  // the transport — startPlayback falls back to the beginning when nothing is cued.
+  if (!_tuneObjects?.[0]) return;
   if (state.abcPlaying) {
     _pausedAtMs = _currentMs();
     stopPlayback({ keepPosition: true });
@@ -1272,6 +1343,9 @@ async function startPlayback(opts = {}) {
   }
   // else: cursor at 0 / no selection → play from beginning
 
+  // Bound the wall-clock visual driver to the same range end as the audio.
+  _visualStopChar = stopChar;
+
   // ── 2.5  MIDI output path (replaces the internal synth when a port is set) ──
   //
   // Route to the selected external MIDI port (e.g. IAC → Kontakt) as live
@@ -1342,7 +1416,10 @@ async function startPlayback(opts = {}) {
           // Omit soundFontUrl to use abcjs's default FluidR3 base — for which
           // this build serves acoustic_grand_piano from the bundle offline.
           ...(soundfontUrl ? { soundFontUrl: soundfontUrl } : {}),
-          onEnded:      () => stopPlayback(),
+          // Only react to a NATURAL end.  Manually stopping the synth (pause /
+          // seek / stop) also fires onEnded; guarding on abcPlaying stops that
+          // re-entrant call from wiping the remembered pause position.
+          onEnded:      () => { if (state.abcPlaying) stopPlayback(); },
         },
       });
       await synth.prime();
@@ -1406,9 +1483,18 @@ async function startPlayback(opts = {}) {
 }
 
 function stopPlayback(opts = {}) {
+  // Re-entrancy guard: stopping the synth below can synchronously fire its
+  // onEnded (→ stopPlayback again) while we're still mid-teardown.  Without this
+  // the nested call would run with keepPosition unset and reset _pausedAtMs to 0,
+  // losing the pause position.
+  if (_stopping) return;
+  _stopping = true;
+  try {
   try { _timingCallbacks?.stop(); } catch { /* ignore */ }
   _timingCallbacks = null;
   _stopProgress();
+  _visualStopChar = null;
+  _visualIdx      = -1;
 
   // Silence + cancel any external MIDI routing.
   _stopMidiPlayback();
@@ -1448,6 +1534,9 @@ function stopPlayback(opts = {}) {
     const adjFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
     const adjTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
     try { _engraver.rangeHighlight(adjFrom, adjTo); } catch { /* stale */ }
+  }
+  } finally {
+    _stopping = false;
   }
 }
 
