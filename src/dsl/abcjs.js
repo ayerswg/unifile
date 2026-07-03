@@ -1222,7 +1222,7 @@ function _updateScoreRange() {
   const inRange = _noteEvents.filter(
     e => e.left != null && e.milliseconds >= r.startMs - 0.5 && e.milliseconds < r.endMs - 0.5
   );
-  // One band per line the range spans (handles line wraps).
+  // One band per line the range spans (handles line wraps), in line order.
   const byLine = new Map();
   for (const e of inRange) {
     const c = byLine.get(e.line) ?? { min: Infinity, max: -Infinity };
@@ -1230,8 +1230,10 @@ function _updateScoreRange() {
     c.max = Math.max(c.max, e.endX ?? e.left);
     byLine.set(e.line, c);
   }
-  for (const [line, c] of byLine) {
-    if (!(c.max > c.min)) continue;
+  const lines = [...byLine.entries()]
+    .filter(([, c]) => c.max > c.min)
+    .sort((a, b) => a[0] - b[0]);
+  for (const [line, c] of lines) {
     const { y, h } = _lineExtent(line);
     const rect = document.createElementNS(_SVG_NS, 'rect');
     rect.setAttribute('class', 'uf-abc-range-band');
@@ -1242,19 +1244,21 @@ function _updateScoreRange() {
     _rangeGroup.appendChild(rect);
   }
   // Start + end markers drawn as framing brackets ([ … ]) so the span's bounds
-  // read as more than just the highlight, without a busy dashed line.
+  // read as more than just the highlight, without a busy dashed line. Anchor them
+  // to the band's own edges (not the stop-note onset, which sits past the band).
+  if (!lines.length) return;
   const CAP = 9;   // viewBox units — length of each bracket end-cap
-  const bracket = (ms, dir) => {   // dir: +1 → opening "[" (start), -1 → closing "]" (end)
-    const p = _scorePosForMs(ms);
-    if (!p) return;
-    const { y, h } = _lineExtent(p.line);
+  const bracket = (line, x, dir) => {   // dir: +1 → opening "[" (start), -1 → closing "]" (end)
+    const { y, h } = _lineExtent(line);
     const path = document.createElementNS(_SVG_NS, 'path');
     path.setAttribute('class', 'uf-abc-range-edge');
-    path.setAttribute('d', `M${p.x + dir * CAP} ${y} L${p.x} ${y} L${p.x} ${y + h} L${p.x + dir * CAP} ${y + h}`);
+    path.setAttribute('d', `M${x + dir * CAP} ${y} L${x} ${y} L${x} ${y + h} L${x + dir * CAP} ${y + h}`);
     _rangeGroup.appendChild(path);
   };
-  bracket(r.startMs, 1);
-  bracket(r.endMs, -1);
+  const [firstLine, firstC] = lines[0];
+  const [lastLine,  lastC]  = lines[lines.length - 1];
+  bracket(firstLine, firstC.min, 1);   // opening "[" at the band's left edge
+  bracket(lastLine,  lastC.max, -1);   // closing "]" at the band's right edge
 }
 
 // ---------------------------------------------------------------------------
