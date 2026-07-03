@@ -15,10 +15,13 @@
 
 import abcjs from 'abcjs';
 import { StreamLanguage } from '@codemirror/language';
+import { linter } from '@codemirror/lint';
+import { hoverTooltip } from '@codemirror/view';
 import { registerDSL } from './registry.js';
 import { alignAbcVoices } from './abc-align.js';
 import { state } from '../ui/state.js';
-import { parseGlobalFrontMatter } from '../core/front-matter.js';
+import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
+import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -1963,12 +1966,307 @@ async function exportMIDI(content) {
 }
 
 // ---------------------------------------------------------------------------
+// Editor intelligence — front-matter schema, autocomplete, lint, hover docs
+// ---------------------------------------------------------------------------
+
+/**
+ * Declarative front-matter schema for ABC documents.  The shared engine
+ * (core/fm-schema.js) turns this into completions + diagnostics; ABC owns the
+ * whole thing (core doc keys + the midi.* routing tree) per the single-DSL model.
+ */
+const abcFrontMatterSchema = {
+  title:  { type: 'string', doc: 'Document title — shown in the top bar and rendered by the layout.' },
+  model:  { type: 'enum', values: ['flow', 'grid', 'spatial', 'timeline', 'graph'],
+            doc: 'Document model (how the layout arranges content). `flow` is the default.' },
+  layout: { type: 'enum', values: ['webpage', 'document', 'slides'],
+            doc: 'Presentation of a flow document.' },
+  midi: { type: 'map', doc: 'MIDI playback and external-instrument routing.', children: {
+    octave:    { type: 'string', doc: 'Octave name for middle C (MIDI 60). `c3` = Kontakt (default), `c4` = scientific.' },
+    'lead-ms': { type: 'number', doc: 'Milliseconds a keyswitch/CC is sent ahead of its note. Default 20.' },
+    hold:      { type: 'enum', values: ['momentary', 'held'],
+                 doc: 'Keyswitch notes fire momentarily or stay held until the next switch.' },
+    slur:      { type: 'string', doc: 'Marking name applied across slurred notes (e.g. legato).' },
+    map:         { type: 'map', freeform: true, doc: 'Marking name → MIDI action (velocity / note keyswitch / cc / program).' },
+    keyswitches: { type: 'map', freeform: true, doc: 'Legacy alias for `map` (merged into it).' },
+    voices: { type: 'map', freeform: true, doc: 'Per-voice overrides, keyed by voice number.', valueSchema: {
+      channel:     { type: 'number', doc: 'MIDI channel for this voice (default = voice number).' },
+      volume:      { type: 'number', doc: 'CC7 volume 0–127, emitted once at start.' },
+      pan:         { type: 'number', doc: 'CC10 pan 0–127, emitted once at start.' },
+      velocity:    { type: 'string', doc: 'Velocity scale for this voice (e.g. 0.8).' },
+      map:         { type: 'map', freeform: true, doc: 'Voice-specific marking map (merged over the global map).' },
+      keyswitches: { type: 'map', freeform: true, doc: 'Legacy alias for the voice map.' },
+    } },
+  } },
+};
+
+// ABC header fields → short docs (used by completion + hover).
+const ABC_HEADER_DOCS = {
+  X: 'Tune number — required, first line of each tune.',
+  T: 'Title.',
+  C: 'Composer.',
+  O: 'Origin.',
+  R: 'Rhythm (e.g. reel, jig).',
+  M: 'Meter, e.g. 4/4, 6/8, or C.',
+  L: 'Default note length, e.g. 1/8.',
+  Q: 'Tempo, e.g. 1/4=120.',
+  K: 'Key signature — required, ends the tune header. e.g. K:C, K:Gm, K:D dorian.',
+  V: 'Voice, e.g. V:1 clef=treble.',
+  P: 'Parts ordering.',
+  I: 'Instruction / directive.',
+  N: 'Notes / annotation.',
+  G: 'Group.',
+  H: 'History (multi-line).',
+  W: 'Words (lyrics after the tune).',
+  Z: 'Transcription note.',
+  F: 'File URL.',
+  U: 'User-defined shorthand.',
+};
+
+// Common key signatures and clefs offered after "K:".
+const ABC_KEYS = [
+  'C', 'G', 'D', 'A', 'E', 'B', 'F#', 'C#',
+  'F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Cb',
+  'Am', 'Em', 'Bm', 'F#m', 'C#m', 'Dm', 'Gm', 'Cm',
+  'C dorian', 'D dorian', 'G mixolydian', 'A minor', 'none',
+];
+const ABC_CLEFS = ['treble', 'bass', 'alto', 'tenor', 'none', 'treble+8', 'bass-8', 'perc'];
+
+// Standard abcjs !decoration! marks → short docs.
+const ABC_DECORATIONS = {
+  staccato: 'Detached, shortened note.', tenuto: 'Held for full value.',
+  accent: 'Emphasised (>).', marcato: 'Strong accent (^).',
+  legato: 'Smoothly connected.', trill: 'Rapid alternation with the note above.',
+  turn: 'Ornament turning around the note.', fermata: 'Held / paused.',
+  pppp: 'Dynamic.', ppp: 'Dynamic.', pp: 'Very soft.', p: 'Soft.',
+  mp: 'Medium soft.', mf: 'Medium loud.', f: 'Loud.', ff: 'Very loud.',
+  fff: 'Dynamic.', ffff: 'Dynamic.',
+  'crescendo(': 'Start crescendo.', 'crescendo)': 'End crescendo.',
+  'diminuendo(': 'Start diminuendo.', 'diminuendo)': 'End diminuendo.',
+  upbow: 'Up-bow (strings).', downbow: 'Down-bow (strings).',
+  pizzicato: 'Plucked (strings).', arco: 'Bowed (strings).',
+  segno: 'Segno sign.', coda: 'Coda sign.', fine: 'End marker.',
+  mordent: 'Mordent ornament.', roll: 'Irish roll.',
+};
+
+const MARKING_TOKEN_RE = /^[A-Za-z0-9()>^.+-]*$/;
+
+/** Collect marking names offered inside `!…!` — standard decorations + user midi.map keys. */
+function abcMarkingNames(docText) {
+  const out = Object.entries(ABC_DECORATIONS).map(([label, info]) => ({ label, info }));
+  try {
+    const midi = parseGlobalFrontMatter(docText).meta?.midi;
+    const collect = (m, src) => {
+      if (m && typeof m === 'object')
+        for (const k of Object.keys(m)) out.push({ label: k, info: `Custom marking (midi.${src})` });
+    };
+    if (midi && typeof midi === 'object') {
+      collect(midi.map, 'map');
+      collect(midi.keyswitches, 'keyswitches');
+      if (midi.voices && typeof midi.voices === 'object')
+        for (const v of Object.values(midi.voices)) { collect(v?.map, 'voices'); collect(v?.keyswitches, 'voices'); }
+    }
+  } catch { /* front matter mid-edit — ignore */ }
+  const seen = new Set();
+  return out.filter(o => (seen.has(o.label) ? false : seen.add(o.label)));
+}
+
+/**
+ * Unified completion source (registered via languageData `autocomplete`).
+ * Front-matter region → schema engine; body → ABC-specific completions.
+ */
+function abcComplete(context) {
+  try {
+    const doc = context.state.doc.toString();
+    const region = getFrontMatterRange(doc);
+    if (region && context.pos <= region.bodyFrom) {
+      return schemaCompletions(abcFrontMatterSchema, region, context.pos, context.explicit);
+    }
+    return abcBodyComplete(context);
+  } catch { return null; }
+}
+
+/** ABC music-body completions: decorations, key sigs/clefs after K:, header fields. */
+function abcBodyComplete(context) {
+  const { state: cmState } = context;
+  const line = cmState.doc.lineAt(context.pos);
+  const before = line.text.slice(0, context.pos - line.from);
+
+  // Inside a !decoration! token → marking names (standard + midi.map keys).
+  const bang = before.lastIndexOf('!');
+  if (bang >= 0 && !before.slice(bang + 1).includes('!')) {
+    const typed = before.slice(bang + 1);
+    if (MARKING_TOKEN_RE.test(typed)) {
+      return {
+        from: line.from + bang + 1,
+        options: abcMarkingNames(cmState.doc.toString())
+          .map(n => ({ label: n.label, type: 'keyword', info: n.info, apply: `${n.label}!` })),
+        validFor: MARKING_TOKEN_RE,
+      };
+    }
+  }
+
+  // After "K:" → key signatures and clefs.
+  const km = before.match(/^\s*K:\s*(\S*)$/);
+  if (km) {
+    return {
+      from: context.pos - km[1].length,
+      options: [
+        ...ABC_KEYS.map(k => ({ label: k, type: 'constant', detail: 'key' })),
+        ...ABC_CLEFS.map(c => ({ label: `clef=${c}`, type: 'property', detail: 'clef' })),
+      ],
+      validFor: /^[\w#+=-]*$/,
+    };
+  }
+
+  // Header field letters (X:, T:, K:, …) — explicit only, so it never pops up
+  // while typing note letters (C, D, E…) in the music body.
+  if (context.explicit && /^[A-Za-z]?$/.test(before)) {
+    return {
+      from: line.from,
+      options: Object.entries(ABC_HEADER_DOCS)
+        .map(([letter, info]) => ({ label: `${letter}:`, type: 'keyword', detail: 'header', info })),
+      validFor: /^[A-Za-z]?:?$/,
+    };
+  }
+  return null;
+}
+
+/** Build a small tooltip DOM node. */
+function _hoverDom(title, body) {
+  const el = document.createElement('div');
+  el.className = 'cm-doc-tooltip';
+  const t = document.createElement('strong');
+  t.textContent = title;
+  el.appendChild(t);
+  if (body) { el.appendChild(document.createElement('br')); el.appendChild(document.createTextNode(body)); }
+  return el;
+}
+
+/** Hover docs for header field letters and !decoration! marks. */
+const abcHover = hoverTooltip((view, pos) => {
+  const line = view.state.doc.lineAt(pos);
+  const col = pos - line.from;
+
+  // Header field letter at the start of a line, e.g. hovering "K" in "K:C".
+  const hm = line.text.match(/^([A-Za-z]):/);
+  if (hm && col <= 1) {
+    const info = ABC_HEADER_DOCS[hm[1].toUpperCase()];
+    if (info) return { pos: line.from, end: line.from + 1, above: true,
+                       create: () => ({ dom: _hoverDom(`${hm[1]}: field`, info) }) };
+  }
+
+  // A !decoration! token under the cursor.
+  for (const m of line.text.matchAll(/!([^!\n]+)!/g)) {
+    const s = m.index, e = s + m[0].length;
+    if (col >= s && col <= e) {
+      const name = m[1].trim().toLowerCase();
+      const info = ABC_DECORATIONS[name];
+      const custom = !info && abcMarkingNames(view.state.doc.toString()).some(x => x.label.toLowerCase() === name);
+      if (info || custom) {
+        return { pos: line.from + s, end: line.from + e, above: true,
+                 create: () => ({ dom: _hoverDom(`!${m[1].trim()}!`, info || 'Custom marking mapped in midi.map.') }) };
+      }
+    }
+  }
+  return null;
+});
+
+/**
+ * Slur/parenthesis balance in the music body — anchored at the exact offending
+ * parenthesis.  Decorations (!…!), chord symbols ("…") and comments (%…) are
+ * blanked out first, and tuplet markers like `(3` are not slurs.
+ */
+function _slurIssues(bodyFrom, body) {
+  const stripped = body
+    .replace(/![^!\n]*!/g, m => ' '.repeat(m.length))   // decorations
+    .replace(/"[^"\n]*"/g, m => ' '.repeat(m.length))   // chord symbols
+    .replace(/%.*$/gm, m => ' '.repeat(m.length))       // comments
+    .replace(/\(\d/g, '  ');                            // tuplets like (3
+  const open = [];
+  const out = [];
+  for (let i = 0; i < stripped.length; i++) {
+    const ch = stripped[i];
+    if (ch === '(') open.push(i);
+    else if (ch === ')') {
+      if (open.length) open.pop();
+      else out.push({ from: bodyFrom + i, to: bodyFrom + i + 1, severity: 'warning',
+                      message: "Unmatched ')' — no opening slur." });
+    }
+  }
+  for (const i of open)
+    out.push({ from: bodyFrom + i, to: bodyFrom + i + 1, severity: 'warning',
+               message: "Unclosed slur '(' — add a matching ')'." });
+  return out;
+}
+
+/** midi.map markings that never appear in the score → hint diagnostics. */
+function _unusedMarkings(region, body) {
+  if (!region) return [];
+  const base = region.innerFrom;
+  const bodyLower = body.toLowerCase();
+  const symbolAlias = { accent: '>', marcato: '^', staccato: '.' };
+  const isMapPath = p =>
+    (p.length === 2 && p[0] === 'midi' && (p[1] === 'map' || p[1] === 'keyswitches')) ||
+    (p.length === 4 && p[0] === 'midi' && p[1] === 'voices' && (p[3] === 'map' || p[3] === 'keyswitches'));
+  const out = [];
+  for (const e of parseFmEntries(region.innerText)) {
+    if (!isMapPath(e.path)) continue;
+    const name = e.key.toLowerCase();
+    const used = bodyLower.includes(`!${name}!`) || (symbolAlias[name] && body.includes(symbolAlias[name]));
+    if (!used) out.push({
+      from: base + e.keyFrom, to: base + e.keyTo, severity: 'info',
+      message: `midi marking "${e.key}" is never used in the score.`,
+    });
+  }
+  return out;
+}
+
+/** Whole-document linter: front-matter schema + ABC structural checks. */
+function abcLintSource(view) {
+  const doc = view.state.doc.toString();
+  const docLen = doc.length;
+  const region = getFrontMatterRange(doc);
+  const diags = [];
+
+  // Front-matter schema diagnostics (unknown key / bad enum / bad number / dup).
+  if (region) diags.push(...schemaLint(abcFrontMatterSchema, region));
+
+  const bodyFrom = region ? region.bodyFrom : 0;
+  const body = doc.slice(bodyFrom);
+
+  if (body.trim()) {
+    // Missing required headers — anchor on the first body line.
+    const firstLine = view.state.doc.lineAt(Math.min(bodyFrom, docLen));
+    const anchor = { from: firstLine.from, to: Math.min(firstLine.to, firstLine.from + 1) };
+    if (!/^\s*X:\s*\d+/m.test(body))
+      diags.push({ ...anchor, severity: 'warning', message: 'No X: (tune number) header — every ABC tune needs one.' });
+    if (!/^\s*K:/m.test(body))
+      diags.push({ ...anchor, severity: 'warning', message: 'No K: (key) header — abcjs needs one to render the tune.' });
+
+    diags.push(..._slurIssues(bodyFrom, body));
+  }
+
+  diags.push(..._unusedMarkings(region, body));
+
+  // Clamp defensively and drop anything out of range.
+  return diags
+    .map(d => ({ ...d, from: Math.max(0, Math.min(d.from, docLen)), to: Math.max(0, Math.min(d.to, docLen)) }))
+    .filter(d => d.from <= d.to);
+}
+
+// ---------------------------------------------------------------------------
 // CodeMirror 6 editor extensions
 // ---------------------------------------------------------------------------
 
 function getEditorExtensions() {
   return [
     abcLanguage,
+    // Context-aware autocomplete (front-matter schema + ABC body).
+    abcLanguage.data.of({ autocomplete: abcComplete }),
+    // Live diagnostics (squiggles + hover), debounced.
+    linter(abcLintSource, { delay: 500 }),
+    // Documentation on hover.
+    abcHover,
   ];
 }
 

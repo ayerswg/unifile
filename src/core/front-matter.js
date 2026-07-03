@@ -36,6 +36,23 @@ export function parseGlobalFrontMatter(content) {
 }
 
 /**
+ * Locate the front-matter region with real character offsets into `content`.
+ * Unlike parseGlobalFrontMatter (which only returns the parsed map + bodyFrom),
+ * this exposes the inner YAML text and where it starts, so editor features
+ * (completion / lint) can map positions between the region and the document.
+ *
+ * @param {string} content
+ * @returns {{ innerFrom: number, innerText: string, bodyFrom: number } | null}
+ *   null when the document has no leading front-matter block.
+ */
+export function getFrontMatterRange(content) {
+  const m = FM_RE.exec(content);
+  if (!m) return null;
+  const lead = m[0].match(/^---\r?\n/)[0].length;   // opening fence + newline
+  return { innerFrom: lead, innerText: m[1], bodyFrom: m[0].length };
+}
+
+/**
  * Serialize a metadata object to a YAML front matter block.
  * Returns '' if meta has no non-null, non-empty values.
  *

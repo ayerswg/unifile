@@ -186,6 +186,23 @@
   :root:not([data-theme]) .cm-dsl-highlight { background: rgba(30,102,245,.13); outline-color: rgba(30,102,245,.35); }
 }
 
+/* ── Diagnostics (lint) ────────────────────────────────────────────────────
+   Severity-coloured wavy underlines in the text, plus a themed panel in the
+   hover tooltip.  Colours reuse the app palette (error/warning/accent). */
+.cm-lintRange-error   { background-image: none !important; text-decoration: underline wavy var(--error)   1px; text-underline-offset: 3px; }
+.cm-lintRange-warning { background-image: none !important; text-decoration: underline wavy var(--warning) 1px; text-underline-offset: 3px; }
+.cm-lintRange-info    { background-image: none !important; text-decoration: underline wavy var(--accent)  1px; text-underline-offset: 3px; }
+.cm-lintRange-hint    { background-image: none !important; text-decoration: underline wavy var(--text-muted) 1px; text-underline-offset: 3px; }
+.cm-tooltip .cm-diagnostic         { padding: 5px 9px; border-left: 3px solid var(--text-muted); font-size: 12px; line-height: 1.4; }
+.cm-tooltip .cm-diagnostic-error   { border-left-color: var(--error); }
+.cm-tooltip .cm-diagnostic-warning { border-left-color: var(--warning); }
+.cm-tooltip .cm-diagnostic-info    { border-left-color: var(--accent); }
+
+/* Documentation tooltips (hover docs + autocomplete info panel). */
+.cm-doc-tooltip { padding: 6px 9px; max-width: 340px; font-size: 12px; line-height: 1.45; }
+.cm-doc-tooltip strong { color: var(--accent); }
+.cm-tooltip.cm-completionInfo { max-width: 320px; padding: 6px 9px; font-size: 12px; line-height: 1.45; }
+
 /* ABC playback cursor — playing notes shown in green text colour.
  * Uses !important to override syntax-highlight colour tokens (e.g. --hl-atom).
  * Multiple ranges emitted simultaneously for multi-voice scores. */
