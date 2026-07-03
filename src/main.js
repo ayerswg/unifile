@@ -5,16 +5,16 @@
  * (e.g. with a dev server that understands bare specifiers).
  *
  * The build system (build/build.mjs) generates a purpose-built entry
- * that imports only the DSL plugins for the selected variant, so
- * unused DSLs don't end up in the bundle.
+ * that imports only the DSL for the selected variant, so unused DSLs
+ * don't end up in the bundle.
  *
- * Default: all three DSLs (for local development convenience).
+ * Dev only: import the DSLs that ship as dedicated builds (markdown,
+ * mermaid, abcjs) for local convenience.
  */
 
 import './dsl/markdown.js';
 import './dsl/abcjs.js';
 import './dsl/mermaid.js';
-import './dsl/fountain.js';
 
 import { App } from './ui/app.js';
 
