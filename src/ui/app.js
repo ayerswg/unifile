@@ -242,6 +242,24 @@ export class App {
     editorFooterEl.id = 'uf-editor-footer';
     document.getElementById('uf-editor-wrap').appendChild(editorFooterEl);
 
+    // Floating align button (mobile, DSLs with a source formatter — i.e. ABC).
+    // CSS shows it only on phones when the active DSL is abcjs (.abc-active).
+    const alignBtn = document.createElement('button');
+    alignBtn.className = 'uf-align-btn';
+    alignBtn.type = 'button';
+    alignBtn.title = 'Align voices';
+    alignBtn.setAttribute('aria-label', 'Align measures across voices');
+    // Two "voice" lines crossed by three aligned barlines — a measures grid.
+    alignBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">
+      <path d="M2 5.5h12M2 10.5h12" stroke-width="1.3"/>
+      <path d="M4 3v10M8 3v10M12 3v10" stroke-width="1.6"/>
+    </svg>`;
+    alignBtn.addEventListener('click', () => {
+      this._components.editor?.alignActiveDsl();
+      this._components.editor?.focus();
+    });
+    document.getElementById('uf-editor-wrap').appendChild(alignBtn);
+
     // The DSL transport is a global bottom bar (sticks to the screen bottom and
     // is visible in both the editor and preview panes), not a per-pane footer.
     this._components.dslFooter = new DslFooter(document.getElementById('uf-transport'));

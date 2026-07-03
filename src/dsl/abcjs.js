@@ -16,6 +16,7 @@
 import abcjs from 'abcjs';
 import { StreamLanguage } from '@codemirror/language';
 import { registerDSL } from './registry.js';
+import { alignAbcVoices } from './abc-align.js';
 import { state } from '../ui/state.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 
@@ -1986,6 +1987,12 @@ const abcjsDSL = {
   render,
   renderToString,
   getEditorExtensions,
+
+  // Source formatter: pad measures with whitespace so multiple voices (and
+  // successive lines) line up vertically. Surfaced via the editor's align
+  // command (Alt-Shift-F) and the mobile align button.
+  alignLabel: 'Align voices',
+  alignSource: alignAbcVoices,
 
   exporters: {
     svg:  { label: 'SVG',         mime: 'image/svg+xml',   ext: '.svg', export: exportSVG  },

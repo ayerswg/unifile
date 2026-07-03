@@ -907,7 +907,12 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   overflow: hidden;
   flex: 1 1 50%;
   min-width: 0;
+  position: relative;   /* anchor the floating mobile align button */
 }
+
+/* Floating "align voices" button — mobile only, and only for a DSL that ships a
+   source formatter (ABC → #unifile-app gets .abc-active from the transport). */
+.uf-align-btn { display: none; }
 
 /* Commit-log pane: a mobile-only far-left pane; hidden entirely on desktop
    (where the commit history lives in the topbar dropdown instead). */
@@ -939,6 +944,30 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-mobile-pane="render"] #uf-preview-wrap {
     display: flex !important;
   }
+
+  /* Align-voices FAB: bottom-right of the editor pane, above the transport bar.
+     Shown only for ABC (.abc-active), tucked into the code pane's corner. */
+  #unifile-app.abc-active #uf-editor-wrap .uf-align-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    z-index: 6;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-overlay);
+    color: var(--accent);
+    box-shadow: 0 2px 8px rgba(0,0,0,.35);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #unifile-app.abc-active #uf-editor-wrap .uf-align-btn:active { transform: scale(.94); }
+  #unifile-app.abc-active #uf-editor-wrap .uf-align-btn svg { width: 20px; height: 20px; }
 
   #uf-commit-log {
     flex-direction: column;

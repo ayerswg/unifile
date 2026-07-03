@@ -18,7 +18,7 @@
 import { EditorView, keymap, Decoration,
          highlightActiveLineGutter, drawSelection,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
-import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder } from '@codemirror/state';
+import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder, Text } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
@@ -433,10 +433,46 @@ function makeUnifileKeymap() {
         return true;
       }
     },
+    // Format: align measures/voices when the active DSL provides a formatter.
+    { key: 'Alt-Shift-f', preventDefault: true, run: (view) => alignActiveDsl(view) },
     { key: 'Alt-1', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.EDITOR);  return true; } },
     { key: 'Alt-2', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.SPLIT);   return true; } },
     { key: 'Alt-3', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.PREVIEW); return true; } }
   ]);
+}
+
+/**
+ * Run the active DSL's source formatter (e.g. ABC voice alignment) over the whole
+ * document, preserving the caret's line/column as best we can. Returns true when
+ * handled (so a keybinding stops here), false when the DSL has no formatter.
+ * @param {EditorView} view
+ */
+function alignActiveDsl(view) {
+  if (!view) return false;
+  const dslId = state.activeDslId ?? state.data?.dslType;
+  let dsl;
+  try { dsl = getDSL(dslId); } catch { return false; }
+  if (typeof dsl.alignSource !== 'function') return false;
+
+  const cur  = view.state.doc.toString();
+  const next = dsl.alignSource(cur);
+  if (next === cur) return true;
+
+  // Keep the caret on the same line/column after reflowing whitespace.
+  const head = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(head);
+  const col  = head - line.from;
+  const nDoc = Text.of(next.split('\n'));
+  const ln   = Math.min(line.number, nDoc.lines);
+  const nl   = nDoc.line(ln);
+  const pos  = Math.min(nl.from + col, nl.to);
+
+  view.dispatch({
+    changes: { from: 0, to: cur.length, insert: next },
+    selection: { anchor: pos },
+    scrollIntoView: true,
+  });
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -797,6 +833,13 @@ export class Editor {
   }
 
   focus() { this._view?.focus(); }
+
+  /**
+   * Run the active DSL's source formatter (ABC voice/measure alignment) over the
+   * document. Returns true when a formatter ran. Used by the mobile align button;
+   * the Alt-Shift-F keybinding calls the same logic.
+   */
+  alignActiveDsl() { return alignActiveDsl(this._view); }
 
   /**
    * Ask CodeMirror to re-measure its layout.  Needed after the editor pane is
