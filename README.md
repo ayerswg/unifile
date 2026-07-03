@@ -1,11 +1,14 @@
 # Unifile
 
-A single-file, fully-offline document editor with built-in version history. Each
-document is plain text whose sections declare their own format (Markdown, ABC
-music notation, Mermaid, Fountain…) via `#!shebang` lines. Everything runs in the
-browser — **no server, no account, no network**. Your data never leaves the device.
+A single-file, fully-offline document editor with built-in version history. A
+document is plain text; its sections declare their own format via `#!shebang`
+lines. unifile ships as a **dedicated app per content type** — **Markdown**,
+**Mermaid**, and **ABC music notation** — each bundling that one format (plus a
+Markdown base for prose sections). There is no universal multi-format build and
+no runtime plugins. Everything runs in the browser — **no server, no account, no
+network**. Your data never leaves the device.
 
-It ships in two shapes per type:
+Each type ships in two shapes:
 
 - **Standalone HTML** — one `.html` file you save and open anywhere (a "quine").
 - **PWA** — an installable, offline Progressive Web App.
@@ -29,7 +32,7 @@ src/            App source
   assets/       Generated piano soundfont (committed)
 build/          esbuild pipeline + site tooling
 templates/      quine.html, pwa.html, sw.js, manifest.json
-docs/           The website (Jekyll on GitHub Pages) + committed build artifacts
+docs/           The website (Cloudflare Pages; rendered by build/render-site.mjs) + committed artifacts
 dist/           Build output (gitignored)
 ```
 
@@ -39,11 +42,12 @@ Requires Node. Install deps once: `npm install`.
 
 | Command | Output |
 |---|---|
-| `npm run build` | Universal `dist/unifile.html` + PWA + drag-drop plugins |
-| `npm run build:abcjs` | Dedicated ABC build `dist/unifile.abc.html` + PWA (offline piano) |
-| `node build/build.mjs --dsl=<id>` | Dedicated build for any `DSL_META` type (markdown, mermaid, abcjs, universal) |
+| `npm run build` | Every dedicated variant (markdown, mermaid, abcjs): quine + PWA each |
+| `npm run build:abcjs` | Just the ABC build `dist/unifile.abc.html` + PWA (offline piano) |
+| `node build/build.mjs --dsl=<id>` | Just one `DSL_META` variant (markdown, mermaid, abcjs) |
 | `npm run build:dev` | Unminified + inline source maps |
 | `npm run build:site` | Build all apps + copy into `docs/` + write `docs/version.json` (release step) |
+| `npm run site:preview` | Render `docs/` → `docs/_site` (the no-Ruby renderer Cloudflare Pages runs) |
 
 Every output is self-contained and works 100% offline — esbuild bundles all
 libraries, no runtime CDN fetches. **Always build the specific variant you're
@@ -52,17 +56,20 @@ testing.** The bundled acoustic piano is committed; refresh it with
 
 ## Releasing
 
-Version is driven entirely by **git tags** — the latest tag is baked into every
-build, published to `docs/version.json`, and used by the in-app upgrade banner.
+Version comes from the latest **git tag**, baked into every build and published to
+`docs/version.json` for the in-app upgrade banner. Because Cloudflare Pages builds
+from a checkout **without tags**, the version falls back to `package.json` there —
+so bump `package.json` to match each release too, or the deployed version is stale.
 
 ```bash
-git tag v0.0.7            # bump (semver; `v` optional). RCs: v0.0.7-rc.1
-npm run build:site        # rebuild all apps + write version.json
-git add -A && git commit -m "Release v0.0.7"
-git push origin main v0.0.7
+npm version 0.1.3 --no-git-tag-version   # bump package.json (the tag-less fallback)
+git tag v0.1.3                            # semver; `v` optional. RCs: v0.1.3-rc.1
+npm run build:site                        # rebuild all apps + write version.json
+git add -A && git commit -m "Release v0.1.3"
+git push origin main v0.1.3
 ```
 
-Within a minute GitHub Pages rebuilds; installed PWAs / hosted copies on an older
+Within a minute Cloudflare Pages rebuilds from the push; installed PWAs / hosted copies on an older
 version show an **"Update available"** banner. Two channels — **stable** (default)
 and **release candidates** (opt in via Settings → Updates). `-rc.N` tags only
 prompt RC users; the final release supersedes its RCs. Downloaded `file://` copies
@@ -73,11 +80,13 @@ precedence, the two-channel `version.json`, how the version is stamped in).
 
 ## The website (`docs/`)
 
-Jekyll on GitHub Pages (Deploy from `main` `/docs`, custom domain in `docs/CNAME`).
-Navigation is a **command bar** — type to jump to any page or app. Per-type front
-doors (`/abc/`, `/get/`) detect the device and offer the right install path. Build
-artifacts are committed under `docs/` so Pages serves them.
+Hosted on **Cloudflare Pages** (custom domain `unifile.app`), which auto-builds on
+every push to `main` — `npm run build:site && npm run site:preview`, publishing
+`docs/_site`. The site is rendered by `build/render-site.mjs`, a no-Ruby Node
+renderer (not Jekyll). Navigation is a **command bar** — type to jump to any page
+or app. Per-type front doors (`/get/`, `/mermaid/`, `/abc/`) detect the device and
+offer the right install path.
 
-Preview locally without Ruby: `npm run site:preview` then serve `docs/_site`. Keep
-templates and `search.json` to **core Liquid only** (the classic Pages builder is
-Jekyll 3.x).
+Preview locally the same way Cloudflare does: `npm run site:preview` then serve
+`docs/_site`. `render-site.mjs` understands only a small Liquid subset, so update
+it when you change layouts/includes.
