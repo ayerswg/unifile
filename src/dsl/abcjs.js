@@ -1356,6 +1356,21 @@ function _charToMs(char) {
   return ev ? ev.milliseconds : null;
 }
 
+/** The ms position playback is cued to for the current selection — where ▶ would
+ *  begin: a range's start, the note under a collapsed cursor (a single-note
+ *  click), else the tune start. A natural end re-cues here so pressing ▶ again
+ *  replays from the same spot rather than jumping back to the beginning. Reads
+ *  the live selection, so moving the cursor mid-playback updates the re-cue. */
+function _cueStartMs() {
+  if (_selRangeMs) return _selRangeMs.startMs;
+  const { from, to } = _lastEditorSel;
+  if (from === to) {
+    const ms = _charToMs(Math.max(0, from - _sectionOffset));
+    if (ms != null) return ms;
+  }
+  return 0;
+}
+
 /** Section-relative char → ms where a range that ENDS at `char` stops: the onset
  *  of the first note starting at/after `char` (the note playback halts on), else
  *  the tune end.  Unlike _charToMs this never resolves a trailing space / barline
@@ -1738,12 +1753,12 @@ function stopPlayback(opts = {}) {
   state.emit('abc-play-state', { playing: false });
   state.emit('abc-play-cursor', null);
 
-  // Transport position: a real stop / natural end resets to the start; a pause
-  // or seek (keepPosition) leaves _pausedAtMs where the caller set it.  When a
-  // range is selected, "the start" is the start of that span (so finishing a
-  // range playback re-cues the span for an immediate replay), else the tune start.
+  // Transport position: a real stop / natural end re-cues to where ▶ would begin
+  // for the current selection (a range's start, a clicked note, else the tune
+  // start), so finishing playback leaves it ready to replay from the same spot.
+  // A pause or seek (keepPosition) leaves _pausedAtMs where the caller set it.
   if (!opts.keepPosition) {
-    const resetMs = _selRangeMs ? _selRangeMs.startMs : 0;
+    const resetMs = _cueStartMs();
     _pausedAtMs = resetMs;
     _emitProgress(resetMs);
   }
