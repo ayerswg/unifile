@@ -1171,6 +1171,20 @@ function _lineExtent(line) {
   return ext;
 }
 
+/** Leftmost rendered x (viewBox units) of a note event's glyphs. abcjs's `left`
+ *  is the notehead; leading accidentals / grace notes render further left but are
+ *  part of the same note group (`ev.elements`), so union their bounding boxes. */
+function _noteGlyphLeft(ev) {
+  let x = ev.left;
+  for (const el of (ev.elements ?? []).flat()) {
+    try {
+      const b = el?.getBBox?.();
+      if (b && b.width > 0 && b.x < x) x = b.x;
+    } catch { /* element not laid out yet */ }
+  }
+  return x;
+}
+
 /** Interpolated score position {x, line} (viewBox units) at playback ms. */
 function _scorePosForMs(ms) {
   if (!_noteEvents.length) return null;
@@ -1229,6 +1243,15 @@ function _updateScoreRange() {
     c.min = Math.min(c.min, e.left);
     c.max = Math.max(c.max, e.endX ?? e.left);
     byLine.set(e.line, c);
+  }
+  // Extend the band's opening edge to the first note's full glyph extent so any
+  // leading accidental / grace note (drawn left of the notehead `left`) is inside
+  // the highlight — those marks belong to the note that plays. Interior notes'
+  // accidentals already fall within the band; only the first note's lead escapes.
+  const firstEv = inRange[0];
+  if (firstEv) {
+    const band = byLine.get(firstEv.line);
+    if (band) band.min = Math.min(band.min, _noteGlyphLeft(firstEv));
   }
   const lines = [...byLine.entries()]
     .filter(([, c]) => c.max > c.min)
