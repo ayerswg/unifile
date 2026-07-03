@@ -1185,36 +1185,45 @@ function _noteGlyphLeft(ev) {
   return x;
 }
 
-/** Interpolated score position {x, line} (viewBox units) at playback ms. */
-function _scorePosForMs(ms) {
+/** Horizontal center (viewBox units) of a note event's notehead(s) — the point a
+ *  cursor should sit dead-on. Targets the notehead glyph so a leading accidental
+ *  (part of the same group) doesn't bias the center left; falls back to the whole
+ *  glyph group (rests carry no notehead) and finally to abcjs's `left`. */
+function _noteCenterX(ev) {
+  let min = Infinity, max = -Infinity;
+  for (const g of (ev.elements ?? []).flat()) {
+    const heads = g?.querySelectorAll?.('.abcjs-notehead');
+    const targets = (heads && heads.length) ? heads : (g ? [g] : []);
+    for (const t of targets) {
+      try {
+        const b = t.getBBox();
+        if (b.width > 0) { min = Math.min(min, b.x); max = Math.max(max, b.x + b.width); }
+      } catch { /* element not laid out yet */ }
+    }
+  }
+  return max > min ? (min + max) / 2 : ev.left;
+}
+
+/** Score position {x, line} of the note/rest that would sound at `ms`: the last
+ *  event whose onset is at/before ms (the note playback continues from), or the
+ *  first event when ms precedes it. x is the glyph's center, so the cursor snaps
+ *  dead onto a note rather than floating in the gap between onsets. */
+function _scoreSnapForMs(ms) {
   if (!_noteEvents.length) return null;
   const placed = e => e.left != null;      // skip bar/end entries without geometry
-  let i = -1;
-  for (let k = 0; k < _noteEvents.length; k++) {
-    const e = _noteEvents[k];
-    if (e.milliseconds > ms) break;
-    if (placed(e)) i = k;
+  let ev = null;
+  for (const e of _noteEvents) {
+    if (!placed(e)) continue;
+    if (e.milliseconds <= ms + 0.5) ev = e; else break;
   }
-  if (i < 0) {                              // before the first note → sit at its left
-    const f = _noteEvents.find(placed);
-    return f ? { x: f.left, line: f.line ?? 0 } : null;
-  }
-  const ev = _noteEvents[i];
-  const next = _noteEvents.slice(i + 1).find(placed);
-  let x = ev.left;
-  const endX = ev.endX ?? (next ? next.left : ev.left);
-  const gap = next ? (next.milliseconds - ev.milliseconds) : 0;
-  if (gap > 0 && endX > ev.left) {
-    const frac = Math.min(1, Math.max(0, (ms - ev.milliseconds) / gap));
-    x = ev.left + frac * (endX - ev.left);
-  }
-  return { x, line: ev.line ?? 0 };
+  if (!ev) ev = _noteEvents.find(placed);  // before the first note → snap to it
+  return ev ? { x: _noteCenterX(ev), line: ev.line ?? 0 } : null;
 }
 
 /** Position the playback cursor bar at `ms` (the true scrubber position). */
 function _updateScoreCursor(ms) {
   if (!_cursorLine) return;
-  const p = _scorePosForMs(ms);
+  const p = _scoreSnapForMs(ms);
   if (!p) { _cursorLine.style.display = 'none'; return; }
   const { y, h } = _lineExtent(p.line);
   _cursorLine.setAttribute('x1', p.x);

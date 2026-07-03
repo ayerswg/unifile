@@ -1404,7 +1404,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .uf-abc-overlay-svg { position: absolute; pointer-events: none; overflow: visible; }
 .uf-abc-cursor {
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: 1.25;                  /* thinner than the solid range brackets */
+  stroke-dasharray: 4 3;               /* dashed, so it reads as the moving playhead */
   vector-effect: non-scaling-stroke;   /* constant px width regardless of scale */
 }
 .uf-abc-range-band { fill: var(--accent); opacity: .13; }
