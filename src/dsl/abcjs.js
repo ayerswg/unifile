@@ -2221,7 +2221,45 @@ function _unusedMarkings(region, body) {
   return out;
 }
 
-/** Whole-document linter: front-matter schema + ABC structural checks. */
+/**
+ * Real ABC syntax diagnostics from the abcjs parser (no DOM needed).
+ * abcjs.parseOnly returns tunes whose `.warnings` are strings formatted
+ * "Music Line:LINE:COL: message:  <echoed source>" — this catches things a
+ * hand-rolled check never would (unclosed chords/brackets, bad note lengths,
+ * unexpected characters, …).  LINE/COL are relative to the parsed body.
+ */
+function _abcParseWarnings(view, bodyFrom, body, docLen) {
+  let tunes;
+  try { tunes = abcjs.parseOnly(body); } catch { return []; }
+  if (!Array.isArray(tunes)) return [];
+
+  const bodyLines = body.split('\n');
+  const out = [];
+  const seen = new Set();
+  for (const tune of tunes) {
+    for (const w of (tune.warnings || [])) {
+      const m = /Music Line:(\d+):(\d+):\s*([\s\S]*)$/.exec(w);
+      const lineNo = m ? parseInt(m[1], 10) : 1;
+      const col    = m ? parseInt(m[2], 10) : 1;
+      // Drop abcjs's trailing ":  <echoed source line>" from the message.
+      const message = (m ? m[3] : w).replace(/:\s{2}.*$/, '').trim();
+
+      const li = Math.min(Math.max(lineNo - 1, 0), bodyLines.length - 1);
+      let off = 0;
+      for (let i = 0; i < li; i++) off += bodyLines[i].length + 1;
+      const line = view.state.doc.lineAt(Math.min(bodyFrom + off, docLen));
+      const from = Math.min(line.from + Math.max(col - 1, 0), line.to);
+
+      const key = from + '|' + message;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ from, to: line.to, severity: 'warning', message: `ABC: ${message}` });
+    }
+  }
+  return out;
+}
+
+/** Whole-document linter: front-matter schema + abcjs parser + structural checks. */
 function abcLintSource(view) {
   const doc = view.state.doc.toString();
   const docLen = doc.length;
@@ -2244,6 +2282,7 @@ function abcLintSource(view) {
       diags.push({ ...anchor, severity: 'warning', message: 'No K: (key) header — abcjs needs one to render the tune.' });
 
     diags.push(..._slurIssues(bodyFrom, body));
+    diags.push(..._abcParseWarnings(view, bodyFrom, body, docLen));
   }
 
   diags.push(..._unusedMarkings(region, body));
