@@ -110,10 +110,11 @@ export class CommitDialog {
 
             <div class="form-row">
               <label class="form-label" for="commit-message">
-                Commit message <span class="required">*</span>
+                Commit message
+                <span class="form-hint">(optional)</span>
               </label>
               <textarea class="form-input form-textarea" id="commit-message"
-                placeholder="Describe your changes…" required rows="3">${escHtml(draftMsg)}</textarea>
+                placeholder="Describe your changes…" rows="3">${escHtml(draftMsg)}</textarea>
             </div>
 
             <div class="form-row">
@@ -243,10 +244,10 @@ export class CommitDialog {
       return;
     }
 
-    const message = this.el.querySelector('#commit-message')?.value.trim();
+    const message = this.el.querySelector('#commit-message')?.value.trim() || '';
     const tag = this.el.querySelector('#commit-tag')?.value.trim();
 
-    if (!message) { setError('Commit message is required.'); return; }
+    // Commit messages are optional now.
     if (tag && !/^\d+\.\d+\.\d+/.test(tag)) {
       setError('Tag must be a valid SemVer string (e.g. 1.2.3).');
       return;

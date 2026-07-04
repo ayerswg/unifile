@@ -1,117 +1,117 @@
 /**
- * Mobile commit bar — the bottom bar shown when the commit (left) pane is
- * centred on a phone.  It makes the version-control state clear and actionable
- * without leaving the pane:
- *   • which branch you're on + a tap-to-switch menu
- *   • whether there are uncommitted changes
- *   • a message field (+ optional SemVer) to commit a new change
+ * Mobile commit-pane bottom bar — now a **branch selector**.
  *
- * Reuses the app's onCommit handler (same path as the desktop commit dialog) and
- * the cached identity from user prefs; if no identity is saved yet it falls back
- * to opening the full commit dialog so the user can enter name/email once.
+ * Composing a commit moved up into the pending node at the top of the commit log
+ * (message optional, commit right there).  The bottom bar's job is therefore just
+ * branch context + switching/creating, so it stays reachable at the thumb while
+ * the log scrolls above it.
  */
 
-import { state, PANELS } from './state.js';
-import { loadUserPrefs } from '../core/storage.js';
+import { state } from './state.js';
+import { shortHash } from '../core/hash.js';
 
 export class CommitBar {
-  /** @param {HTMLElement} el  @param {{onCommit:Function}} handlers */
-  constructor(el, handlers = {}) {
+  /** @param {HTMLElement} el */
+  constructor(el) {
     this.el = el;
-    this.onCommit = handlers.onCommit;
     this._unsub = [];
-    this._branchOpen = false;
-    this._busy = false;
+    this._open = false;
 
-    this._unsub.push(state.on('change',         () => this.render()));
-    this._unsub.push(state.on('content-change', () => this._syncDirty()));
-    this._unsub.push(state.on('branch-switch',  () => this.render()));
-    this._unsub.push(state.on('checkout',       () => this.render()));
+    this._unsub.push(state.on('change',        () => this.render()));
+    this._unsub.push(state.on('branch-switch', () => this.render()));
+    this._unsub.push(state.on('checkout',      () => this.render()));
     this.render();
+
+    // Close the drop-up on an outside tap.
+    this._onDocClick = (e) => {
+      if (this._open && !this.el.contains(e.target)) { this._open = false; this.render(); }
+    };
+    document.addEventListener('click', this._onDocClick);
   }
 
-  destroy() { this._unsub.forEach(fn => fn()); }
+  destroy() {
+    this._unsub.forEach(fn => fn());
+    document.removeEventListener('click', this._onDocClick);
+  }
 
   // ---------------------------------------------------------------------------
 
   render() {
     const vcs = state.vcs;
-    const dirty = state.isDirty;
-    const head = vcs?.log?.()?.[0];
-    const suggested = head?.tag ? _incPatch(head.tag) : '';
+    const branch = state.currentBranch;
+    const detached = state.isDetached;
+    const branches = vcs?.listBranches?.() ?? [];
 
-    // Branch + dirty state live in the top-bar chip now; this bar is just the
-    // commit composer (message + optional version + Commit).
     this.el.innerHTML = `
-      <div class="cb">
-        <div class="cb-row cb-compose">
-          <textarea class="cb-msg" id="cb-msg" rows="1" autocomplete="off"
-            placeholder="${dirty ? 'Describe your change…' : 'No changes to commit'}"
-            ${dirty ? '' : 'disabled'}></textarea>
-          <input class="cb-ver" id="cb-ver" type="text" autocomplete="off"
-            placeholder="v ${suggested || '0.0.0'}" value="${_esc(suggested)}"
-            ${dirty ? '' : 'disabled'} aria-label="Version (optional)">
-          <button class="cb-commit" id="cb-commit" ${dirty && !this._busy ? '' : 'disabled'}>Commit</button>
+      <div class="cbb">
+        <button class="cbb-branch${detached ? ' detached' : ''}" id="cbb-toggle"
+          aria-haspopup="listbox" aria-expanded="${this._open}"
+          title="${detached ? 'Detached HEAD' : `Branch: ${_esc(branch)}`}">
+          ${_iconBranch()}
+          <span class="cbb-branch-name">${detached ? '⚠ detached' : _esc(branch)}</span>
+          <span class="cbb-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="cbb-menu${this._open ? ' open' : ''}" role="listbox">
+          <div class="cbb-menu-label">Switch branch</div>
+          ${branches.map(b => `
+            <button class="cbb-item${b.isCurrent && !detached ? ' current' : ''}"
+              data-branch="${_esc(b.name)}" role="option">
+              <span class="cbb-item-icon">${b.isCurrent && !detached ? '●' : '○'}</span>
+              <span class="cbb-item-name">${_esc(b.name)}</span>
+              <span class="cbb-item-hash">${_esc(shortHash(b.head))}</span>
+            </button>`).join('')}
+          <button class="cbb-item cbb-new" id="cbb-new">
+            <span class="cbb-item-icon">＋</span>
+            <span class="cbb-item-name">New branch…</span>
+          </button>
         </div>
       </div>`;
 
-    this.el.querySelector('#cb-commit')?.addEventListener('click', () => this._commit());
-
-    // Message: word-wraps and auto-grows with the text (capped). Enter commits;
-    // Shift+Enter inserts a newline.
-    const msg = this.el.querySelector('#cb-msg');
-    if (msg) {
-      const grow = () => {
-        if (!msg.offsetParent) return;       // hidden (not on commit pane) — skip
-        if (!msg.value) { msg.style.height = ''; return; }  // empty → 1-row default (placeholder can't inflate it)
-        msg.style.height = '0px';            // collapse first so scrollHeight is exact
-        msg.style.height = Math.min(msg.scrollHeight, 140) + 'px';
-      };
-      msg.addEventListener('input', grow);
-      // Grow once it's actually visible (the commit pane may be off-screen at render).
-      requestAnimationFrame(grow);
-      this._growMsg = grow;
-      msg.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._commit(); }
+    this.el.querySelector('#cbb-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._open = !this._open;
+      this.render();
+    });
+    this.el.querySelectorAll('.cbb-item[data-branch]').forEach(it => {
+      it.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._open = false;
+        this._switchBranch(it.dataset.branch);
       });
-    }
+    });
+    this.el.querySelector('#cbb-new')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._open = false;
+      this._newBranch();
+    });
   }
 
-  _syncDirty() {
-    // Cheap update: re-render only if the dirty flag flipped the disabled state.
-    const enabled = !this.el.querySelector('#cb-commit')?.disabled;
-    if (enabled !== !!state.isDirty) this.render();
+  /** Stash-aware branch switch (mirrors the topbar dropdown's behaviour). */
+  _switchBranch(name) {
+    if (!name || !state.vcs || name === state.currentBranch && !state.isDetached) { this.render(); return; }
+    if (state.isDirty) state.stash = { content: state.currentContent, fromHash: state.headHash };
+    const baseContent = state.vcs.switchBranch(name);
+    const newHash = state.vcs.headHash;
+    let content = baseContent;
+    if (state.stash && state.stash.fromHash === newHash) { content = state.stash.content; state.stash = null; }
+    state.update({ currentContent: content, isDirty: content !== baseContent });
+    state.emit('branch-switch', { name, content });
   }
 
-  async _commit() {
-    if (this._busy || !state.isDirty || !this.onCommit) return;
-    const msg = this.el.querySelector('#cb-msg')?.value.trim();
-    if (!msg) { this.el.querySelector('#cb-msg')?.focus(); return; }
-    const tag = this.el.querySelector('#cb-ver')?.value.trim() || undefined;
-    const prefs = loadUserPrefs();
-    if (!prefs?.name || !prefs?.email) {
-      // No saved identity → open the full dialog to capture name/email, but
-      // carry the message + version the user already typed so they aren't lost.
-      state.pendingCommit = { message: msg, tag };
-      state.openPanel(PANELS.COMMIT);
+  _newBranch() {
+    const name = (window.prompt('New branch name:') || '').trim();
+    if (!name) return;
+    if (!/^[A-Za-z0-9/_-]+$/.test(name)) { window.alert('Branch name may only contain letters, numbers, /, _ and -'); return; }
+    try {
+      state.vcs.createBranch(name, state.headHash);
+    } catch (err) {
+      window.alert(err?.message || 'Could not create branch.');
       return;
     }
-    this._busy = true; this.render();
-    try {
-      await this.onCommit({ author: prefs.name, email: prefs.email, message: msg, tag });
-    } catch (err) {
-      console.warn('[commit-bar] commit failed:', err?.message);
-    } finally {
-      this._busy = false; this.render();
-    }
+    // Keep the serialized branch list in sync, then switch onto the new branch.
+    state.update({ data: { ...state.data, ...state.vcs.serialize() } });
+    this._switchBranch(name);
   }
-}
-
-/** Bump the patch of a `major.minor.patch` string (mirrors commit-dialog). */
-function _incPatch(semver) {
-  const m = String(semver).match(/^(\d+)\.(\d+)\.(\d+)/);
-  if (!m) return '';
-  return `${m[1]}.${m[2]}.${+m[3] + 1}`;
 }
 
 function _esc(s) {
@@ -120,7 +120,7 @@ function _esc(s) {
 }
 
 function _iconBranch() {
-  return `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
     <circle cx="4" cy="3.5" r="1.6"/><circle cx="4" cy="12.5" r="1.6"/><circle cx="12" cy="6" r="1.6"/>
     <path d="M4 5v6M4 9.5C4 7 12 9 12 7.5"/></svg>`;
 }

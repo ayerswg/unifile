@@ -291,6 +291,21 @@ async function render(content, el) {
   container.className = 'abc-preview-wrap';
   el.appendChild(container);
 
+  // Derived tune title: when the ABC has no explicit `T:` field, show the
+  // document title (set once, in the top bar) as the sheet's title. An explicit
+  // `T:` overrides it. This is a DOM heading, NOT a source injection, so abcjs's
+  // char positions still map 1:1 to the editor (note↔source highlighting stays
+  // correct). Exports inject `T:` into the string instead (see _withDerivedTitle).
+  if (!/^\s*T:/m.test(content)) {
+    const t = (state.title || '').trim();
+    if (t && !/^untitled/i.test(t)) {
+      const h = document.createElement('div');
+      h.className = 'abc-derived-title';
+      h.textContent = t;
+      el.insertBefore(h, container);
+    }
+  }
+
   // In layout mode (slides / document / webpage), dslContentFrom is set on el.
   // Mark the wrapper so _bindClickBack in preview.js defers to abcjs's own
   // precise clickListener rather than emitting a coarse block-level selection.
@@ -1836,7 +1851,26 @@ if (typeof document !== 'undefined') {
   });
 }
 
+/**
+ * For exports (no click-mapping), safely inject `T:<document title>` after the
+ * `X:` line when the ABC has no explicit `T:`, so exported sheets carry the same
+ * derived title the preview shows. An explicit `T:` is left untouched.
+ */
+function _withDerivedTitle(content) {
+  if (/^\s*T:/m.test(content)) return content;
+  const t = (state.title || '').trim();
+  if (!t || /^untitled/i.test(t)) return content;
+  const line = `T:${t}`;
+  const m = content.match(/^\s*X:.*$/m);
+  if (m) {
+    const idx = m.index + m[0].length;
+    return content.slice(0, idx) + '\n' + line + content.slice(idx);
+  }
+  return line + '\n' + content;
+}
+
 async function renderToString(content) {
+  content = _withDerivedTitle(content);
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
   try {
@@ -1858,6 +1892,7 @@ async function renderToString(content) {
 // ---------------------------------------------------------------------------
 
 async function exportSVG(content) {
+  content = _withDerivedTitle(content);
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
   const tablature = parseTabDirectives(content);
@@ -1868,6 +1903,7 @@ async function exportSVG(content) {
 }
 
 async function exportPDF(content) {
+  content = _withDerivedTitle(content);
   // ── 1. Render offscreen with oneSvgPerLine ─────────────────────────────────
   // oneSvgPerLine splits the single large SVG into one <div><svg></svg></div>
   // per staff system.  Each SVG carries a viewBox so it can be scaled by CSS

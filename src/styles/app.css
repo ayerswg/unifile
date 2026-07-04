@@ -391,8 +391,9 @@ html, body {
   text-overflow: clip;
 }
 
-/* Mobile branch/status chip — desktop uses the .topbar-right pill group instead. */
+/* Mobile-only top-bar bits — desktop uses the .topbar-right pill group instead. */
 .tb-status-chip { display: none; }
+.tb-dirty { display: none; }
 
 /* DSL type icon — small muted icon to the left of the title (legacy, kept for reference) */
 .dsl-icon {
@@ -904,8 +905,28 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 }
 .dd-commit-date { font-size: 11px; color: var(--text-muted); margin-left: auto; }
 .dd-commit-msg { font-size: 13px; color: var(--text); }
+.dd-commit-nomsg { color: var(--text-muted); font-style: italic; }
 .dd-commit-author { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .dd-empty { padding: 12px; color: var(--text-muted); font-style: italic; font-size: 13px; }
+
+/* Export marker — the commit that was last written OUT to a .unifile.json (a
+   durable copy off the device), distinct from mere in-app commits. */
+.dd-commit-exported {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 55%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.dd-commit-exported svg { width: 11px; height: 11px; }
+.dd-commit-item.exported { box-shadow: inset 3px 0 0 var(--success); }
+.dd-commit-item.exported.current { box-shadow: inset 3px 0 0 var(--accent); }
 
 /* ==============================================================
    MAIN AREA
@@ -1062,47 +1083,44 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
      nothing scrolls to bring it back. */
   #unifile-app[data-diff] #uf-topbar { height: calc(var(--topbar-h) + 1px); opacity: 1; }
 
-  /* ── Top bar: hamburger + filename (flexes) + branch/status chip. ── */
+  /* ── Top bar: [☰]  centred title  [• dirty dot]. The branch/commit chrome
+     moved into the commit pane; the top bar is now pure identity. ── */
   .topbar-right { display: none !important; }
+  .tb-hamburger { flex: 0 0 auto; width: 30px; }
   .topbar-title {
     flex: 1 1 auto;
-    max-width: none;        /* take all the room left by the chip; ellipsize only then */
+    max-width: none;
     min-width: 2ch;
+    text-align: center;     /* dead-centre between the hamburger and the dot */
   }
 
-  /* Branch/status chip on the far right — always shows branch + dirty state. */
-  .tb-status-chip {
+  /* Dirty dot on the far right — a fixed-width twin of the hamburger so the
+     title stays centred. Only the dot inside appears when there are changes. */
+  .tb-dirty {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    justify-content: center;
     flex: 0 0 auto;
-    max-width: 42vw;        /* cap so a long branch can't starve the title */
-    height: 28px;
-    padding: 0 9px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--text);
-    font-family: var(--font-ui);
-    font-size: 13px;
-    line-height: 1;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    background: none;
+    border: none;
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
-  .tb-status-chip svg { flex: 0 0 auto; width: 13px; height: 13px; opacity: .8; }
-  .tb-status-chip .tb-status-branch {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .tb-dirty .tb-dirty-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: var(--accent);
+    opacity: 0;             /* invisible when clean, but the button holds its width */
+    transform: scale(.6);
+    transition: opacity .15s ease, transform .15s ease;
   }
-  .tb-status-chip .tb-status-dot { flex: 0 0 auto; font-size: 9px; color: var(--accent); }
-  .tb-status-chip .tb-status-caret { flex: 0 0 auto; font-size: 9px; color: var(--text-muted); }
-  .tb-status-chip.dirty { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
-  .tb-status-chip.detached { color: var(--warning, #d20f39); border-color: currentColor; }
-  .tb-status-chip:active { background: var(--bg-overlay); }
-
-  /* Branch switcher dropdown anchors under the chip (top-right) on mobile. */
-  #tb-branch-dd { right: 8px; left: auto; }
+  .tb-dirty.show .tb-dirty-dot { opacity: 1; transform: scale(1); }
+  .tb-dirty.detached .tb-dirty-dot { background: var(--warning, #d20f39); opacity: 1; transform: scale(1); }
+  .tb-dirty:active { background: var(--bg-overlay); border-radius: 999px; }
 
   /* ── Editor gutter: a SINGLE thin rail (no line numbers). The current line
      shows as a full-width accent segment, a commented line yellow, and YAML
@@ -1216,43 +1234,87 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-mobile-pane="render"] .ps-thumb { transform: translateY(100px); }
 }
 
-/* ── Mobile commit bar ───────────────────────────────────────── */
-.cb { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; }
-.cb-row { display: flex; align-items: center; gap: 8px; }
-.cb-branch {
-  display: inline-flex; align-items: center; gap: 5px;
-  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  color: var(--text); font-family: var(--font-ui); font-size: 13px; padding: 4px 8px; cursor: pointer;
+/* ── Commit-pane bottom bar: the branch selector (drop-up) ─────── */
+.cbb { position: relative; padding: 6px 10px; }
+.cbb-branch {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+  color: var(--text); font-family: var(--font-ui); font-size: 13px; line-height: 1;
+  padding: 7px 11px; cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
-.cb-branch .cb-caret { color: var(--text-muted); }
-.cb-status { font-size: 12px; color: var(--text-muted); margin-left: auto; }
-.cb-status.dirty { color: var(--accent); }
-.cb-status .cb-dot { font-size: 9px; }
-.cb-compose { gap: 6px; align-items: flex-end; }   /* keep buttons aligned to the bottom as the message grows */
-.cb-msg { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); color: var(--text); padding: 6px 8px; font-family: var(--font-ui);
-  /* auto-growing wrapped textarea */
-  resize: none; overflow: hidden; line-height: 1.4; font-size: 16px; max-height: 140px;
-  white-space: pre-wrap; overflow-wrap: anywhere; }
-.cb-ver { width: 84px; flex-shrink: 0; background: var(--bg); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); color: var(--text); padding: 6px 8px; font-family: var(--font-ui); }
-.cb-commit {
-  flex-shrink: 0; background: var(--accent); border: none; border-radius: var(--radius-sm);
-  color: var(--bg); font-family: var(--font-ui); font-size: 13px; padding: 6px 12px; cursor: pointer;
+.cbb-branch svg { flex: 0 0 auto; opacity: .8; }
+.cbb-branch .cbb-caret { color: var(--text-muted); font-size: 10px; }
+.cbb-branch.detached { color: var(--warning, #d20f39); border-color: currentColor; }
+.cbb-branch:active { background: var(--bg-overlay); }
+/* Drop-UP menu (bottom bar → opens upward). */
+.cbb-menu {
+  display: none;
+  position: absolute; left: 10px; bottom: calc(100% + 4px);
+  min-width: 200px; max-width: min(78vw, 340px);
+  background: var(--bg-alt); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); box-shadow: 0 -6px 20px rgba(0,0,0,.35);
+  padding: 4px; z-index: 40; max-height: 50vh; overflow-y: auto;
 }
-.cb-commit:disabled { opacity: .4; cursor: default; }
-.cb-branch-menu { display: none; flex-direction: column; gap: 2px; padding: 4px 0 2px; }
-.cb-branch-menu.open { display: flex; }
-.cb-branch-item {
-  display: flex; align-items: center; gap: 6px; text-align: left;
+.cbb-menu.open { display: block; }
+.cbb-menu-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-muted); padding: 6px 8px 4px;
+}
+.cbb-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   background: none; border: none; color: var(--text); font-family: var(--font-ui);
-  font-size: 13px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 14px; padding: 9px 8px; border-radius: var(--radius-sm); cursor: pointer;
 }
-.cb-branch-item:hover, .cb-branch-item.current { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cbb-item:active, .cbb-item.current { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cbb-item-icon { flex: 0 0 auto; width: 12px; text-align: center; color: var(--accent); font-size: 11px; }
+.cbb-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cbb-item-hash { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.cbb-new { border-top: 1px solid var(--border); margin-top: 2px; color: var(--accent); }
+.cbb-new .cbb-item-icon { color: var(--accent); }
 
-/* Commit-log pane contents (reuses the dropdown's commit-list markup). */
+/* ── Commit-log pane contents ─────────────────────────────────── */
 .commit-log-pane { padding: 10px 12px 28px; }
 .commit-log-pane .dd-commit-item { cursor: pointer; }
+
+/* Pending (uncommitted) node — a hollow, dashed twin of a real commit that
+   carries the (optional) message + version + commit action inline, so a commit
+   is composed exactly where it will land in the history. */
+.commit-log-pending {
+  display: flex;
+  gap: 10px;
+  padding: 4px 4px 14px;
+  margin-bottom: 4px;
+  border-bottom: 1px dashed var(--border);
+}
+.commit-log-pending .clp-graph { flex: 0 0 auto; display: flex; justify-content: center; width: 14px; padding-top: 4px; }
+.commit-log-pending .clp-node {
+  width: 11px; height: 11px; border-radius: 999px;
+  border: 2px dashed var(--accent); background: transparent;
+}
+.commit-log-pending .clp-body { flex: 1; min-width: 0; }
+.commit-log-pending .clp-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--accent); margin-bottom: 6px;
+}
+.clp-msg {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); font-family: var(--font-ui); font-size: 16px; line-height: 1.4;
+  padding: 7px 9px; resize: none; overflow: hidden; max-height: 140px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.clp-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.clp-ver {
+  flex: 1; min-width: 0; box-sizing: border-box;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); font-family: var(--font-ui); font-size: 16px; padding: 7px 9px;
+}
+.clp-commit {
+  flex: 0 0 auto; background: var(--accent); border: none; border-radius: var(--radius-sm);
+  color: var(--bg); font-family: var(--font-ui); font-size: 14px; font-weight: 600;
+  padding: 8px 16px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.clp-commit:active { filter: brightness(.92); }
 
 /* ==============================================================
    PANE DIVIDER
@@ -1450,6 +1512,18 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 }
 
 /* ABC notation preview container — inherits background from the preview pane */
+/* Derived tune title — shown above the sheet when the ABC has no explicit `T:`
+   (inherited from the document title; an explicit T: overrides it). Styled to
+   read like a sheet-music title. */
+.abc-derived-title {
+  text-align: center;
+  font-family: var(--font-ui);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 8px 12px 0;
+}
+
 .abc-preview-wrap {
   padding: 16px;
   border-radius: var(--radius);

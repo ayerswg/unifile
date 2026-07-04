@@ -518,52 +518,77 @@ export class App {
   }
 
   /**
-   * iOS-style collapsing header.  On mobile the title bar (`#uf-topbar` — menu,
-   * document title, branch chip) auto-hides as you scroll DOWN through a pane's
-   * content and slides back when you scroll UP or reach the top, reclaiming its
-   * height for the editor/preview.  The pane switcher stays pinned as the
-   * persistent top chrome (it owns the safe-area inset now, see app.css).
+   * iOS-style collapsing header.  On mobile the title bar (`#uf-topbar`) auto-
+   * hides as you scroll DOWN through a pane and slides back when you scroll UP or
+   * reach the top, reclaiming its height.  The pane switcher stays pinned.
    *
-   * A single capturing `scroll` listener catches every inner scroller — the
-   * CodeMirror `.cm-scroller`, the preview pane and the commit log — because
-   * scroll events don't bubble but DO propagate in the capture phase.
+   * A single capturing `scroll` listener catches every inner scroller (CM
+   * `.cm-scroller`, preview, commit log) since scroll doesn't bubble but DOES
+   * propagate in the capture phase.
+   *
+   * Hardened against the three things that made an earlier version bounce on iOS:
+   *   1. **Typing.** CodeMirror scrolls to keep the caret visible on every
+   *      keystroke.  While the editor/an input is focused we freeze the header
+   *      (`_editing`), so typing never toggles it.
+   *   2. **Feedback loop.** Collapsing the bar resizes `#uf-main` → the scroller
+   *      emits a scroll → which would re-toggle.  A `COOLDOWN` after each toggle
+   *      swallows that reflow-scroll.
+   *   3. **Jitter / rubber-band.** We accumulate travel in one direction and only
+   *      toggle past a threshold (hysteresis), instead of reacting to each delta.
    */
   _setupHeaderAutoHide() {
     const root = document.getElementById('unifile-app');
     if (!root) return;
 
     let hidden = false;
+    let lastToggle = 0;
+    let accum = 0;                 // signed scroll travel in the current direction
+    const HIDE_AT  = 40;           // downward travel before hiding
+    const SHOW_AT  = 24;           // upward travel before revealing
+    const TOP_ZONE = 8;            // always shown when parked near the top
+    const COOLDOWN = 320;          // ms ≥ the collapse transition — kills the reflow re-toggle
+
     const setHidden = (h) => {
       if (h === hidden) return;
-      hidden = h;
+      const now = performance.now();
+      if (now - lastToggle < COOLDOWN) return;
+      hidden = h; lastToggle = now; accum = 0;
       root.toggleAttribute('data-header-hidden', h);
     };
-    // Exposed so pane switches (and anything else) can force the header back.
-    this._revealHeader = () => setHidden(false);
+    // Programmatic reveal (pane switch, top of scroll, diff) — bypasses cooldown.
+    this._revealHeader = () => { hidden = false; accum = 0; root.removeAttribute('data-header-hidden'); };
 
-    const JITTER = 6;     // ignore sub-pixel/elastic wobble
-    const MIN_HIDE = 28;  // never hide until scrolled a little past the top
-    const TOP_ZONE = 6;   // always show when parked near the very top
+    // Freeze the header while the user is typing (keyboard up): caret-tracking
+    // scrolls and keyboard viewport resizes must not move it.
+    this._editing = false;
+    const EDITABLE = '.cm-content, input, textarea, [contenteditable="true"]';
+    root.addEventListener('focusin', (e) => {
+      if (e.target.closest?.(EDITABLE)) this._editing = true;
+    });
+    root.addEventListener('focusout', () => {
+      // Focus often hops between elements inside the editor — settle on a tick.
+      setTimeout(() => { this._editing = !!document.activeElement?.closest?.(EDITABLE); }, 0);
+    });
 
     root.addEventListener('scroll', (e) => {
-      if (!_isMobile()) return;
-      // The read-only diff view hides the pane switcher, so the header must stay
-      // open there (nothing would scroll it back). Leave it revealed.
-      if (root.hasAttribute('data-diff')) { setHidden(false); return; }
+      if (!_isMobile() || this._editing) return;
+      // The read-only diff hides the pane switcher — keep the header revealed.
+      if (root.hasAttribute('data-diff')) { if (hidden) this._revealHeader(); return; }
       const el = e.target;
       if (!(el instanceof HTMLElement)) return;
       const st = el.scrollTop;
-      const last = el._ufHdrScroll ?? 0;
+      const dy = st - (el._ufHdrScroll ?? 0);
       el._ufHdrScroll = st;
-      if (st <= TOP_ZONE) { setHidden(false); return; }
-      const dy = st - last;
-      if (dy > JITTER && st > MIN_HIDE) setHidden(true);   // scrolling down → hide
-      else if (dy < -JITTER) setHidden(false);             // scrolling up → reveal
+      if (!dy) return;
+      if (st <= TOP_ZONE) { this._revealHeader(); return; }
+      if ((dy > 0) !== (accum > 0)) accum = 0;   // direction flipped — reset travel
+      accum += dy;
+      if (accum > HIDE_AT) setHidden(true);
+      else if (accum < -SHOW_AT) setHidden(false);
     }, { capture: true, passive: true });
 
-    // Leaving mobile (rotate to desktop width) must never leave the header stuck
-    // collapsed — desktop has no auto-hide affordance to bring it back.
-    _mql.addEventListener('change', (e) => { if (!e.matches) setHidden(false); });
+    // Leaving mobile (rotate to desktop width) must never strand it collapsed.
+    _mql.addEventListener('change', (e) => { if (!e.matches) this._revealHeader(); });
   }
 
   /**
@@ -768,106 +793,24 @@ export class App {
   }
 
   // ---------------------------------------------------------------------------
-  // Persistence banner
+  // Persistence signalling
   //
-  // A single quiet bar under the topbar whose whole job is to make sure the user
-  // never *unknowingly* leaves work living only in the evictable browser
-  // sandbox.  Two situations surface it, and in both the prominent action moves
-  // the work toward durable storage (commit → back up) rather than throwing it
-  // away:
-  //   • 'draft' – an unsaved draft was recovered on load (crash / accidental
-  //               close).  Primary: Commit…  Secondary (quiet): Discard.
-  //   • 'nudge' – committed work has not yet been exported to a .unifile.json.
-  //               Primary: Back up.
-  // It is always dismissible and deliberately does NOT appear while the user is
-  // actively editing (dirty-but-no-recovered-draft) — the commit bar already
-  // signals that — so it nudges without getting in the way.
+  // The old nagging banners ("Unsaved draft restored — Discard/Commit" and the
+  // "back up" nudge) are gone.  Their two jobs are now handled by passive,
+  // always-legible markers instead of interrupting toasts:
+  //   • uncommitted work → the dirty dot on the title bar + a pending node at the
+  //     top of the commit log (see commit-log rendering in topbar.js).
+  //   • durability       → the "exported" marker on whichever commit was last
+  //     written out to a .unifile.json (loadBackupMark ↔ commit hash).
+  // A recovered crash draft is still restored silently (see init) — it simply
+  // shows as uncommitted, which is exactly what it is.
   // ---------------------------------------------------------------------------
 
-  /** Decide which banner variant (if any) to show for the current state. */
+  /** Kept as a stable hook; there is no banner to render anymore. */
   _refreshPersistenceBanner() {
-    const dirty     = state.isDirty;
-    const headHash  = state.headHash;
-    const hasCommits = (state.vcs?.log?.().length ?? 0) > 0;
-    const mark      = loadBackupMark(this._backupScope());
-    const backedUp  = !!mark && mark.headHash === headHash && !dirty;
-
-    let variant = null;
-    if (this._draftSavedAt && dirty) {
-      variant = 'draft';
-    } else if (!IS_QUINE && !dirty && hasCommits && !backedUp && this._nudgeDismissedForHash !== headHash) {
-      // The back-up nudge is a PWA concern: quine mode's durable copy is the
-      // .html file itself, so "iOS can clear this storage" wouldn't apply.
-      variant = 'nudge';
-    }
-
-    if (!variant) { document.getElementById('uf-draft-banner')?.remove(); return; }
-    this._renderPersistenceBanner(variant, mark);
-  }
-
-  _renderPersistenceBanner(variant, mark) {
     document.getElementById('uf-draft-banner')?.remove();
-
-    const el = document.createElement('div');
-    el.id = 'uf-draft-banner';
-    el.className = 'draft-banner';
-
-    let msg, primaryLabel;
-    if (variant === 'draft') {
-      msg = `Unsaved draft restored from ${_formatAge(this._draftSavedAt)} ago — not committed or backed up.`;
-      primaryLabel = 'Commit…';
-    } else {
-      const behind = this._commitsSinceBackup(mark);
-      const n = behind === 1 ? '1 change' : `${behind} changes`;
-      msg = `Saved on this device only — ${n} not backed up. iOS can clear this storage.`;
-      primaryLabel = 'Back up';
-    }
-
-    el.innerHTML = `
-      <span class="draft-banner-msg">${_escBanner(msg)}</span>
-      <button class="draft-banner-btn draft-banner-primary" type="button">${primaryLabel}</button>
-      ${variant === 'draft'
-        ? '<button class="draft-banner-btn draft-banner-discard" type="button">Discard</button>'
-        : ''}
-      <button class="draft-banner-btn draft-banner-close" type="button" aria-label="Dismiss">×</button>
-    `;
-
-    el.querySelector('.draft-banner-primary').addEventListener('click', () => {
-      if (variant === 'draft') {
-        // Move toward durable storage: open the commit UI (captures a message +
-        // identity).  After the commit lands, onCommit re-runs the refresh and
-        // the 'back up' nudge takes over.
-        state.openPanel(PANELS.COMMIT);
-      } else {
-        this._saveDataFile();
-      }
-    });
-
-    el.querySelector('.draft-banner-discard')?.addEventListener('click', () => {
-      // Revert to the last committed content and wipe the draft.
-      state.setContent(state.vcs.headContent);
-      clearDraft();
-      this._draftSavedAt = null;
-      this._refreshPersistenceBanner();
-    });
-
-    el.querySelector('.draft-banner-close').addEventListener('click', () => {
-      if (variant === 'draft') this._draftSavedAt = null;
-      else this._nudgeDismissedForHash = state.headHash; // re-nudges after the next commit
-      el.remove();
-    });
-
-    // Insert just below the topbar.
-    const main = document.getElementById('uf-main');
-    main?.parentElement?.insertBefore(el, main);
-  }
-
-  /** How many commits on the current branch are newer than the last backup. */
-  _commitsSinceBackup(mark) {
-    const log = state.vcs?.log?.() ?? []; // root → head
-    if (!mark) return log.length;
-    const idx = log.findIndex(c => c.hash === mark.headHash);
-    return idx >= 0 ? log.length - 1 - idx : log.length;
+    // Nudge the commit log to reflect current dirty/backup state.
+    this._components?.topbar?._refreshCommitLog?.();
   }
 
   // ---------------------------------------------------------------------------

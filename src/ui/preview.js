@@ -89,7 +89,12 @@ export class Preview {
       // In layout/model mode _lastDsl is null; only re-render on model changes.
       // In per-section DSL mode, also re-render on DSL type changes.
       const dslChanged = !this._lastRenderer && state.data?.dslType !== this._lastDsl;
-      if (dslChanged || state.primaryModel !== this._lastModel) {
+      // The document title feeds derived titles (e.g. ABC's `T:`), so a rename
+      // must re-render even when content/DSL are unchanged. Title edits are rare
+      // (commit on blur), so this is cheap.
+      const titleChanged = this._lastTitle !== undefined && state.title !== this._lastTitle;
+      this._lastTitle = state.title;
+      if (dslChanged || state.primaryModel !== this._lastModel || titleChanged) {
         this._scheduleRender(state.currentContent, true);
       }
     }));

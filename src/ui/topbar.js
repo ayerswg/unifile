@@ -19,6 +19,7 @@
 
 import { state, PANELS } from './state.js';
 import { shortHash } from '../core/hash.js';
+import { loadUserPrefs, loadBackupMark } from '../core/storage.js';
 import { showArchivedCommentsModal } from './comments.js';
 import { listDSLs } from '../dsl/registry.js';
 import {
@@ -102,17 +103,16 @@ export class TopBar {
           </div>
         </div>
 
-        <!-- Mobile-only compact branch + dirty indicator. Always visible so the
-             current branch and state are clear from any pane; tap slides to the
-             commit pane (full switcher + commit composer). Hidden on desktop,
-             where the .topbar-right pill group is shown instead. -->
-        <button class="tb-status-chip${isDetached ? ' detached' : ''}${isDirty ? ' dirty' : ''}"
-          id="tb-status-chip" aria-label="Switch branch"
-          title="${isDetached ? 'Detached HEAD — tap to switch branch' : `Branch ${escHtml(branch)} — ${isDirty ? 'uncommitted changes' : 'all committed'} — tap to switch branch`}">
-          ${iconBranch()}
-          <span class="tb-status-branch">${isDetached ? '⚠' : escHtml(branch)}</span>
-          ${isDirty ? '<span class="tb-status-dot" aria-hidden="true">●</span>' : ''}
-          <span class="tb-status-caret" aria-hidden="true">▾</span>
+        <!-- Mobile-only: a dot that appears when there are uncommitted changes.
+             Tap it to jump to the commit pane (branch + commit history live there
+             now). Always in the DOM — hidden when clean — so it balances the left
+             hamburger and keeps the title centred. Hidden on desktop, where the
+             .topbar-right pill group is shown instead. -->
+        <button class="tb-dirty${isDirty ? ' show' : ''}${isDetached ? ' detached' : ''}"
+          id="tb-dirty"
+          aria-label="${isDetached ? 'Detached HEAD — tap to review history' : (isDirty ? 'Uncommitted changes — tap to review' : 'All changes committed')}"
+          title="${isDetached ? 'Detached HEAD — tap to review history' : (isDirty ? 'Uncommitted changes — tap to review' : 'All changes committed')}">
+          <span class="tb-dirty-dot" aria-hidden="true"></span>
         </button>
       </div>
 
@@ -146,24 +146,94 @@ export class TopBar {
   _refreshCommitLog() {
     if (!this._commitLogEl) return;
     this._commitLogEl.innerHTML =
-      `<div class="commit-log-pane">${this._renderCommitList()}</div>`;
+      `<div class="commit-log-pane">${this._renderPendingNode()}${this._renderCommitList()}</div>`;
+
     this._commitLogEl.querySelectorAll('.dd-commit-item').forEach(item => {
       item.addEventListener('click', () => {
         const hash = item.dataset.hash;
         if (hash) this._onCommitClick(hash);
       });
     });
+
+    // Pending (uncommitted) node: inline optional message + version, commit here.
+    const msg = this._commitLogEl.querySelector('#clp-msg');
+    if (msg) {
+      const grow = () => {
+        if (!msg.value) { msg.style.height = ''; return; }
+        msg.style.height = '0px';
+        msg.style.height = Math.min(msg.scrollHeight, 140) + 'px';
+      };
+      msg.addEventListener('input', grow);
+      requestAnimationFrame(grow);
+      msg.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault(); this._commitPending();
+        }
+      });
+    }
+    this._commitLogEl.querySelector('#clp-commit')
+      ?.addEventListener('click', () => this._commitPending());
+  }
+
+  /**
+   * The pending-commit node shown at the top of the log while there are
+   * uncommitted changes.  It's styled distinctly from real commits (a hollow,
+   * dashed node) and carries the message field + commit action inline, so a new
+   * commit is composed right where it will land.  Message and version are both
+   * optional.
+   */
+  _renderPendingNode() {
+    if (!state.isDirty) return '';
+    const head = state.vcs?.log?.()?.[0];
+    const suggested = head?.tag ? _incPatch(head.tag) : '';
+    return `
+      <div class="commit-log-pending" aria-label="Uncommitted changes">
+        <div class="clp-graph"><span class="clp-node"></span></div>
+        <div class="clp-body">
+          <div class="clp-label">Uncommitted changes</div>
+          <textarea class="clp-msg" id="clp-msg" rows="1" autocomplete="off"
+            placeholder="Describe this change (optional)"></textarea>
+          <div class="clp-row">
+            <input class="clp-ver" id="clp-ver" type="text" autocomplete="off"
+              placeholder="v ${escHtml(suggested || '0.0.0')}" value="${escHtml(suggested)}"
+              aria-label="Version (optional)">
+            <button class="clp-commit" id="clp-commit" type="button">Commit</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  _commitPending() {
+    if (this._committing || !state.isDirty || !this.handlers?.onCommit) return;
+    const message = this._commitLogEl?.querySelector('#clp-msg')?.value.trim() || '';
+    const tag     = this._commitLogEl?.querySelector('#clp-ver')?.value.trim() || undefined;
+
+    // Detached HEAD (needs a branch name) or no saved identity → hand off to the
+    // full commit dialog, carrying the typed message/version so they aren't lost.
+    const prefs = loadUserPrefs();
+    if (state.isDetached || !prefs?.name || !prefs?.email) {
+      state.pendingCommit = { message, tag };
+      state.openPanel(PANELS.COMMIT);
+      return;
+    }
+
+    this._committing = true;
+    Promise.resolve(this.handlers.onCommit({ author: prefs.name, email: prefs.email, message, tag }))
+      .catch(err => console.warn('[commit-log] commit failed:', err?.message))
+      .finally(() => { this._committing = false; this._refreshCommitLog(); });
   }
 
   _updateDirty() {
-    // When dirty state changes, the commit pill structure changes fundamentally
-    // (single button ↔ split button), so we need a full re-render.
+    // Mobile dirty dot: cheap toggle, no re-render.
+    this.el.querySelector('#tb-dirty')?.classList.toggle('show', state.isDirty);
+    // Desktop: the commit pill structure changes fundamentally when dirty flips
+    // (single button ↔ split button), so that path needs a full re-render.
     const hasSplitBtn = !!this.el.querySelector('#tb-commit-action');
     if (hasSplitBtn !== state.isDirty) {
       this.render();
     }
-    // If the structure already matches the dirty state, nothing else to do —
-    // the split/single structure already reflects the state correctly.
+    // Keep the mobile commit-log pane's pending node in sync as edits land.
+    this._refreshCommitLog();
   }
 
   // ---------------------------------------------------------------------------
@@ -259,20 +329,30 @@ export class TopBar {
     const detachedHash = vcs.detachedHead;
     const currentHash = isDetached ? detachedHash : state.headHash;
 
+    // Export marker: whichever commit was last written OUT to a .unifile.json is
+    // the user's durable save point. We badge it so "committed" (in-app history)
+    // is visibly distinct from "exported" (a permanent copy off the device).
+    const mark = loadBackupMark(state.docId ?? location.href);
+    const exportedHash = mark?.headHash ?? null;
+    const exportedWhen = mark?.at ? formatRelative(mark.at) : '';
+
     return `
       <div class="dd-section-label">
         Commits <span class="dd-branch-ctx">on ${escHtml(state.currentBranch)}</span>
       </div>
       <ul class="dd-commit-list">
         ${log.map(c => `
-          <li class="dd-commit-item${c.hash === currentHash ? ' current' : ''}"
+          <li class="dd-commit-item${c.hash === currentHash ? ' current' : ''}${c.hash === exportedHash ? ' exported' : ''}"
             data-hash="${c.hash}">
             <div class="dd-commit-meta">
               <span class="dd-commit-hash">${shortHash(c.hash)}</span>
               ${c.tag ? `<span class="dd-commit-tag">${escHtml(c.tag)}</span>` : ''}
+              ${c.hash === exportedHash
+                ? `<span class="dd-commit-exported" title="Exported to a file${exportedWhen ? ' ' + escHtml(exportedWhen) : ''} — you have a permanent copy of this state">${_iconExported()} exported</span>`
+                : ''}
               <span class="dd-commit-date">${formatRelative(c.timestamp)}</span>
             </div>
-            <div class="dd-commit-msg">${escHtml(c.message)}</div>
+            <div class="dd-commit-msg">${c.message ? escHtml(c.message) : '<span class="dd-commit-nomsg">(no message)</span>'}</div>
             <div class="dd-commit-author">${escHtml(c.author)}</div>
           </li>
         `).join('')}
@@ -306,14 +386,12 @@ export class TopBar {
       commitActionBtn.addEventListener('click', () => state.openPanel(PANELS.COMMIT));
     }
 
-    // Mobile branch/status chip → open the branch switcher dropdown.
-    const statusChip = this.el.querySelector('#tb-status-chip');
-    if (statusChip) {
-      statusChip.addEventListener('click', (e) => {
+    // Mobile dirty dot → jump to the commit pane (where branch + history live).
+    const dirtyBtn = this.el.querySelector('#tb-dirty');
+    if (dirtyBtn) {
+      dirtyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this._branchOpen = !this._branchOpen;
-        if (this._branchOpen) { this._commitOpen = false; this._dslMenuOpen = false; }
-        this._syncDropdowns();
+        state.emit('mobile-goto-pane', 'commit');
       });
     }
 
@@ -1308,6 +1386,21 @@ function escHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Bump the patch of a `major.minor.patch` string (mirrors commit-bar). */
+function _incPatch(semver) {
+  const m = String(semver).match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return '';
+  return `${m[1]}.${m[2]}.${+m[3] + 1}`;
+}
+
+function _iconExported() {
+  // Down-into-tray: a durable save written out of the sandbox.
+  return `<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M8 1a.75.75 0 0 1 .75.75v6.19l1.72-1.72a.75.75 0 1 1 1.06 1.06l-3 3a.75.75 0 0 1-1.06 0l-3-3a.75.75 0 0 1 1.06-1.06l1.72 1.72V1.75A.75.75 0 0 1 8 1z"/>
+    <path d="M2.75 11a.75.75 0 0 1 .75.75V13.5h9v-1.75a.75.75 0 0 1 1.5 0v2.25a.75.75 0 0 1-.75.75h-10.5a.75.75 0 0 1-.75-.75v-2.25A.75.75 0 0 1 2.75 11z"/>
+  </svg>`;
 }
 
 function formatRelative(ts) {
