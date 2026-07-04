@@ -1036,8 +1036,25 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-diff] #uf-pane-switch { display: none; }
 
   #uf-site-nav { order: -3; }
-  /* Top bar sits above the pane switcher and owns the iOS status-bar inset. */
-  #uf-topbar { order: -2; margin-top: env(safe-area-inset-top, 0px); }
+  /* The pane switcher is the persistent top chrome now, so it owns the iOS
+     status-bar inset (portrait block sets its margin-top). The title bar sits
+     BELOW it and auto-hides on scroll (iOS-style collapsing nav) to reclaim its
+     height — see App._setupHeaderAutoHide. `height` (not max-height) so the
+     collapse animates; the inner .topbar is 44px + a 1px border. */
+  #uf-topbar {
+    order: -1;
+    overflow: hidden;
+    height: calc(var(--topbar-h) + 1px);
+    transition: height .22s ease, opacity .18s ease;
+  }
+  #unifile-app[data-header-hidden] #uf-topbar {
+    height: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* The switcher is hidden during a commit diff, so pin the header open then —
+     nothing scrolls to bring it back. */
+  #unifile-app[data-diff] #uf-topbar { height: calc(var(--topbar-h) + 1px); opacity: 1; }
 
   /* ── Top bar: hamburger + filename (flexes) + branch/status chip. ── */
   .topbar-right { display: none !important; }
@@ -1141,9 +1158,11 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 /* ── Pane switcher — PORTRAIT: horizontal bar under the top bar ── */
 @media (max-width: 640px) {
   #uf-pane-switch {
-    order: -1;                 /* between the top bar (-2) and the panes */
+    order: -2;                 /* topmost persistent chrome (above the title bar) */
     flex-direction: row;
     height: 46px;
+    /* Owns the iOS status-bar inset now that it sits above the collapsible bar. */
+    margin-top: env(safe-area-inset-top, 0px);
   }
   .ps-thumb {
     top: 5px;

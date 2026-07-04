@@ -518,6 +518,55 @@ export class App {
   }
 
   /**
+   * iOS-style collapsing header.  On mobile the title bar (`#uf-topbar` — menu,
+   * document title, branch chip) auto-hides as you scroll DOWN through a pane's
+   * content and slides back when you scroll UP or reach the top, reclaiming its
+   * height for the editor/preview.  The pane switcher stays pinned as the
+   * persistent top chrome (it owns the safe-area inset now, see app.css).
+   *
+   * A single capturing `scroll` listener catches every inner scroller — the
+   * CodeMirror `.cm-scroller`, the preview pane and the commit log — because
+   * scroll events don't bubble but DO propagate in the capture phase.
+   */
+  _setupHeaderAutoHide() {
+    const root = document.getElementById('unifile-app');
+    if (!root) return;
+
+    let hidden = false;
+    const setHidden = (h) => {
+      if (h === hidden) return;
+      hidden = h;
+      root.toggleAttribute('data-header-hidden', h);
+    };
+    // Exposed so pane switches (and anything else) can force the header back.
+    this._revealHeader = () => setHidden(false);
+
+    const JITTER = 6;     // ignore sub-pixel/elastic wobble
+    const MIN_HIDE = 28;  // never hide until scrolled a little past the top
+    const TOP_ZONE = 6;   // always show when parked near the very top
+
+    root.addEventListener('scroll', (e) => {
+      if (!_isMobile()) return;
+      // The read-only diff view hides the pane switcher, so the header must stay
+      // open there (nothing would scroll it back). Leave it revealed.
+      if (root.hasAttribute('data-diff')) { setHidden(false); return; }
+      const el = e.target;
+      if (!(el instanceof HTMLElement)) return;
+      const st = el.scrollTop;
+      const last = el._ufHdrScroll ?? 0;
+      el._ufHdrScroll = st;
+      if (st <= TOP_ZONE) { setHidden(false); return; }
+      const dy = st - last;
+      if (dy > JITTER && st > MIN_HIDE) setHidden(true);   // scrolling down → hide
+      else if (dy < -JITTER) setHidden(false);             // scrolling up → reveal
+    }, { capture: true, passive: true });
+
+    // Leaving mobile (rotate to desktop width) must never leave the header stuck
+    // collapsed — desktop has no auto-hide affordance to bring it back.
+    _mql.addEventListener('change', (e) => { if (!e.matches) setHidden(false); });
+  }
+
+  /**
    * Markup for the mobile pane switcher — a thick segmented slider with an icon
    * per pane (commit · code · render).  A sliding `.ps-thumb` sits behind the
    * active button (driven purely by `data-mobile-pane` in CSS).  The render
@@ -546,6 +595,7 @@ export class App {
   _setupMobilePanes() {
     this._trackViewportHeight();
     this._lockWindowScroll();
+    this._setupHeaderAutoHide();
 
     const logPane = document.getElementById('uf-commit-log');
     if (logPane && this._components.topbar?.mountCommitLog) {
@@ -565,6 +615,10 @@ export class App {
       root.setAttribute('data-mobile-pane', pane);
       document.querySelectorAll('#uf-pane-switch .ps-btn').forEach(b =>
         b.setAttribute('aria-selected', String(b.dataset.pane === pane)));
+      // Switching panes always brings the header back — its menu/branch controls
+      // must be reachable when you land on a fresh pane (iOS reveals the nav bar
+      // on any deliberate navigation).
+      this._revealHeader?.();
       if (pane === 'editor') requestAnimationFrame(() => this._components.editor?.refresh());
     };
 

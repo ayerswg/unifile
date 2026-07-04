@@ -144,7 +144,7 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
 
 ## Mobile / iOS (hard-won — read before touching layout)
 
-The app is a `100dvh`-ish flex column: (site-nav) · top bar · pane rail · `#uf-main` · `#uf-bottom`. On phones (`@media max-width:640px`) `#uf-main` is a **horizontal scroll-snap strip** of three panes: **commit-log · editor · render**. `App._setupMobilePanes()` tracks the centred pane into `#unifile-app[data-mobile-pane]` and drives per-pane UI.
+The app is a `100dvh`-ish flex column: (site-nav) · **pane switcher** · top bar · `#uf-main` · `#uf-bottom`. On phones (`@media max-width:640px`) only the active one of three panes (**commit-log · editor · render**) is displayed. `App._setupMobilePanes()` tracks the pane into `#unifile-app[data-mobile-pane]` and drives per-pane UI. The **pane switcher (`#uf-pane-switch`) is the persistent top chrome** (order -2, owns the safe-area inset); the **top bar auto-hides on scroll** below it.
 
 Institutional knowledge — **do not silently "simplify" these; each fixed a real device bug:**
 
@@ -152,7 +152,7 @@ Institutional knowledge — **do not silently "simplify" these; each fixed a rea
 - **The "chin gap" was `apple-mobile-web-app-status-bar-style: black-translucent` + `height:100%`.** That meta is REMOVED from `pwa.html`; `html,body` use `100vh`. Don't re-add black-translucent.
 - **Document must never scroll.** `App._lockWindowScroll()` snaps `window`/`scrollingElement` back to (0,0); `overscroll-behavior` contains inner scrollers. iOS otherwise scrolls the whole doc when the keyboard is up and shifts the bars.
 - **Bottom bar (`#uf-bottom`) is an in-flow flex child**, not `position:fixed` + JS pinning (that pushed it off-screen). It sits flush because the column is exactly the visible height.
-- **Top bar owns the safe-area-inset-top**; the pane rail sits below it and is **tappable** (tap left/middle/right third → commit/editor/render).
+- **Pane switcher is the topmost persistent chrome and owns the safe-area-inset-top** (`#uf-pane-switch`, order -2); the segmented commit/code/render tabs stay pinned. The **title bar (`#uf-topbar`, order -1) sits below it and collapses on scroll** — `App._setupHeaderAutoHide()` runs one capturing `scroll` listener over all inner scrollers (CM `.cm-scroller`, preview, commit log) and toggles `#unifile-app[data-header-hidden]`: scroll down → hide (`#uf-topbar` height→0), scroll up / near-top → reveal. iOS-style collapsing nav; reclaims the header height for content. Header is force-revealed on pane switch and pinned open during a commit diff (`[data-diff]`).
 - **Mobile gutter is one thin rail** (no line numbers, no fold column): current line = accent segment, commented line = yellow, front-matter lines = grey. Buffer between rail and code lives on `.cm-line` padding-left (not `.cm-content`) so the active-line highlight covers it (no dark sliver).
 - **Zoom fix:** viewport `maximum-scale=1, user-scalable=no, viewport-fit=cover`; `.cm-content`/inputs forced to `font-size:16px` to stop Safari focus-zoom.
 
