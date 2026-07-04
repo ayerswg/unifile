@@ -1224,21 +1224,40 @@ function _noteGlyphLeft(ev) {
 
 /** Horizontal center (viewBox units) of a note event's notehead(s) — the point a
  *  cursor should sit dead-on. Targets the notehead glyph so a leading accidental
- *  (part of the same group) doesn't bias the center left; falls back to the whole
- *  glyph group (rests carry no notehead) and finally to abcjs's `left`. */
+ *  (part of the same group) doesn't bias the center left.
+ *
+ *  A whole/half rest is engraved CENTERED in its measure, far right of a note that
+ *  onsets on the same beat. If an event mixes real notes with a resting voice (e.g.
+ *  a bass chord on the downbeat while the top voice holds a whole rest), unioning
+ *  the rest's bbox drags the center to mid-measure and floats the cursor off the
+ *  notes that actually sound. So center on the NOTEHEADS only when any exist, and
+ *  fall back to rest/other glyph geometry (then abcjs's `left`) only for an event
+ *  that is entirely rests. */
 function _noteCenterX(ev) {
-  let min = Infinity, max = -Infinity;
+  let min = Infinity, max = -Infinity;       // notehead extent
+  let rMin = Infinity, rMax = -Infinity;     // fallback: rest/other glyph extent
   for (const g of (ev.elements ?? []).flat()) {
-    const heads = g?.querySelectorAll?.('.abcjs-notehead');
-    const targets = (heads && heads.length) ? heads : (g ? [g] : []);
-    for (const t of targets) {
+    if (!g?.getBBox) continue;
+    const heads = [];
+    if (g.matches?.('.abcjs-notehead')) heads.push(g);
+    g.querySelectorAll?.('.abcjs-notehead').forEach(h => heads.push(h));
+    if (heads.length) {
+      for (const t of heads) {
+        try {
+          const b = t.getBBox();
+          if (b.width > 0) { min = Math.min(min, b.x); max = Math.max(max, b.x + b.width); }
+        } catch { /* element not laid out yet */ }
+      }
+    } else {
       try {
-        const b = t.getBBox();
-        if (b.width > 0) { min = Math.min(min, b.x); max = Math.max(max, b.x + b.width); }
+        const b = g.getBBox();
+        if (b.width > 0) { rMin = Math.min(rMin, b.x); rMax = Math.max(rMax, b.x + b.width); }
       } catch { /* element not laid out yet */ }
     }
   }
-  return max > min ? (min + max) / 2 : ev.left;
+  if (max > min)   return (min + max) / 2;    // notes present → ignore resting voices
+  if (rMax > rMin) return (rMin + rMax) / 2;  // all-rest moment → center on the rest
+  return ev.left;
 }
 
 /** Score position {x, y, h} of the note/rest that would sound at `ms`: the last

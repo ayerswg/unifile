@@ -9,7 +9,7 @@
 // unifile PWAs installed on the same origin (markdown, abc, …) don't evict each
 // other's caches.  CACHE_VERSION appends a content hash so updates supersede.
 const CACHE_PREFIX  = 'unifile-abc';
-const CACHE_VERSION = 'unifile-abc-68b4419e1cdf';
+const CACHE_VERSION = 'unifile-abc-fd3bd22f7a7a';
 const APP_SHELL = [
   './',
   './index.html',
@@ -25,11 +25,21 @@ const APP_SHELL = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION).then(cache => {
-      return cache.addAll(APP_SHELL);
+      // `cache: 'reload'` bypasses the HTTP cache so a new worker never precaches
+      // a STALE shell asset.  Without this, an "update" could reload without
+      // bumping the version: the new worker would cache the old app.js that the
+      // browser/CDN still had cached, so nothing actually changed on reload.
+      return cache.addAll(APP_SHELL.map(path => new Request(path, { cache: 'reload' })));
     }).then(() => {
       return self.skipWaiting();
     })
   );
+});
+
+// Allow the page to force an immediately-waiting worker to activate (used by the
+// in-app "Update" button so the swap doesn't wait for all tabs to close).
+self.addEventListener('message', (event) => {
+  if (event.data === 'skipWaiting') self.skipWaiting();
 });
 
 // ---------------------------------------------------------------------------
