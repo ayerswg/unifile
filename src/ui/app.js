@@ -7,6 +7,8 @@
 
 import { state, PANELS, VIEW_MODES } from './state.js';
 import { VCS } from '../core/vcs.js';
+import { diff3Merge } from '../core/diff.js';
+import { shortHash } from '../core/hash.js';
 import {
   loadEmbeddedData,
   captureTemplate,
@@ -33,7 +35,7 @@ import { DslFooter } from './dsl-footer.js';
 import { mountSiteNav } from './site-nav.js';
 import { checkForUpdate } from './update-check.js';
 import { PaneSwitch } from './pane-switch.js';
-import { DiffView, DiffBar } from './diff-view.js';
+import { DiffView, DiffBar, DiffPanes } from './diff-view.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { MergeDialog } from './merge-dialog.js';
@@ -191,6 +193,8 @@ export class App {
         </div>
         <div id="uf-preview-wrap"></div>
         <div id="uf-diff" aria-label="Commit diff"></div>
+        <div id="uf-diff-mid" aria-label="Diff — middle (target)"></div>
+        <div id="uf-diff-right" aria-label="Diff — right (source)"></div>
       </div>
       <div id="uf-bottom">
         <div id="uf-transport"></div>
@@ -268,9 +272,17 @@ export class App {
     this._components.paneSwitch = new PaneSwitch(
       document.getElementById('uf-pane-switch'), handlers
     );
-    // Read-only commit diff view + its bottom-bar picker.
+    // Read-only commit diff view + its bottom-bar picker (desktop two-column).
     this._components.diffView = new DiffView(document.getElementById('uf-diff'));
-    this._components.diffBar  = new DiffBar(document.getElementById('uf-diff-bar'));
+    // Mobile single-column diff panes (middle = target, right = source).
+    this._components.diffPanes = new DiffPanes(
+      document.getElementById('uf-diff-mid'),
+      document.getElementById('uf-diff-right')
+    );
+    this._components.diffBar  = new DiffBar(document.getElementById('uf-diff-bar'), {
+      onDiffCreateBranch: (hash) => this._diffCreateBranch(hash),
+      onDiffMerge:        ()     => this._diffMerge(),
+    });
 
     this._components.commit = new CommitDialog(
       document.getElementById('uf-commit-panel'),
@@ -427,6 +439,95 @@ export class App {
 
     this._loadDataObject(data);
     this._refreshPersistenceBanner();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Diff-mode branch / merge (mobile 3-pane diff bottom-bar actions)
+  //
+  // Both actions require a clean working tree first (so "Current" == the branch
+  // tip and history stays coherent); if dirty we bounce the user to the commit
+  // pane and abort.  Neither auto-commits the result — the user commits it via
+  // the normal flow after reviewing (and resolving any conflict markers).
+  // ---------------------------------------------------------------------------
+
+  /** Force the user to commit before a branch/merge; keeps the diff open. */
+  _forceCommitFirst() {
+    window.alert('Commit your current changes first, then try again.');
+    state.emit('mobile-goto-pane', 'commit');
+  }
+
+  /** Create a new branch off a committed state shown in one of the diff panes. */
+  _diffCreateBranch(hash) {
+    if (!hash || hash === 'WORKING') return;
+    if (state.isDirty) { this._forceCommitFirst(); return; }
+    const vcs = state.vcs;
+    const name = (window.prompt(`New branch name (off ${shortHash(hash)}):`) || '').trim();
+    if (!name) return;
+    if (!/^[A-Za-z0-9/_-]+$/.test(name)) {
+      window.alert('Branch name may only contain letters, numbers, /, _ and -');
+      return;
+    }
+    try { vcs.createBranch(name, hash); }
+    catch (err) { window.alert(err?.message || 'Could not create branch.'); return; }
+
+    const content = vcs.switchBranch(name);
+    state.update({ data: { ...state.data, ...vcs.serialize() } });
+    state.closeDiff();
+    state.emit('branch-switch', { name, content });
+    state.emit('mobile-goto-pane', 'editor');
+    this._saveQuine(this._currentDataObject());
+  }
+
+  /**
+   * Merge the RIGHT (source) side into the LEFT (target/middle) side.  Squash
+   * semantics: the three-way merge result becomes the working content on the
+   * target branch, marked dirty for an explicit commit.
+   */
+  _diffMerge() {
+    const diff = state.diff;
+    if (!diff) return;
+    if (state.isDirty) { this._forceCommitFirst(); return; }
+
+    const vcs = state.vcs;
+    const { left, right } = diff;
+
+    const targetBranch = left === 'WORKING' ? vcs.currentBranch : vcs.branchAtTip(left);
+    if (!targetBranch) {
+      window.alert('Merge target must be “Current” or a branch tip. Pick one as the middle side, or create a branch there first.');
+      return;
+    }
+    const targetHash = left === 'WORKING' ? (vcs.branches[targetBranch]?.head ?? null) : left;
+    const sourceHash = right;
+    if (!sourceHash || sourceHash === 'WORKING') {
+      window.alert('Pick a commit as the right (source) side to merge in.');
+      return;
+    }
+    if (sourceHash === targetHash) {
+      window.alert('Nothing to merge — both sides are the same commit.');
+      return;
+    }
+
+    const base = vcs.findCommonAncestor(targetHash, sourceHash);
+    const ours   = vcs.getContentAt(targetHash);
+    const theirs = vcs.getContentAt(sourceHash);
+    const baseContent = base ? vcs.getContentAt(base) : '';
+    const oursLabel   = left === 'WORKING' ? `Current (${targetBranch})` : shortHash(targetHash);
+    const theirsLabel = shortHash(sourceHash);
+
+    const { content, conflicts } = diff3Merge(ours, baseContent, theirs, { oursLabel, theirsLabel });
+
+    // Land on the target branch (working tree is clean) and drop the merged
+    // result in as uncommitted working content.
+    if (vcs.currentBranch !== targetBranch || vcs.isDetached) vcs.switchBranch(targetBranch);
+    state.update({ data: { ...state.data, ...vcs.serialize() } });
+    state.closeDiff();
+    state.emit('branch-switch', { name: targetBranch, content });
+    state.emit('mobile-goto-pane', 'editor');
+    this._saveQuine(this._currentDataObject());
+
+    if (conflicts > 0) {
+      window.alert(`${conflicts} conflict${conflicts === 1 ? '' : 's'} to resolve. Edit out the <<<<<<< / ======= / >>>>>>> markers, then commit.`);
+    }
   }
 
   // ---------------------------------------------------------------------------

@@ -206,6 +206,121 @@ export function unifiedDiff(oldText, newText, oldLabel = 'a', newLabel = 'b') {
 }
 
 /**
+ * Line-level three-way merge (diff3), producing merged text with git-style
+ * conflict markers where both sides changed the same region differently.
+ *
+ * Each side is diffed against the base independently into "change regions"
+ * (`diffRegions`) aligned to base line indices.  Walking the base:
+ *   • a region on only one side  → apply that side (adjacent independent edits
+ *     on different lines both land cleanly — no false conflict)
+ *   • overlapping regions from both sides, resolving to the same text → take it
+ *   • overlapping regions that differ                → conflict block
+ *
+ * The merge is a squash (no second parent recorded); the caller commits the
+ * result as a normal commit.
+ *
+ * @param {string} oursText   the target ("ours") content
+ * @param {string} baseText   common-ancestor content ('' if no shared history)
+ * @param {string} theirsText the source ("theirs") content being merged in
+ * @param {{oursLabel?:string, theirsLabel?:string}} [labels]
+ * @returns {{ content: string, conflicts: number }}
+ */
+export function diff3Merge(oursText, baseText, theirsText, labels = {}) {
+  const oursLabel = labels.oursLabel ?? 'ours';
+  const theirsLabel = labels.theirsLabel ?? 'theirs';
+
+  const O = baseText === '' ? [] : baseText.split('\n');
+  const ra = diffRegions(O, oursText === '' ? [] : oursText.split('\n'));
+  const rb = diffRegions(O, theirsText === '' ? [] : theirsText.split('\n'));
+
+  const eq = (x, y) => x.length === y.length && x.every((v, i) => v === y[i]);
+
+  const out = [];
+  let conflicts = 0;
+  let i = 0, ia = 0, ib = 0;
+
+  while (i <= O.length) {
+    const aActive = ia < ra.length && ra[ia].start <= i && (ra[ia].end > i || ra[ia].start === i);
+    const bActive = ib < rb.length && rb[ib].start <= i && (rb[ib].end > i || rb[ib].start === i);
+
+    if (!aActive && !bActive) {
+      if (i < O.length) out.push(O[i]);
+      i++;
+      continue;
+    }
+
+    // Expand a combined block over any regions (both sides) that touch/overlap.
+    let end = i, sideA = false, sideB = false;
+    const aParts = [], bParts = [];
+    // Merge in a region only when it begins at `i` (the seed) or truly overlaps
+    // the running span (start < end).  Regions that merely *touch* at a boundary
+    // (e.g. base[3,4) on one side and [4,5) on the other) are independent edits
+    // on different lines and must NOT be combined into a conflict.
+    let progress = true;
+    while (progress) {
+      progress = false;
+      if (ia < ra.length && (ra[ia].start <= i || ra[ia].start < end)) { end = Math.max(end, ra[ia].end); aParts.push(ra[ia++]); sideA = true; progress = true; }
+      if (ib < rb.length && (rb[ib].start <= i || rb[ib].start < end)) { end = Math.max(end, rb[ib].end); bParts.push(rb[ib++]); sideB = true; progress = true; }
+    }
+
+    const aLines = _applySideRegions(O, aParts, i, end);
+    const bLines = _applySideRegions(O, bParts, i, end);
+
+    if (!sideA)             out.push(...bLines);          // only theirs changed
+    else if (!sideB)        out.push(...aLines);          // only ours changed
+    else if (eq(aLines, bLines)) out.push(...aLines);     // same change both sides
+    else {
+      conflicts++;
+      out.push(`<<<<<<< ${oursLabel}`, ...aLines, '=======', ...bLines, `>>>>>>> ${theirsLabel}`);
+    }
+    i = end;
+  }
+
+  return { content: out.join('\n'), conflicts };
+}
+
+/**
+ * Diff `other` against `base` as a list of change regions aligned to base line
+ * indices: each `{ start, end, lines }` means base[start,end) is replaced by
+ * `lines`.  A pure insertion is a zero-width region (start === end).  Regions
+ * are ordered by `start` and don't overlap.
+ * @param {string[]} base
+ * @param {string[]} other
+ * @returns {Array<{start:number,end:number,lines:string[]}>}
+ */
+function diffRegions(base, other) {
+  const rows = lineDiff(base.join('\n'), other.join('\n'));
+  // lineDiff splits '' into [] — guard the degenerate single-empty-line case.
+  const regions = [];
+  let bi = 0, cur = null;
+  for (const r of rows) {
+    if (r.type === 'equal') {
+      if (cur) { regions.push(cur); cur = null; }
+      bi++;
+    } else {
+      if (!cur) cur = { start: bi, end: bi, lines: [] };
+      if (r.left  != null) { cur.end = bi + 1; bi++; }   // consumes a base line
+      if (r.right != null) cur.lines.push(r.right);      // contributes an other line
+    }
+  }
+  if (cur) regions.push(cur);
+  return regions;
+}
+
+/** Reconstruct one side's text over base[start,end), substituting its regions. */
+function _applySideRegions(base, parts, start, end) {
+  const res = [];
+  let p = start;
+  for (const r of parts) {
+    for (let k = p; k < r.start; k++) res.push(base[k]);
+    res.push(...r.lines);
+    p = r.end;
+  }
+  for (let k = p; k < end; k++) res.push(base[k]);
+  return res;
+}
+
+/**
  * Compute blame information: for each line in currentText, which commit
  * last changed it.
  *

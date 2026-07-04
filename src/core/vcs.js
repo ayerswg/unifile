@@ -143,6 +143,21 @@ export class VCS {
   }
 
   /**
+   * The name of the branch whose tip is `hash`, or null if `hash` is not any
+   * branch's head.  Used to decide whether a commit is a valid merge target
+   * (only Current or a branch tip can be merged into).
+   * @param {string|null} hash
+   * @returns {string|null}
+   */
+  branchAtTip(hash) {
+    if (!hash) return null;
+    for (const b of Object.values(this.branches)) {
+      if (b.head === hash) return b.name;
+    }
+    return null;
+  }
+
+  /**
    * List all branches with their head info.
    * @returns {Array<{ name, head, headCommit }>}
    */

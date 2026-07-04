@@ -29,6 +29,7 @@ import {
 import { showArchivedCommentsModal } from './comments.js';
 
 const PANES = ['commit', 'editor', 'render'];
+const WORKING = 'WORKING';
 
 export class PaneSwitch {
   /** @param {HTMLElement} el  @param {object} handlers */
@@ -44,6 +45,9 @@ export class PaneSwitch {
     state.on('branch-switch', () => this.render());
     state.on('checkout', () => this.render());
     state.on('active-section-change', () => this.render());
+    // Entering/leaving diff mode (or changing a side) swaps the segments between
+    // the normal tabs and the diff pickers; drop any stale menu.
+    state.on('diff-change', () => { this._openMenu = null; this.render(); });
 
     // Outside tap closes any open menu.
     this._onDocClick = (e) => {
@@ -70,6 +74,8 @@ export class PaneSwitch {
   // ---------------------------------------------------------------------------
 
   render() {
+    if (state.diff) { this._renderDiff(); return; }
+
     const dirty = state.isDirty;
     const detached = state.isDetached;
     const branch = detached ? '⚠' : state.currentBranch;
@@ -105,6 +111,100 @@ export class PaneSwitch {
     `;
 
     this._bind();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Diff mode — the three segments become the diff pickers
+  //   commit → the selected (right) commit; tap → commit-log pane
+  //   editor → the LEFT/middle side (Current or a hash) + left picker menu
+  //   render → the RIGHT side (the selected commit) + right picker menu
+  // ---------------------------------------------------------------------------
+
+  _renderDiff() {
+    const diff = state.diff;
+    const vcs = state.vcs;
+    const leftLabel  = diff.left  === WORKING ? 'Current' : shortHash(diff.left);
+    const rightLabel = diff.right === WORKING ? 'Current' : shortHash(diff.right);
+    const rightBranch = vcs?.branchAtTip?.(diff.right);
+
+    const seg = (pane, key, inner, hasMenu) => {
+      const isActive = this._active === pane;
+      return `
+        <button type="button" class="ps-btn ps-${key}${isActive ? ' active' : ''}"
+          data-pane="${pane}" role="tab" aria-selected="${isActive}"
+          ${isActive && hasMenu ? 'aria-haspopup="menu"' : ''}>
+          ${inner}
+          ${hasMenu ? `<span class="ps-caret" aria-hidden="true">${_iconCaret()}</span>` : ''}
+        </button>`;
+    };
+
+    this.el.innerHTML = `
+      <span class="ps-thumb" aria-hidden="true"></span>
+      ${seg('commit', 'commit', `
+        <span class="ps-branch-icon" aria-hidden="true">${_iconBranch()}</span>
+        <span class="ps-branch-name">${_esc(rightBranch || rightLabel)}</span>
+      `, false)}
+      ${seg('editor', 'code', `
+        <span class="ps-diff-role" aria-hidden="true">L</span>
+        <span class="ps-title">${_esc(leftLabel)}</span>
+      `, true)}
+      ${seg('render', 'render', `
+        <span class="ps-diff-role" aria-hidden="true">R</span>
+        <span class="ps-title">${_esc(rightLabel)}</span>
+      `, true)}
+      <div class="ps-menu ps-menu-${this._openMenu ?? 'none'}${this._openMenu ? ' open' : ''}" role="menu">
+        ${this._openMenu === 'code' ? this._renderSidePicker('left')
+          : this._openMenu === 'render' ? this._renderSidePicker('right') : ''}
+      </div>`;
+
+    this._bindDiff();
+  }
+
+  /** A commit picker for one diff side: "Current" (left only) + all commits, all branches. */
+  _renderSidePicker(side) {
+    const vcs = state.vcs;
+    const cur = side === 'left' ? state.diff.left : state.diff.right;
+    const branches = vcs?.listBranches?.() ?? [];
+
+    const item = (hash, name) => `
+      <button class="ps-menu-item${hash === cur ? ' current' : ''}" data-act="pick" data-side="${side}" data-hash="${_esc(hash)}" role="menuitem">
+        <span class="ps-menu-ic">${hash === cur ? '●' : '○'}</span>
+        <span class="ps-menu-name">${_esc(name)}</span>
+        <span class="ps-menu-hash">${hash === WORKING ? '' : _esc(shortHash(hash))}</span>
+      </button>`;
+
+    let html = '';
+    if (side === 'left') html += item(WORKING, 'Current');
+    for (const b of branches) {
+      const log = vcs.log(b.name);   // newest first
+      if (!log.length) continue;
+      html += `<div class="ps-menu-label">${_esc(b.name)}</div>`;
+      html += log.map(c => item(c.hash, c.message || '(no message)')).join('');
+    }
+    return html || '<div class="ps-menu-empty">No commits.</div>';
+  }
+
+  _bindDiff() {
+    this.el.querySelectorAll('.ps-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); this._onDiffSegment(btn.dataset.pane); });
+    });
+    this.el.querySelectorAll('.ps-menu-item').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const { side, hash } = el.dataset;
+        if (side === 'left') state.openDiff(hash, state.diff.right);
+        else state.openDiff(state.diff.left, hash);
+        this._closeMenu();
+      });
+    });
+  }
+
+  _onDiffSegment(pane) {
+    if (pane !== this._active) { this._openMenu = null; state.emit('mobile-goto-pane', pane); return; }
+    if (pane === 'commit') { this._openMenu = null; this.render(); return; }  // no menu — the log pane is the picker
+    const menuKey = pane === 'editor' ? 'code' : 'render';
+    this._openMenu = this._openMenu === menuKey ? null : menuKey;
+    this.render();
   }
 
   _renderMenu(which) {

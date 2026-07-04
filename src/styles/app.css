@@ -887,6 +887,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 }
 .dd-commit-item:hover { background: var(--bg-surface); }
 .dd-commit-item.current { border-left: 3px solid var(--accent); }
+/* The commit selected as the RIGHT (source) side of an open diff. */
+.dd-commit-item.selected { background: var(--bg-surface); box-shadow: inset 3px 0 0 var(--warning, #f9e2af); }
 
 .dd-commit-meta {
   display: flex;
@@ -1112,8 +1114,19 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   .ps-menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
   .ps-menu-empty { padding: 10px; color: var(--text-muted); font-size: 13px; font-style: italic; }
 
-  /* The switcher is a modal overlay's dead weight during a commit diff — hide it. */
-  #unifile-app[data-diff] #uf-pane-switch { display: none; }
+  /* In diff mode the switcher stays: its segments become the diff pickers
+     (commit · middle/target · right/source).  On mobile the diff is three
+     single-column panes driven by [data-mobile-pane], NOT the desktop 2-col. */
+  #unifile-app[data-diff] #uf-diff { display: none !important; }
+  #unifile-app[data-diff][data-mobile-pane="commit"] #uf-commit-log,
+  #unifile-app[data-diff][data-mobile-pane="editor"] #uf-diff-mid,
+  #unifile-app[data-diff][data-mobile-pane="render"] #uf-diff-right {
+    display: flex !important;
+    flex-direction: column;
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
 
   /* The status-bar (safe-area) inset lives on the shell itself, not on any bar,
      so whichever element is topmost sits below the notch — the title bar when
@@ -1178,6 +1191,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
      switcher's commit menu). Only ABC's transport shows, on editor/render. */
   #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-bottom { display: block; }
   #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-transport { display: flex; }
+  /* Diff mode: the contextual diff action bar (#uf-diff-bar) lives here too. */
+  #unifile-app[data-diff] #uf-bottom { display: block; }
 
   /* iOS: ≥16px on focusable controls prevents Safari's zoom-on-focus. */
   .cm-content, .topbar-title, .pf-midi-select, .usn-input,
@@ -1209,7 +1224,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
    it (plus the landscape notch inset). ── */
 @media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
   #uf-main { padding-right: calc(52px + env(safe-area-inset-right, 0px)); }
-  #unifile-app[data-diff] #uf-main { padding-right: 0; }
 
   #uf-pane-switch {
     position: absolute;
@@ -2374,6 +2388,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
    ============================================================== */
 #uf-diff { display: none; }
 #uf-diff-bar { display: none; }
+/* Mobile single-column diff panes — desktop uses the two-column #uf-diff. */
+#uf-diff-mid, #uf-diff-right { display: none; }
 
 #unifile-app[data-diff] #uf-diff {
   display: flex;
@@ -2436,6 +2452,39 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   background: var(--accent); border: none; border-radius: var(--radius-sm);
   color: var(--bg); font-family: var(--font-ui); font-size: 13px; padding: 5px 12px; cursor: pointer;
 }
+
+/* ── Mobile single-column diff panes (#uf-diff-mid / #uf-diff-right) ──────── */
+.dvp-head {
+  flex-shrink: 0; padding: 6px 10px; border-bottom: 1px solid var(--border);
+  font-family: var(--font-ui); font-size: 12px; font-weight: 600; color: var(--text-sub);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--bg-alt);
+}
+.dvp-scroll {
+  flex: 1; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12.5px; line-height: 1.5;
+}
+.dvp-line { display: flex; white-space: pre; }
+.dvp-no {
+  flex: 0 0 auto; min-width: 34px; padding: 0 8px; text-align: right;
+  color: var(--text-muted); user-select: none;
+}
+.dvp-code { flex: 1; padding: 0 8px; color: var(--text); }
+#uf-diff-mid   .dvp-del    { background: rgba(243,139,168,.18); }
+#uf-diff-mid   .dvp-change { background: rgba(243,139,168,.13); }
+#uf-diff-right .dvp-add    { background: rgba(166,227,161,.18); }
+#uf-diff-right .dvp-change { background: rgba(166,227,161,.13); }
+
+/* ── Mobile diff bottom-bar action buttons (contextual per active pane) ──── */
+.db-mobile { gap: 8px; }
+.db-btn {
+  flex: 0 0 auto; border-radius: var(--radius-sm); font-family: var(--font-ui);
+  font-size: 13px; padding: 6px 14px; cursor: pointer; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text);
+}
+.db-btn.db-branch { border-color: var(--accent); color: var(--accent); }
+.db-btn.db-merge { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.db-btn.db-merge[disabled] { opacity: .4; cursor: not-allowed; }
+.db-btn.db-exit { margin-left: auto; }
 
 /* ── Preview footer buttons (.pf-btn) ────────────────────────── */
 .pf-btn {

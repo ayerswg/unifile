@@ -43,6 +43,9 @@ export class TopBar {
 
     this._unsub.push(state.on('change', () => this.render()));
     this._unsub.push(state.on('content-change', () => this._updateDirty()));
+    // Refresh the mobile commit-log pane's selected-commit highlight as the diff
+    // selection changes (diff-change doesn't emit the generic 'change' event).
+    this._unsub.push(state.on('diff-change', () => this._refreshCommitLog()));
 
     this.render();
   }
@@ -323,13 +326,17 @@ export class TopBar {
     const exportedHash = mark?.headHash ?? null;
     const exportedWhen = mark?.at ? formatRelative(mark.at) : '';
 
+    // While a diff is open, mark the commit currently selected as its RIGHT
+    // (source) side so the commit-log pane shows what's being compared/merged.
+    const selectedHash = state.diff?.right && state.diff.right !== 'WORKING' ? state.diff.right : null;
+
     return `
       <div class="dd-section-label">
         Commits <span class="dd-branch-ctx">on ${escHtml(state.currentBranch)}</span>
       </div>
       <ul class="dd-commit-list">
         ${log.map(c => `
-          <li class="dd-commit-item${c.hash === currentHash ? ' current' : ''}${c.hash === exportedHash ? ' exported' : ''}"
+          <li class="dd-commit-item${c.hash === currentHash ? ' current' : ''}${c.hash === exportedHash ? ' exported' : ''}${c.hash === selectedHash ? ' selected' : ''}"
             data-hash="${c.hash}">
             <div class="dd-commit-meta">
               <span class="dd-commit-hash">${shortHash(c.hash)}</span>
@@ -561,11 +568,15 @@ export class TopBar {
     this._commitOpen = false;
     this._syncDropdowns?.();
     if (!hash) return;
+    // Already diffing → the clicked commit becomes the RIGHT (source) side,
+    // keeping the current LEFT (target) selection.
+    if (state.diff) { state.openDiff(state.diff.left, hash); return; }
     // Nothing to compare if this commit's content IS the current working state
     // (e.g. clicking the head with no uncommitted changes).
     if (state.vcs?.getContentAt(hash) === state.currentContent) return;
-    // Old (the clicked commit) on the left, new (working state) on the right.
-    state.openDiff(hash, 'WORKING');
+    // Working state = LEFT (middle / merge target), clicked commit = RIGHT
+    // (merge source). Merge is always right → left.
+    state.openDiff('WORKING', hash);
   }
 
   _onCheckout(hash) {
