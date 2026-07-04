@@ -32,7 +32,7 @@ import { Preview } from './preview.js';
 import { DslFooter } from './dsl-footer.js';
 import { mountSiteNav } from './site-nav.js';
 import { checkForUpdate } from './update-check.js';
-import { CommitBar } from './commit-bar.js';
+import { PaneSwitch } from './pane-switch.js';
 import { DiffView, DiffBar } from './diff-view.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
@@ -194,7 +194,6 @@ export class App {
       </div>
       <div id="uf-bottom">
         <div id="uf-transport"></div>
-        <div id="uf-commit-bar"></div>
         <div id="uf-diff-bar"></div>
       </div>
       <div id="uf-panels">
@@ -263,9 +262,11 @@ export class App {
     // The DSL transport is a global bottom bar (sticks to the screen bottom and
     // is visible in both the editor and preview panes), not a per-pane footer.
     this._components.dslFooter = new DslFooter(document.getElementById('uf-transport'));
-    // Mobile commit bar — the bottom bar shown on the commit (left) pane.
-    this._components.commitBar = new CommitBar(
-      document.getElementById('uf-commit-bar'), { onCommit: handlers.onCommit }
+    // Mobile pane switcher — the whole top chrome on phones (segments = tabs +
+    // context + dropdown menus). Owns branch switching, the DSL/tools menu and
+    // exports; replaces the mobile top bar, hamburger and commit-pane bottom bar.
+    this._components.paneSwitch = new PaneSwitch(
+      document.getElementById('uf-pane-switch'), handlers
     );
     // Read-only commit diff view + its bottom-bar picker.
     this._components.diffView = new DiffView(document.getElementById('uf-diff'));
@@ -517,110 +518,19 @@ export class App {
     document.addEventListener('focusout', () => setTimeout(reset, 50));
   }
 
-  /**
-   * iOS-style collapsing header.  On mobile the title bar (`#uf-topbar`) auto-
-   * hides as you scroll DOWN through a pane and slides back when you scroll UP or
-   * reach the top, reclaiming its height.  The pane switcher stays pinned.
-   *
-   * A single capturing `scroll` listener catches every inner scroller (CM
-   * `.cm-scroller`, preview, commit log) since scroll doesn't bubble but DOES
-   * propagate in the capture phase.
-   *
-   * Hardened against the three things that made an earlier version bounce on iOS:
-   *   1. **Typing.** CodeMirror scrolls to keep the caret visible on every
-   *      keystroke.  While the editor/an input is focused we freeze the header
-   *      (`_editing`), so typing never toggles it.
-   *   2. **Feedback loop.** Collapsing the bar resizes `#uf-main` → the scroller
-   *      emits a scroll → which would re-toggle.  A `COOLDOWN` after each toggle
-   *      swallows that reflow-scroll.
-   *   3. **Jitter / rubber-band.** We accumulate travel in one direction and only
-   *      toggle past a threshold (hysteresis), instead of reacting to each delta.
-   */
-  _setupHeaderAutoHide() {
-    const root = document.getElementById('unifile-app');
-    if (!root) return;
-
-    let hidden = false;
-    let lastToggle = 0;
-    let accum = 0;                 // signed scroll travel in the current direction
-    const HIDE_AT  = 40;           // downward travel before hiding
-    const SHOW_AT  = 24;           // upward travel before revealing
-    const TOP_ZONE = 8;            // always shown when parked near the top
-    const COOLDOWN = 320;          // ms ≥ the collapse transition — kills the reflow re-toggle
-
-    const setHidden = (h) => {
-      if (h === hidden) return;
-      const now = performance.now();
-      if (now - lastToggle < COOLDOWN) return;
-      hidden = h; lastToggle = now; accum = 0;
-      root.toggleAttribute('data-header-hidden', h);
-    };
-    // Programmatic reveal (pane switch, top of scroll, diff) — bypasses cooldown.
-    this._revealHeader = () => { hidden = false; accum = 0; root.removeAttribute('data-header-hidden'); };
-
-    // Freeze the header while the user is typing (keyboard up): caret-tracking
-    // scrolls and keyboard viewport resizes must not move it.
-    this._editing = false;
-    const EDITABLE = '.cm-content, input, textarea, [contenteditable="true"]';
-    root.addEventListener('focusin', (e) => {
-      if (e.target.closest?.(EDITABLE)) this._editing = true;
-    });
-    root.addEventListener('focusout', () => {
-      // Focus often hops between elements inside the editor — settle on a tick.
-      setTimeout(() => { this._editing = !!document.activeElement?.closest?.(EDITABLE); }, 0);
-    });
-
-    root.addEventListener('scroll', (e) => {
-      if (!_isMobile() || this._editing) return;
-      // The read-only diff hides the pane switcher — keep the header revealed.
-      if (root.hasAttribute('data-diff')) { if (hidden) this._revealHeader(); return; }
-      const el = e.target;
-      if (!(el instanceof HTMLElement)) return;
-      const st = el.scrollTop;
-      const dy = st - (el._ufHdrScroll ?? 0);
-      el._ufHdrScroll = st;
-      if (!dy) return;
-      if (st <= TOP_ZONE) { this._revealHeader(); return; }
-      if ((dy > 0) !== (accum > 0)) accum = 0;   // direction flipped — reset travel
-      accum += dy;
-      if (accum > HIDE_AT) setHidden(true);
-      else if (accum < -SHOW_AT) setHidden(false);
-    }, { capture: true, passive: true });
-
-    // Leaving mobile (rotate to desktop width) must never strand it collapsed.
-    _mql.addEventListener('change', (e) => { if (!e.matches) this._revealHeader(); });
-  }
 
   /**
-   * Markup for the mobile pane switcher — a thick segmented slider with an icon
-   * per pane (commit · code · render).  A sliding `.ps-thumb` sits behind the
-   * active button (driven purely by `data-mobile-pane` in CSS).  The render
-   * icon is DSL-specific (a music note for ABC) and refreshed on DSL change.
-   * Portrait: a horizontal bar under the top bar.  Landscape: a vertical rail
-   * pinned to the far right (see the landscape media query in app.css).
+   * The mobile pane switcher container.  The PaneSwitch component (pane-switch.js)
+   * fills it with the three context-carrying segments, their sliding thumb and
+   * the dropdown menus — it is the entire top chrome on phones.
    */
   _paneSwitchHtml() {
-    return `
-      <div id="uf-pane-switch" role="tablist" aria-label="Switch pane">
-        <span class="ps-thumb" aria-hidden="true"></span>
-        <button type="button" class="ps-btn" data-pane="commit" role="tab" aria-selected="false"
-          aria-label="Commit history" title="Commits">${_iconCommitPane()}</button>
-        <button type="button" class="ps-btn" data-pane="editor" role="tab" aria-selected="true"
-          aria-label="Code editor" title="Code">${_iconCodePane()}</button>
-        <button type="button" class="ps-btn ps-btn-render" data-pane="render" role="tab" aria-selected="false"
-          aria-label="Preview" title="Preview">${this._paneRenderIcon()}</button>
-      </div>`;
-  }
-
-  /** Icon for the render pane, chosen by the active DSL (ABC → music note). */
-  _paneRenderIcon() {
-    return _paneRenderIconFor(state.activeDslId ?? state.data?.dslType ?? 'markdown');
+    return `<div id="uf-pane-switch" role="tablist" aria-label="Switch pane"></div>`;
   }
 
   _setupMobilePanes() {
     this._trackViewportHeight();
     this._lockWindowScroll();
-    this._setupHeaderAutoHide();
 
     const logPane = document.getElementById('uf-commit-log');
     if (logPane && this._components.topbar?.mountCommitLog) {
@@ -631,38 +541,20 @@ export class App {
     const VALID = ['commit', 'editor', 'render'];
 
     // Show a single pane by setting `data-mobile-pane` — CSS displays only that
-    // pane (no horizontal scroll-snap strip; the old pull-between-panes gesture
-    // was unreliable).  Reveal the editor from display:none needs a CM6
-    // re-measure (it can't lay out while hidden).
+    // pane.  Revealing the editor from display:none needs a CM6 re-measure (it
+    // can't lay out while hidden).  The PaneSwitch component owns the segment
+    // UI + menus; we just drive the active-pane state here.
     const setPane = (pane) => {
       if (!VALID.includes(pane)) pane = 'editor';
       if (!_isMobile()) { root.removeAttribute('data-mobile-pane'); return; }
       root.setAttribute('data-mobile-pane', pane);
-      document.querySelectorAll('#uf-pane-switch .ps-btn').forEach(b =>
-        b.setAttribute('aria-selected', String(b.dataset.pane === pane)));
-      // Switching panes always brings the header back — its menu/branch controls
-      // must be reachable when you land on a fresh pane (iOS reveals the nav bar
-      // on any deliberate navigation).
-      this._revealHeader?.();
+      this._components.paneSwitch?.setActive(pane);
       if (pane === 'editor') requestAnimationFrame(() => this._components.editor?.refresh());
     };
 
-    // Tap a switcher button → jump straight to that pane.
-    document.getElementById('uf-pane-switch')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('.ps-btn');
-      if (btn) setPane(btn.dataset.pane);
-    });
-
-    // Programmatic pane jumps (e.g. topbar status chip → commit pane).
+    // Programmatic pane jumps (segment taps go via the PaneSwitch component,
+    // which emits this; dirty dot / other callers use it too).
     state.on('mobile-goto-pane', (pane) => setPane(pane));
-
-    // Keep the render-pane icon in sync with the active DSL (music note ↔ eye).
-    const syncRenderIcon = () => {
-      const btn = document.querySelector('#uf-pane-switch .ps-btn-render');
-      if (btn) btn.innerHTML = this._paneRenderIcon();
-    };
-    state.on('change', syncRenderIcon);
-    state.on('active-section-change', syncRenderIcon);
 
     // The bottom bar is an in-flow flex child at the end of the `100dvh`
     // #unifile-app column (see app.css), so it sits flush at the true visible
@@ -1106,68 +998,5 @@ function _chevronRight2() {
     <polyline points="1,1 5,6 1,11"/>
     <polyline points="5,1 9,6 5,11"/>
   </svg>`;
-}
-
-// ---------------------------------------------------------------------------
-// Mobile pane-switcher icons (commit · code · render).  The render icon is
-// DSL-specific — ABC shows a music note, everything else a preview "eye".
-// ---------------------------------------------------------------------------
-
-/** Git-commit node — the commit-history pane. */
-function _iconCommitPane() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <circle cx="12" cy="12" r="3.5"/>
-    <line x1="1.5" y1="12" x2="8.5" y2="12"/>
-    <line x1="15.5" y1="12" x2="22.5" y2="12"/>
-  </svg>`;
-}
-
-/** Angle brackets `</>` — the code-editor pane. */
-function _iconCodePane() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <polyline points="8,7 3,12 8,17"/>
-    <polyline points="16,7 21,12 16,17"/>
-  </svg>`;
-}
-
-/** Music note — the render pane for ABC notation documents. */
-function _iconMusicNote() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M9 18V5l11-2v13"/>
-    <circle cx="6" cy="18" r="3"/>
-    <circle cx="17" cy="16" r="3"/>
-  </svg>`;
-}
-
-/** Preview "eye" — the render pane for text-ish documents (Markdown, slides…). */
-function _iconEye() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/>
-    <circle cx="12" cy="12" r="3"/>
-  </svg>`;
-}
-
-/** Nodes-and-edges — the render pane for diagram DSLs (Mermaid). */
-function _iconDiagram() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <rect x="8" y="3" width="8" height="5" rx="1"/>
-    <rect x="3" y="16" width="7" height="5" rx="1"/>
-    <rect x="14" y="16" width="7" height="5" rx="1"/>
-    <path d="M12 8v4M12 12H6.5v4M12 12h5.5v4"/>
-  </svg>`;
-}
-
-/** Pick the render-pane icon for a DSL id. */
-function _paneRenderIconFor(dslId) {
-  switch (dslId) {
-    case 'abcjs':   return _iconMusicNote();
-    case 'mermaid': return _iconDiagram();
-    default:        return _iconEye();
-  }
 }
 

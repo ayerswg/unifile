@@ -395,10 +395,6 @@ html, body {
   text-overflow: clip;
 }
 
-/* Mobile-only top-bar bits — desktop uses the .topbar-right pill group instead. */
-.tb-status-chip { display: none; }
-.tb-dirty { display: none; }
-
 /* DSL type icon — small muted icon to the left of the title (legacy, kept for reference) */
 .dsl-icon {
   flex-shrink: 0;
@@ -1029,27 +1025,54 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     display: flex;
     flex-shrink: 0;
     position: relative;
+    z-index: 60;                   /* so the dropdown menus paint above #uf-main */
     background: var(--bg-alt);
     box-shadow: 0 1px 0 var(--border);
   }
   .ps-btn {
     flex: 1 1 0;
+    min-width: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 5px;
     background: none;
     border: none;
-    padding: 0;
+    padding: 0 18px;               /* clear the absolute caret */
     color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: 13px;
     cursor: pointer;
     position: relative;
     z-index: 1;                    /* above the sliding thumb */
     -webkit-tap-highlight-color: transparent;
     transition: color .18s ease;
   }
-  .ps-btn svg { width: 19px; height: 19px; }
+  .ps-render-icon svg { width: 19px; height: 19px; display: block; }
+  .ps-branch-icon { display: inline-flex; flex: 0 0 auto; }
+  .ps-branch-icon svg { width: 12px; height: 12px; display: block; opacity: .8; }
+  .ps-branch-name, .ps-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ps-btn[aria-selected="true"] { color: var(--accent); }
-  .ps-btn:active { color: var(--text); }
+  .ps-btn:not([aria-selected="true"]):active { color: var(--text); }
+
+  /* Dirty dot sits inline, right after the branch name (rendered only when
+     there are uncommitted changes). The soft ring echoes git's modified state. */
+  .ps-dirty-dot {
+    flex: 0 0 auto;
+    width: 8px; height: 8px; border-radius: 999px; background: var(--pending);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pending) 22%, transparent);
+  }
+  .ps-dirty-dot.detached { background: var(--warning, #d20f39); }
+
+  /* Caret (chevron) appears only on the active segment — it opens a menu. */
+  .ps-caret {
+    position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+    display: inline-flex; opacity: 0; pointer-events: none;
+    transition: opacity .15s ease;
+  }
+  .ps-caret svg { width: 13px; height: 13px; display: block; }
+  .ps-btn.active .ps-caret { opacity: .85; }
+
   .ps-thumb {
     position: absolute;
     background: color-mix(in srgb, var(--accent) 18%, transparent);
@@ -1057,6 +1080,38 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     transition: transform .2s ease;
     pointer-events: none;
   }
+
+  /* ── Dropdown menus — open below the active segment ── */
+  .ps-menu {
+    display: none;
+    position: absolute; top: 100%; margin-top: 4px;
+    min-width: 210px; max-width: min(88vw, 360px);
+    background: var(--bg-alt); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); box-shadow: 0 8px 26px rgba(0,0,0,.4);
+    padding: 4px; z-index: 60; max-height: 70vh; overflow-y: auto;
+  }
+  .ps-menu.open { display: block; }
+  .ps-menu-commit { left: 4px; }
+  .ps-menu-code   { left: 50%; transform: translateX(-50%); }
+  .ps-menu-render { right: 4px; }
+  .ps-menu-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--text-muted); padding: 6px 10px 4px;
+  }
+  .ps-menu-item {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    background: none; border: none; color: var(--text); font-family: var(--font-ui);
+    font-size: 15px; padding: 11px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  }
+  .ps-menu-item:active, .ps-menu-item.current { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .ps-menu-item.disabled { opacity: .4; pointer-events: none; }
+  .ps-menu-item.ps-menu-accent, .ps-menu-accent .ps-menu-ic { color: var(--accent); }
+  .ps-menu-ic { flex: 0 0 auto; width: 14px; text-align: center; color: var(--accent); font-size: 12px; }
+  .ps-menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ps-menu-hash { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+  .ps-menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+  .ps-menu-empty { padding: 10px; color: var(--text-muted); font-size: 13px; font-style: italic; }
+
   /* The switcher is a modal overlay's dead weight during a commit diff — hide it. */
   #unifile-app[data-diff] #uf-pane-switch { display: none; }
 
@@ -1068,64 +1123,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app { padding-top: env(safe-area-inset-top, 0px); background: var(--bg-alt); }
 
   #uf-site-nav { order: -3; }
-  /* Layout order: title bar (top, collapsible) then pane switcher (pinned).
-     The title bar auto-hides on scroll (iOS-style collapsing nav) to reclaim its
-     height — see App._setupHeaderAutoHide. `height` (not max-height) so the
-     collapse animates; the inner .topbar is 44px + a 1px border. */
-  #uf-topbar {
-    order: -2;
-    overflow: hidden;
-    height: calc(var(--topbar-h) + 1px);
-    transition: height .22s ease, opacity .18s ease;
-  }
-  #unifile-app[data-header-hidden] #uf-topbar {
-    height: 0;
-    opacity: 0;
-    pointer-events: none;
-  }
-  /* The switcher is hidden during a commit diff, so pin the header open then —
-     nothing scrolls to bring it back. */
-  #unifile-app[data-diff] #uf-topbar { height: calc(var(--topbar-h) + 1px); opacity: 1; }
-
-  /* ── Top bar: [☰]  centred title  [• dirty dot]. The branch/commit chrome
-     moved into the commit pane; the top bar is now pure identity. ── */
-  .topbar-right { display: none !important; }
-  .tb-hamburger { flex: 0 0 auto; width: 30px; }
-  .topbar-title {
-    flex: 1 1 auto;
-    max-width: none;
-    min-width: 2ch;
-    text-align: center;     /* dead-centre between the hamburger and the dot */
-  }
-
-  /* Dirty dot on the far right — a fixed-width twin of the hamburger so the
-     title stays centred. Only the dot inside appears when there are changes. */
-  .tb-dirty {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    background: none;
-    border: none;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .tb-dirty .tb-dirty-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 999px;
-    background: var(--pending);   /* git-style orange = uncommitted/modified */
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pending) 22%, transparent);
-    opacity: 0;             /* invisible when clean, but the button holds its width */
-    transform: scale(.6);
-    transition: opacity .15s ease, transform .15s ease;
-  }
-  .tb-dirty.show .tb-dirty-dot { opacity: 1; transform: scale(1); }
-  .tb-dirty.detached .tb-dirty-dot { background: var(--warning, #d20f39); opacity: 1; transform: scale(1); }
-  .tb-dirty:active { background: var(--bg-overlay); border-radius: 999px; }
+  /* The whole top bar is gone on mobile — its title, hamburger menu and dirty
+     indicator all moved into the pane switcher, which is now the sole top chrome
+     (topmost element below the safe-area inset). Desktop keeps the top bar. */
+  #uf-topbar { display: none; }
 
   /* ── Editor gutter: a SINGLE thin rail (no line numbers). The current line
      shows as a full-width accent segment, a commented line yellow, and YAML
@@ -1170,12 +1171,11 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   /* #uf-bottom prefix raises specificity above the desktop `#uf-transport` rule. */
-  #uf-bottom #uf-transport, #uf-bottom #uf-commit-bar { display: none; }
+  #uf-bottom #uf-transport { display: none; }
   /* #uf-bottom owns the safe-area inset on mobile — don't double it on the child. */
   #uf-bottom #uf-transport { padding-bottom: 0; }
-  /* commit pane → commit bar (any DSL); editor/render of an ABC doc → transport */
-  #unifile-app[data-mobile-pane="commit"] #uf-bottom { display: block; }
-  #unifile-app[data-mobile-pane="commit"] #uf-commit-bar { display: block; }
+  /* The commit pane has NO bottom bar now (branch picker moved into the pane
+     switcher's commit menu). Only ABC's transport shows, on editor/render. */
   #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-bottom { display: block; }
   #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-transport { display: flex; }
 
@@ -1238,44 +1238,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-mobile-pane="editor"] .ps-thumb { transform: translateY(50px); }
   #unifile-app[data-mobile-pane="render"] .ps-thumb { transform: translateY(100px); }
 }
-
-/* ── Commit-pane bottom bar: the branch selector (drop-up) ─────── */
-.cbb { position: relative; padding: 6px 10px; }
-.cbb-branch {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
-  color: var(--text); font-family: var(--font-ui); font-size: 13px; line-height: 1;
-  padding: 7px 11px; cursor: pointer; -webkit-tap-highlight-color: transparent;
-}
-.cbb-branch svg { flex: 0 0 auto; opacity: .8; }
-.cbb-branch .cbb-caret { color: var(--text-muted); font-size: 10px; }
-.cbb-branch.detached { color: var(--warning, #d20f39); border-color: currentColor; }
-.cbb-branch:active { background: var(--bg-overlay); }
-/* Drop-UP menu (bottom bar → opens upward). */
-.cbb-menu {
-  display: none;
-  position: absolute; left: 10px; bottom: calc(100% + 4px);
-  min-width: 200px; max-width: min(78vw, 340px);
-  background: var(--bg-alt); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); box-shadow: 0 -6px 20px rgba(0,0,0,.35);
-  padding: 4px; z-index: 40; max-height: 50vh; overflow-y: auto;
-}
-.cbb-menu.open { display: block; }
-.cbb-menu-label {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--text-muted); padding: 6px 8px 4px;
-}
-.cbb-item {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  background: none; border: none; color: var(--text); font-family: var(--font-ui);
-  font-size: 14px; padding: 9px 8px; border-radius: var(--radius-sm); cursor: pointer;
-}
-.cbb-item:active, .cbb-item.current { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.cbb-item-icon { flex: 0 0 auto; width: 12px; text-align: center; color: var(--accent); font-size: 11px; }
-.cbb-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cbb-item-hash { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
-.cbb-new { border-top: 1px solid var(--border); margin-top: 2px; color: var(--accent); }
-.cbb-new .cbb-item-icon { color: var(--accent); }
 
 /* ── Commit-log pane contents ─────────────────────────────────── */
 .commit-log-pane { padding: 10px 12px 28px; }

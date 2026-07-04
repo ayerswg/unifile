@@ -103,17 +103,6 @@ export class TopBar {
           </div>
         </div>
 
-        <!-- Mobile-only: a dot that appears when there are uncommitted changes.
-             Tap it to jump to the commit pane (branch + commit history live there
-             now). Always in the DOM — hidden when clean — so it balances the left
-             hamburger and keeps the title centred. Hidden on desktop, where the
-             .topbar-right pill group is shown instead. -->
-        <button class="tb-dirty${isDirty ? ' show' : ''}${isDetached ? ' detached' : ''}"
-          id="tb-dirty"
-          aria-label="${isDetached ? 'Detached HEAD — tap to review history' : (isDirty ? 'Uncommitted changes — tap to review' : 'All changes committed')}"
-          title="${isDetached ? 'Detached HEAD — tap to review history' : (isDirty ? 'Uncommitted changes — tap to review' : 'All changes committed')}">
-          <span class="tb-dirty-dot" aria-hidden="true"></span>
-        </button>
       </div>
 
       <div class="vcs-dropdown dsl-menu-dropdown${this._dslMenuOpen ? ' open' : ''}" id="tb-dsl-menu-dd">
@@ -224,8 +213,6 @@ export class TopBar {
   }
 
   _updateDirty() {
-    // Mobile dirty dot: cheap toggle, no re-render.
-    this.el.querySelector('#tb-dirty')?.classList.toggle('show', state.isDirty);
     // Desktop: the commit pill structure changes fundamentally when dirty flips
     // (single button ↔ split button), so that path needs a full re-render.
     const hasSplitBtn = !!this.el.querySelector('#tb-commit-action');
@@ -384,15 +371,6 @@ export class TopBar {
     const commitActionBtn = this.el.querySelector('#tb-commit-action');
     if (commitActionBtn) {
       commitActionBtn.addEventListener('click', () => state.openPanel(PANELS.COMMIT));
-    }
-
-    // Mobile dirty dot → jump to the commit pane (where branch + history live).
-    const dirtyBtn = this.el.querySelector('#tb-dirty');
-    if (dirtyBtn) {
-      dirtyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        state.emit('mobile-goto-pane', 'commit');
-      });
     }
 
     // DSL menu toggle (far-left icon button)
@@ -737,7 +715,7 @@ function iconNewDoc() {
 // durable .unifile.json copy) and require an explicit destructive confirm.
 // ---------------------------------------------------------------------------
 
-function showNewDocumentModal(handlers) {
+export function showNewDocumentModal(handlers) {
   const overlay = document.createElement('div');
   overlay.className = 'dsl-help-overlay';
 
@@ -1184,7 +1162,7 @@ h1 {
   }
 };
 
-function showDslHelpModal(dslType) {
+export function showDslHelpModal(dslType) {
   const help = DSL_HELP[dslType] ?? DSL_HELP.markdown;
 
   // Build sections HTML
@@ -1233,7 +1211,7 @@ function showDslHelpModal(dslType) {
 // Modal to configure a built-in DSL's extension slots (e.g. the ABC soundfont).
 // There is no runtime plugin installation — every build bundles its one DSL — so
 // this only surfaces the extensionSlots declared by the DSLs in this build.
-function showExtensionsModal() {
+export function showExtensionsModal() {
   const overlay = document.createElement('div');
   overlay.className = 'dsl-help-overlay';
 
