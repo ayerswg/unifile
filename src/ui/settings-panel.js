@@ -123,12 +123,6 @@ export class SettingsPanel {
 
             <!-- ── Updates ────────────────────────────────────────────── -->
             <div class="settings-section-label">Updates</div>
-            <label class="settings-check">
-              <input type="checkbox" id="settings-rc" ${prefs.updateChannel === 'rc' ? 'checked' : ''}>
-              <span>Receive release candidates
-                <small>Get pre-release (rc) builds early. Off = stable releases only.</small>
-              </span>
-            </label>
             <div class="settings-update-row">
               <button class="btn btn-ghost" id="settings-check-update" type="button">Check for updates</button>
               <span class="settings-update-status" id="settings-update-status" aria-live="polite"></span>
@@ -186,14 +180,6 @@ export class SettingsPanel {
           b.classList.toggle('active', b.dataset.themePref === pref);
         });
       });
-    });
-
-    // Release-candidate opt-in — saved immediately, then re-check so opting in
-    // can surface a pending RC right away.
-    const rcToggle = this.el.querySelector('#settings-rc');
-    rcToggle?.addEventListener('change', () => {
-      saveUserPrefs({ updateChannel: rcToggle.checked ? 'rc' : 'stable' });
-      this._checkUpdate();
     });
 
     // Manual "Check for updates" — forces a cache-busting check.

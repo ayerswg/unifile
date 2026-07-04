@@ -18,6 +18,7 @@
   --accent-2:    #cba6f7;   /* mauve */
   --success:     #a6e3a1;
   --warning:     #f9e2af;
+  --pending:     #fab387;   /* peach — uncommitted / modified (git's intermediate stage) */
   --error:       #f38ba8;
   --green:       #a6e3a1;
   --red:         #f38ba8;
@@ -72,6 +73,7 @@
     --accent-2:    #8839ef;
     --success:     #40a02b;
     --warning:     #df8e1d;
+    --pending:     #fe640b;   /* peach — uncommitted / modified */
     --error:       #d20f39;
 
     /* Syntax highlight tokens — Catppuccin Latte (light) */
@@ -114,6 +116,7 @@
   --accent-2:    #8839ef;
   --success:     #40a02b;
   --warning:     #df8e1d;
+  --pending:     #fe640b;   /* peach — uncommitted / modified */
   --error:       #d20f39;
 
   /* Syntax highlight tokens — Catppuccin Latte (light) */
@@ -155,6 +158,7 @@
   --accent-2:    #cba6f7;
   --success:     #a6e3a1;
   --warning:     #f9e2af;
+  --pending:     #fab387;   /* peach — uncommitted / modified */
   --error:       #f38ba8;
 }
 
@@ -1113,7 +1117,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     width: 9px;
     height: 9px;
     border-radius: 999px;
-    background: var(--accent);
+    background: var(--pending);   /* git-style orange = uncommitted/modified */
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pending) 22%, transparent);
     opacity: 0;             /* invisible when clean, but the button holds its width */
     transform: scale(.6);
     transition: opacity .15s ease, transform .15s ease;
@@ -1279,22 +1284,27 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 /* Pending (uncommitted) node — a hollow, dashed twin of a real commit that
    carries the (optional) message + version + commit action inline, so a commit
    is composed exactly where it will land in the history. */
+/* Orange (git's modified/intermediate stage) throughout so an uncommitted change
+   reads unmistakably as pending, not as a normal accent element. */
 .commit-log-pending {
   display: flex;
   gap: 10px;
-  padding: 4px 4px 14px;
+  padding: 10px 10px 14px;
   margin-bottom: 4px;
-  border-bottom: 1px dashed var(--border);
+  border: 1px solid color-mix(in srgb, var(--pending) 45%, transparent);
+  border-left: 3px solid var(--pending);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--pending) 9%, transparent);
 }
 .commit-log-pending .clp-graph { flex: 0 0 auto; display: flex; justify-content: center; width: 14px; padding-top: 4px; }
 .commit-log-pending .clp-node {
   width: 11px; height: 11px; border-radius: 999px;
-  border: 2px dashed var(--accent); background: transparent;
+  border: 2px dashed var(--pending); background: transparent;
 }
 .commit-log-pending .clp-body { flex: 1; min-width: 0; }
 .commit-log-pending .clp-label {
   font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
-  color: var(--accent); margin-bottom: 6px;
+  color: var(--pending); margin-bottom: 6px;
 }
 .clp-msg {
   width: 100%; box-sizing: border-box;
@@ -2016,6 +2026,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   --accent-2:    #8839ef;
   --success:     #40a02b;
   --warning:     #df8e1d;
+  --pending:     #fe640b;   /* peach — uncommitted / modified */
   --error:       #d20f39;
   --hl-heading:  #1e66f5;
   --hl-link:     #04a5e5;

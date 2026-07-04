@@ -60,7 +60,7 @@ src/
     commit-dialog.js Full commit dialog (identity + message + tag)
     diff-view.js     DiffView overlay + DiffBar (read-only commit diff)
     dsl-footer.js    ABC transport (play/scrub/time)
-    settings-panel.js  Identity, theme, updates (RC opt-in), audio output (MIDI)
+    settings-panel.js  Identity, theme, updates (check button), audio output (MIDI)
     blame-view.js, merge-dialog.js, export-dialog.js, comments.js, site-nav.js,
     theme.js, editor-theme.js, plugin-extensions.js, update-check.js
   styles/app.css     All app CSS (single file; mobile rules in @media(max-width:640px))
@@ -170,7 +170,9 @@ Version is the **latest git tag** (`git describe --tags --abbrev=0`, strip `v`),
 **Release flow:** `npm version X.Y.Z --no-git-tag-version` (bump package.json) → `git tag vX.Y.Z` → `npm run build:site` → commit → `git push origin main vX.Y.Z`. The site is served by **Cloudflare Pages** (project `unifile`, `unifile-8yt.pages.dev`), which auto-builds on push with `npm run build:site && npm run site:preview` → `docs/_site`.
 **Release candidates:** tag `vX.Y.Z-rc.N` per candidate, cut the bare `vX.Y.Z` when ready. (RC channel precedence needs the git tag list, which Cloudflare lacks — RCs are exercised locally / on GitHub where tags exist.)
 
-`sync-site.mjs` writes `version.json = { version(=stable), stable, latest, released }` (stable = highest non-pre-release tag; latest = highest overall). `update-check.js` compares with full **SemVer 2.0 precedence** (`_parse`/`_cmp`): `rc.2 > rc.1`, and a release outranks its pre-releases (`1.0.0 > 1.0.0-rc.2`). Users on the **stable** channel are only offered `stable`; opt into RCs in **Settings → Updates**. The check cache-busts `version.json` (`?_=ts`) to beat CDN staleness. **Settings → About** shows the running version.
+`sync-site.mjs` writes `version.json = { version(=stable), stable, latest, released }` (stable = highest non-pre-release tag; latest = highest overall). `update-check.js` compares with full **SemVer 2.0 precedence** (`_parse`/`_cmp`): `rc.2 > rc.1`, and a release outranks its pre-releases (`1.0.0 > 1.0.0-rc.2`). **There is no stable/RC channel split** — `_target()` offers the newest published version (`latest ?? stable ?? version`) to everyone (the old "Receive release candidates" opt-in was removed; on Cloudflare, which has no git tags, `stable`/`latest` both fall back to `package.json` anyway, so the split was inert in production). The check cache-busts `version.json` (`?_=ts`) to beat CDN staleness. **Settings → About** shows the running version.
+
+**PWA update apply (`update-check.js` `_applyUpdate` + `templates/sw.js`):** the "Update" button `reg.update()`s, messages the installing/waiting worker `'skipWaiting'`, and reloads on `controllerchange` (2 s fallback). **The SW precaches the shell with `cache: 'reload'`** — critical: without it a new worker would re-cache the STALE `app.js` the browser/CDN still held, so the "update" reloaded without bumping the version (and the toast came straight back). The SW also self-`skipWaiting()`s on install and handles a `'skipWaiting'` message.
 
 `git commit` messages end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 

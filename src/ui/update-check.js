@@ -7,7 +7,7 @@
  */
 
 import { state } from './state.js';
-import { loadUserPrefs, IS_QUINE } from '../core/storage.js';
+import { IS_QUINE } from '../core/storage.js';
 
 // Stamped by esbuild `define` in build.mjs; guard for any non-built context.
 const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
@@ -45,21 +45,14 @@ function _cmp(a, b) {
 /** Is `remote` a newer version than `local`? */
 function isNewer(remote, local) { return _cmp(remote, local) > 0; }
 
-/** True if the user has opted into the release-candidate channel (Settings). */
-export function isRcChannel() {
-  return loadUserPrefs().updateChannel === 'rc';
-}
-
 /**
- * Pick the version to compare against, honouring the user's channel:
- *   • stable channel → the latest stable (no pre-release)
- *   • rc channel     → the latest overall (may be a pre-release)
- * Falls back to the legacy single `version` field for older version.json files.
+ * The version to compare against: the latest published build.  There is no
+ * stable/RC channel split anymore — every push deploys one version and everyone
+ * is offered it.  (`latest`/`stable`/`version` are kept in version.json for
+ * backward-compat with older clients; here we just take the newest available.)
  */
 function _target(data) {
-  const stable = data.stable ?? data.version;
-  const latest = data.latest ?? data.version;
-  return isRcChannel() ? (latest ?? stable) : stable;
+  return data.latest ?? data.stable ?? data.version;
 }
 
 /**
@@ -113,13 +106,23 @@ async function _applyUpdate() {
     try {
       const reg = await navigator.serviceWorker.getRegistration();
       if (reg) {
-        await reg.update();                       // fetch the new sw.js if any
-        reg.waiting?.postMessage?.('skipWaiting'); // harmless if SW self-skips
         let reloaded = false;
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (!reloaded) { reloaded = true; location.reload(); }
+        const reloadOnce = () => { if (!reloaded) { reloaded = true; location.reload(); } };
+        // Reload as soon as the new worker takes control (it self-skips waiting).
+        navigator.serviceWorker.addEventListener('controllerchange', reloadOnce);
+
+        await reg.update();                        // fetch the new sw.js if any
+        // A worker may already be installed/waiting, or land during update() —
+        // nudge whichever it is to activate now.
+        (reg.waiting ?? reg.installing)?.postMessage?.('skipWaiting');
+        reg.addEventListener?.('updatefound', () => {
+          reg.installing?.addEventListener?.('statechange', function () {
+            if (this.state === 'installed') this.postMessage?.('skipWaiting');
+          });
         });
-        setTimeout(() => { if (!reloaded) location.reload(); }, 1200);
+        // Fallback: if there was no new worker to swap, reload anyway so a fresh
+        // shell (should the cache have updated) is picked up.
+        setTimeout(reloadOnce, 2000);
         return;
       }
     } catch { /* fall through to plain reload */ }
