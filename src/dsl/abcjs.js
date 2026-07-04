@@ -532,7 +532,7 @@ function _gmConfig(prog) {
  * in each note's midiPitches entry, so %%MIDI program directives in ABC
  * notation produce meaningfully different timbres.
  */
-function _scheduleOscillators(noteEvents, startSeconds, stopChar) {
+function _scheduleOscillators(noteEvents, startSeconds, stopMs) {
   const scheduleBase = _audioContext.currentTime + 0.05;
 
   for (let i = 0; i < noteEvents.length; i++) {
@@ -540,10 +540,9 @@ function _scheduleOscillators(noteEvents, startSeconds, stopChar) {
     const offsetSec  = event.milliseconds / 1000 - startSeconds;
     if (offsetSec < 0) continue;
 
-    if (stopChar !== null) {
-      const chars = event.startCharArray ?? (event.startChar !== undefined ? [event.startChar] : []);
-      if (chars.length > 0 && chars.every(c => c >= stopChar)) continue;
-    }
+    // Range mode: stop by time (voice-independent).  A char-based stop would
+    // skip whole voices, since one voice's char offsets never straddle another's.
+    if (stopMs !== null && event.milliseconds >= stopMs - 0.5) continue;
 
     const nextEv     = noteEvents[i + 1];
     const gapSec     = nextEv ? (nextEv.milliseconds - event.milliseconds) / 1000 : 1.0;
@@ -667,8 +666,8 @@ function _resolveMidiOut() {
 
 /**
  * Build a time-sorted MIDI message queue from abcjs note timings and start the
- * look-ahead pump.  `startSeconds` is the playback offset; `stopChar` (or null)
- * bounds a range selection.  `meterSize` converts note durations → milliseconds.
+ * look-ahead pump.  `startSeconds` is the playback offset; `stopMs` (or null)
+ * bounds a range selection by time.  `meterSize` converts note durations → ms.
  */
 // ---------------------------------------------------------------------------
 // Keyswitches → articulations (MIDI-out only)
@@ -877,7 +876,7 @@ function _emitSwitchEntry(msgs, entry, at, ch, hold, st) {
   if (entry.program != null) msgs.push({ at, bytes: [0xC0 | ch, Math.max(0, Math.min(127, entry.program))] });
 }
 
-function _startMidiPlayback(out, noteEvents, startSeconds, stopChar, meterSize, ksPlan) {
+function _startMidiPlayback(out, noteEvents, startSeconds, stopMs, meterSize, ksPlan) {
   _midiOut = out;
   _midiActiveNotes.clear();
   const t0 = performance.now() + MIDI_PREROLL_MS;
@@ -934,8 +933,9 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopChar, meterSize, 
         }
       }
 
-      // Range mode: skip notes at/after the selection end (state already updated).
-      if (stopChar !== null && sc !== undefined && sc >= stopChar) continue;
+      // Range mode: skip notes at/after the selection end by time (state already
+      // updated).  Time-based so a range in one voice doesn't drop the others.
+      if (stopMs !== null && ev.milliseconds >= stopMs - 0.5) continue;
       if (!played) continue; // before the entry point — no output, state is current
 
       // Fire the articulation keyswitch on change (force on first played note).
@@ -1079,7 +1079,7 @@ function _highlightEvent(event) {
 // position so the note lights up as it sounds rather than just after.  The lead
 // compensates render + audio-output latency; tune on-device if needed.
 const VISUAL_LEAD_MS = 40;
-let _visualStopChar = null;  // range-end char while playing (null = whole tune)
+let _visualStopMs   = null;  // range-end ms while playing (null = whole tune)
 let _visualIdx      = -1;    // last-highlighted event index (skip redundant work)
 
 // ── Score-level cursor + range overlay (render pane) ───────────────────────
@@ -1104,9 +1104,8 @@ function _applyVisualAt(targetMs) {
     if (_noteEvents[i].milliseconds <= targetMs) idx = i; else break;
   }
   // Range mode: never light a note at/after the range end (matches playback stop).
-  if (_visualStopChar !== null) {
-    const startsOf = e => e.startCharArray ?? [e.startChar];
-    while (idx >= 0 && startsOf(_noteEvents[idx]).every(c => c != null && c >= _visualStopChar)) idx--;
+  if (_visualStopMs !== null) {
+    while (idx >= 0 && _noteEvents[idx].milliseconds >= _visualStopMs - 0.5) idx--;
   }
   if (idx === _visualIdx) return;
   _visualIdx = idx;
@@ -1115,14 +1114,12 @@ function _applyVisualAt(targetMs) {
 
 // abcjs TimingCallbacks still runs during playback to detect the end of the tune
 // and the range stop point; the visual cursor is handled by _applyVisualAt.
-function _makeVisualEventCallback(stopChar) {
+function _makeVisualEventCallback(stopMs) {
   return (event) => {
     if (!event) { stopPlayback(); return; }
-    // Range mode: stop when all voices have passed the selection end.
-    if (stopChar !== null) {
-      const chars = event.startCharArray ?? (event.startChar !== undefined ? [event.startChar] : []);
-      if (chars.length > 0 && chars.every(c => c >= stopChar)) { stopPlayback(); return; }
-    }
+    // Range mode: stop once the moment's onset reaches the selection end (time-
+    // based, so a range confined to one voice still stops all voices together).
+    if (stopMs !== null && event.milliseconds >= stopMs - 0.5) { stopPlayback(); return; }
   };
 }
 
@@ -1392,19 +1389,44 @@ function _durationFromEvents() {
   return Math.round(last.milliseconds + beat);
 }
 
+// Flatten multi-voice note events into per-voice { startChar, endChar, ms }
+// entries sorted by startChar.  A timing `event` is a *moment* whose
+// startCharArray/endCharArray hold one entry per simultaneous voice — and those
+// voices live in completely different regions of the source (V:1's body, then
+// V:2's body far below).  Matching a document char with a cross-voice
+// `.some(c => c >= char)` therefore conflates regions: V:2's large offsets
+// satisfy a comparison meant for a V:1 char, so the "first note at/after char"
+// resolves to the wrong voice (usually the very first moment) and the range
+// collapses to the whole tune.  Flattening + sorting by startChar lets a char
+// map to the nearest note *in source order*, which is always the same voice.
+// Memoised on the current _noteEvents array (rebuilt each render).
+let _flatNotesCache = { src: null, list: [] };
+function _flatNotes() {
+  if (_flatNotesCache.src === _noteEvents) return _flatNotesCache.list;
+  const list = [];
+  for (const e of _noteEvents) {
+    const ss = e.startCharArray ?? (e.startChar !== undefined ? [e.startChar] : []);
+    const nn = e.endCharArray   ?? (e.endChar   !== undefined ? [e.endChar]   : []);
+    for (let i = 0; i < ss.length; i++) {
+      const s = ss[i];
+      if (s == null) continue;
+      list.push({ startChar: s, endChar: nn[i] ?? s + 1, ms: e.milliseconds });
+    }
+  }
+  list.sort((a, b) => a.startChar - b.startChar || a.ms - b.ms);
+  _flatNotesCache = { src: _noteEvents, list };
+  return list;
+}
+
 /** Section-relative char offset → playback ms: the note spanning `char`, else
- *  the first note starting at/after it.  null when no event matches. */
+ *  the first note starting at/after it (in source order, same voice).  null when
+ *  no event matches. */
 function _charToMs(char) {
-  if (!_noteEvents.length) return null;
-  const startsOf = e => e.startCharArray ?? [e.startChar];
-  const endsOf   = e => e.endCharArray   ?? [e.endChar];
-  const ev =
-    _noteEvents.find(e => {
-      const s = startsOf(e), n = endsOf(e);
-      return s.some((c, i) => c != null && c <= char && n[i] > char);
-    }) ??
-    _noteEvents.find(e => startsOf(e).some(c => c != null && c >= char));
-  return ev ? ev.milliseconds : null;
+  const flat = _flatNotes();
+  if (!flat.length) return null;
+  const ev = flat.find(n => n.startChar <= char && char < n.endChar)
+          ?? flat.find(n => n.startChar >= char);
+  return ev ? ev.ms : null;
 }
 
 /** The ms position playback is cued to for the current selection — where ▶ would
@@ -1422,16 +1444,27 @@ function _cueStartMs() {
   return 0;
 }
 
-/** Section-relative char → ms where a range that ENDS at `char` stops: the onset
- *  of the first note starting at/after `char` (the note playback halts on), else
- *  the tune end.  Unlike _charToMs this never resolves a trailing space / barline
- *  back to the preceding note, so a range whose end isn't on a note still yields
- *  endMs > startMs (otherwise the scrubber band collapses and disappears). */
-function _rangeStopMs(char) {
-  if (!_noteEvents.length) return _totalMs;
-  const startsOf = e => e.startCharArray ?? [e.startChar];
-  const ev = _noteEvents.find(e => startsOf(e).some(c => c != null && c >= char));
-  return ev ? ev.milliseconds : _totalMs;
+/** Map a section-relative char selection [from, to) → { startMs, endMs } in time,
+ *  or null when the selection overlaps no notes.  Uses the notes the selection
+ *  actually touches (interval overlap) rather than resolving the `to` char in
+ *  isolation: with multiple voices the char at `to` can fall past one voice's
+ *  region and into the *next* voice — whose first note sounds back at ms 0 —
+ *  which would collapse the range to the whole tune.  `endMs` is the onset of
+ *  the first note (any voice) that sounds strictly after the last selected note,
+ *  so playback/highlight stops right after the selected span; the tune end when
+ *  nothing follows. */
+function _selectionMsRange(from, to) {
+  const flat = _flatNotes();
+  if (!flat.length) return null;
+  const inSel = flat.filter(n => n.startChar < to && n.endChar > from);
+  if (!inSel.length) return null;
+  let startMs = Infinity, lastMs = -Infinity;
+  for (const n of inSel) { if (n.ms < startMs) startMs = n.ms; if (n.ms > lastMs) lastMs = n.ms; }
+  let endMs = _totalMs;
+  for (const n of flat) {
+    if (n.ms > lastMs + 0.5 && n.ms < endMs) endMs = n.ms;
+  }
+  return { startMs, endMs };
 }
 
 /**
@@ -1450,13 +1483,9 @@ function _syncTransportToSelection(from, to) {
   const selFrom = Math.max(0, from - _sectionOffset);
   const selTo   = Math.max(0, to   - _sectionOffset);
 
-  if (to > from) {
-    const startMs = _charToMs(selFrom);
-    if (startMs == null) return;               // selection is past the last note
-    // Range end → the onset of the note playback will stop on (first note at/after
-    // selTo).  Using _rangeStopMs (not _charToMs) keeps the band visible when the
-    // selection ends on a space / barline rather than exactly on a note.
-    const endMs = _rangeStopMs(selTo);
+  const range = to > from ? _selectionMsRange(selFrom, selTo) : null;
+  if (range) {
+    const { startMs, endMs } = range;
     _selRangeMs = { startMs, endMs };
     _pausedAtMs = startMs;
     _emitProgress(startMs);
@@ -1580,10 +1609,10 @@ async function startPlayback(opts = {}) {
   // noteTimings, so this MUST be called before creating any TimingCallbacks.
   try { tune.setUpAudio({}); } catch { /* best-effort — midiPitches may stay empty */ }
 
-  // ── 2.  Determine start seconds and optional stop char ───────────────────
+  // ── 2.  Determine start seconds and optional stop ms ─────────────────────
 
   let startSeconds = 0;
-  let stopChar     = null;
+  let stopMs       = null;
 
   let previewTc;
   try {
@@ -1592,41 +1621,33 @@ async function startPlayback(opts = {}) {
     return; // tune may be malformed
   }
 
-  // Use primary startChar for single-voice event matching; multi-voice events
-  // expose startCharArray / endCharArray with one entry per simultaneous voice.
   const noteEvents = (previewTc.noteTimings ?? []).filter(e => e.type === 'event');
 
+  // Char→ms mapping (via the flattened per-voice note list) is voice-aware: a
+  // selection in ANY voice resolves to the right note in source order, and the
+  // stop is a time bound so all voices sounding in the span play together.
   if (opts.startMs != null) {
     // Transport seek / resume: play the whole tune from an absolute position.
     startSeconds = Math.max(0, opts.startMs / 1000);
   } else if (selFrom !== selTo && selTo > selFrom) {
-    // Range selection: play from first note at/after selFrom.
-    const startEv = noteEvents.find(e => {
-      const chars = e.startCharArray ?? [e.startChar];
-      return chars.some(c => c !== undefined && c >= selFrom);
-    });
-    if (startEv) startSeconds = startEv.milliseconds / 1000;
-    stopChar = selTo;
+    // Range selection: start at the selection's first note, stop after its last.
+    const range = _selectionMsRange(selFrom, selTo);
+    if (range) {
+      startSeconds = range.startMs / 1000;
+      stopMs = range.endMs;
+    } else {
+      const sMs = _charToMs(selFrom);
+      if (sMs != null) startSeconds = sMs / 1000;
+    }
   } else if (selFrom > 0) {
-    // Cursor inside document: find the event whose note (in ANY voice) spans
-    // selFrom, else the first event starting at/after it.  Multi-voice events
-    // carry startCharArray/endCharArray with one entry per simultaneous voice;
-    // matching only the primary startChar would mis-locate a click on a second
-    // (e.g. bass-clef) voice and start playback at the wrong place.
-    const startsOf = e => e.startCharArray ?? [e.startChar];
-    const endsOf   = e => e.endCharArray   ?? [e.endChar];
-    const startEv =
-      noteEvents.find(e => {
-        const s = startsOf(e), n = endsOf(e);
-        return s.some((c, i) => c !== undefined && c <= selFrom && n[i] > selFrom);
-      }) ??
-      noteEvents.find(e => startsOf(e).some(c => c !== undefined && c >= selFrom));
-    if (startEv) startSeconds = startEv.milliseconds / 1000;
+    // Cursor inside document: play from the note under it to the end.
+    const sMs = _charToMs(selFrom);
+    if (sMs != null) startSeconds = sMs / 1000;
   }
   // else: cursor at 0 / no selection → play from beginning
 
   // Bound the wall-clock visual driver to the same range end as the audio.
-  _visualStopChar = stopChar;
+  _visualStopMs = stopMs;
 
   // ── 2.5  MIDI output path (replaces the internal synth when a port is set) ──
   //
@@ -1639,7 +1660,7 @@ async function startPlayback(opts = {}) {
     const meterSize = (mf.num / mf.den) || 1;
 
     _timingCallbacks = new abcjs.TimingCallbacks(tune, {
-      eventCallback: _makeVisualEventCallback(stopChar),
+      eventCallback: _makeVisualEventCallback(stopMs),
     });
 
     _playEl?.classList.add('abc-playing');
@@ -1647,7 +1668,7 @@ async function startPlayback(opts = {}) {
     state.emit('abc-play-state', { playing: true });
 
     const ksPlan = _buildKeyswitchPlan(tune);
-    _startMidiPlayback(midiOut, noteEvents, startSeconds, stopChar, meterSize, ksPlan);
+    _startMidiPlayback(midiOut, noteEvents, startSeconds, stopMs, meterSize, ksPlan);
     _timingCallbacks.start(startSeconds, 'seconds');
     _startProgress(startSeconds * 1000);
     return;
@@ -1726,14 +1747,14 @@ async function startPlayback(opts = {}) {
 
   if (!_synth) {
     // ── 3b.  Web Audio oscillator path (offline, no soundfont) ───────────
-    _scheduleOscillators(noteEvents, startSeconds, stopChar);
+    _scheduleOscillators(noteEvents, startSeconds, stopMs);
     _synth = { stop: () => {} };
   }
 
   // ── 4.  Timing callbacks (visual feedback only) ──────────────────────────
 
   _timingCallbacks = new abcjs.TimingCallbacks(tune, {
-    eventCallback: _makeVisualEventCallback(stopChar),
+    eventCallback: _makeVisualEventCallback(stopMs),
   });
 
   // ── 5.  Start ────────────────────────────────────────────────────────────
@@ -1773,7 +1794,7 @@ function stopPlayback(opts = {}) {
   try { _timingCallbacks?.stop(); } catch { /* ignore */ }
   _timingCallbacks = null;
   _stopProgress();
-  _visualStopChar = null;
+  _visualStopMs   = null;
   _visualIdx      = -1;
 
   // Silence + cancel any external MIDI routing.
