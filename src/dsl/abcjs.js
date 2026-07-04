@@ -1176,7 +1176,21 @@ function _setupScoreCursor(container) {
   } catch { /* ResizeObserver unsupported — box set once above */ }
 }
 
-/** Vertical extent {y, h} (viewBox units) of a rendered line/system. */
+/** Vertical extent {y, h} (viewBox units) of a system.  abcjs already reports
+ *  each note event's `top`/`height` = the extent of the system (all staves) it
+ *  sits in, so use that first: it's authoritative and needs no DOM/getBBox, which
+ *  avoids the whole-page cursor bug where an early `_lineExtent` call (before the
+ *  SVG had laid out → getBBox height 0) cached the full-viewBox fallback for a
+ *  system permanently.  Falls back to the rendered `.abcjs-l{line}` group's bbox
+ *  only when no event geometry is available. */
+function _lineExtentFor(line) {
+  for (const e of _noteEvents) {
+    if (e.line === line && e.top != null && e.height > 0) return { y: e.top, h: e.height };
+  }
+  return _lineExtent(line);
+}
+
+/** Vertical extent {y, h} (viewBox units) of a rendered line/system, from the DOM. */
 function _lineExtent(line) {
   if (_lineExtents?.has(line)) return _lineExtents.get(line);
   let ext = null;
@@ -1186,7 +1200,9 @@ function _lineExtent(line) {
   } catch { /* getBBox can throw if not laid out */ }
   if (!ext) {
     const vb = _abcSvgEl?.getAttribute('viewBox')?.split(/\s+/).map(Number);
-    ext = (vb && vb.length === 4) ? { y: vb[1], h: vb[3] } : { y: 0, h: 100 };
+    // Only memoise a real measurement; a fallback (SVG not laid out yet) must not
+    // stick, or the cursor would span the whole page for that system forever.
+    return (vb && vb.length === 4) ? { y: vb[1], h: vb[3] } : { y: 0, h: 100 };
   }
   _lineExtents?.set(line, ext);
   return ext;
@@ -1225,10 +1241,12 @@ function _noteCenterX(ev) {
   return max > min ? (min + max) / 2 : ev.left;
 }
 
-/** Score position {x, line} of the note/rest that would sound at `ms`: the last
+/** Score position {x, y, h} of the note/rest that would sound at `ms`: the last
  *  event whose onset is at/before ms (the note playback continues from), or the
  *  first event when ms precedes it. x is the glyph's center, so the cursor snaps
- *  dead onto a note rather than floating in the gap between onsets. */
+ *  dead onto a note rather than floating in the gap between onsets; y/h are the
+ *  extent of the system that note sits in, so the cursor stays confined to the
+ *  currently-playing system rather than spanning the page. */
 function _scoreSnapForMs(ms) {
   if (!_noteEvents.length) return null;
   const placed = e => e.left != null;      // skip bar/end entries without geometry
@@ -1238,7 +1256,9 @@ function _scoreSnapForMs(ms) {
     if (e.milliseconds <= ms + 0.5) ev = e; else break;
   }
   if (!ev) ev = _noteEvents.find(placed);  // before the first note → snap to it
-  return ev ? { x: _noteCenterX(ev), line: ev.line ?? 0 } : null;
+  if (!ev) return null;
+  const { y, h } = _lineExtentFor(ev.line ?? 0);
+  return { x: _noteCenterX(ev), y, h };
 }
 
 /** Position the playback cursor bar at `ms` (the true scrubber position). */
@@ -1246,7 +1266,7 @@ function _updateScoreCursor(ms) {
   if (!_cursorLine) return;
   const p = _scoreSnapForMs(ms);
   if (!p) { _cursorLine.style.display = 'none'; return; }
-  const { y, h } = _lineExtent(p.line);
+  const { y, h } = p;
   _cursorLine.setAttribute('x1', p.x);
   _cursorLine.setAttribute('x2', p.x);
   _cursorLine.setAttribute('y1', y);
@@ -1287,7 +1307,7 @@ function _updateScoreRange() {
     .filter(([, c]) => c.max > c.min)
     .sort((a, b) => a[0] - b[0]);
   for (const [line, c] of lines) {
-    const { y, h } = _lineExtent(line);
+    const { y, h } = _lineExtentFor(line);
     const rect = document.createElementNS(_SVG_NS, 'rect');
     rect.setAttribute('class', 'uf-abc-range-band');
     rect.setAttribute('x', c.min);
@@ -1302,7 +1322,7 @@ function _updateScoreRange() {
   if (!lines.length) return;
   const CAP = 9;   // viewBox units — length of each bracket end-cap
   const bracket = (line, x, dir) => {   // dir: +1 → opening "[" (start), -1 → closing "]" (end)
-    const { y, h } = _lineExtent(line);
+    const { y, h } = _lineExtentFor(line);
     const path = document.createElementNS(_SVG_NS, 'path');
     path.setAttribute('class', 'uf-abc-range-edge');
     path.setAttribute('d', `M${x + dir * CAP} ${y} L${x} ${y} L${x} ${y + h} L${x + dir * CAP} ${y + h}`);
