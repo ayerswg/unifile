@@ -1022,7 +1022,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     -webkit-tap-highlight-color: transparent;
     transition: color .18s ease;
   }
-  .ps-btn svg { width: 22px; height: 22px; }
+  .ps-btn svg { width: 19px; height: 19px; }
   .ps-btn[aria-selected="true"] { color: var(--accent); }
   .ps-btn:active { color: var(--text); }
   .ps-thumb {
@@ -1035,14 +1035,20 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* The switcher is a modal overlay's dead weight during a commit diff — hide it. */
   #unifile-app[data-diff] #uf-pane-switch { display: none; }
 
+  /* The status-bar (safe-area) inset lives on the shell itself, not on any bar,
+     so whichever element is topmost sits below the notch — the title bar when
+     shown, the pane switcher once the title bar collapses. `background` colours
+     that inset strip like the header. box-sizing:border-box keeps the fixed
+     `--app-height` intact (content just shrinks by the inset). */
+  #unifile-app { padding-top: env(safe-area-inset-top, 0px); background: var(--bg-alt); }
+
   #uf-site-nav { order: -3; }
-  /* The pane switcher is the persistent top chrome now, so it owns the iOS
-     status-bar inset (portrait block sets its margin-top). The title bar sits
-     BELOW it and auto-hides on scroll (iOS-style collapsing nav) to reclaim its
+  /* Layout order: title bar (top, collapsible) then pane switcher (pinned).
+     The title bar auto-hides on scroll (iOS-style collapsing nav) to reclaim its
      height — see App._setupHeaderAutoHide. `height` (not max-height) so the
      collapse animates; the inner .topbar is 44px + a 1px border. */
   #uf-topbar {
-    order: -1;
+    order: -2;
     overflow: hidden;
     height: calc(var(--topbar-h) + 1px);
     transition: height .22s ease, opacity .18s ease;
@@ -1158,15 +1164,13 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 /* ── Pane switcher — PORTRAIT: horizontal bar under the top bar ── */
 @media (max-width: 640px) {
   #uf-pane-switch {
-    order: -2;                 /* topmost persistent chrome (above the title bar) */
+    order: -1;                 /* pinned rail directly below the collapsible title bar */
     flex-direction: row;
-    height: 46px;
-    /* Owns the iOS status-bar inset now that it sits above the collapsible bar. */
-    margin-top: env(safe-area-inset-top, 0px);
+    height: 38px;
   }
   .ps-thumb {
-    top: 5px;
-    bottom: 5px;
+    top: 4px;
+    bottom: 4px;
     left: 0;
     width: 33.3333%;
     transform: translateX(0);
