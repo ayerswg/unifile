@@ -54,6 +54,7 @@ src/
     app.js           App singleton: shell, mounting, init, save, mobile panes, data file load/save
     state.js         AppState (EventBus): state.update/emit/on, VIEW_MODES, PANELS, diff, pendingCommit
     editor.js        CodeMirror 6 setup: gutter, per-section highlighting, comments, front-matter tint
+    editor-sections.js  Collapsible front-matter / ABC-header section bars (default-collapsed on load)
     preview.js       Renders the active model/DSL to the preview pane
     topbar.js        Title, DSL menu, VCS pills (desktop); mobile top bar = menu + centred title + dirty dot; commit-log pane (pending node + export marker)
     commit-bar.js    Mobile commit-pane bottom bar = branch selector (drop-up). Commit composing moved into the log's pending node.
@@ -112,6 +113,8 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 **Models & layouts** — front-matter `model:` (flow|grid|spatial|timeline|graph) picks a renderer (`model/registry.js` + `layout/`). `flow` is default; its `layout:` (webpage|document|slides) controls presentation. Preview.js dispatches to the right renderer.
 
 **Editor (`editor.js`)** — CodeMirror 6. Custom **single gutter** (`commentLineNumbersExt`) that shows line numbers (desktop) / a thin rail (mobile), tints comment lines yellow and YAML front-matter lines grey. **Per-section syntax highlighting** (`sectionSyntaxField`) runs each section's DSL parser through the catppuccin highlight; the front-matter block is highlighted as YAML instead of the DSL. **Comments are line-level only** (see below). Line wrapping is intentionally OFF (DSL scrolls horizontally).
+
+**Collapsible sections (`editor-sections.js`)** — the leading, non-music scaffolding is split into labelled, collapsible bars (styled like the blame view's commit-group headers): the **front matter** (`---`…`---`, recognised once the closing fence exists) and, for abcjs docs, the **tune header** (everything up to and including the required `K:` line, recognised only when music follows). Each valid section renders a bar — expanded = a thin bar above it (block widget, `side:-1`); collapsed = a block-`replace` bar showing the label + line count. **On load everything collapsible is collapsed except the last (music) section** — the field's `defaultCollapsed` collapses any section with content after it; `resetCollapseEffect` (dispatched from `Editor.setValue`) re-applies this on checkout/branch-switch/open. A section that becomes valid *while typing* is NOT auto-collapsed (it's not in the collapsed set) so it appears expanded as you write it. Collapse state is a per-editor `Set` of section ids toggled by clicking a bar. This is deliberately NOT the old generic `@codemirror/language` fold (removed as "too confusing", see Mobile section) — it's a purpose-built, labelled, default-collapsed section model.
 
 **Preview (`preview.js`)** renders the active model/DSL. Clicking a rendered ABC note highlights the source (`abc-play-cursor`/`dsl-select`) without flipping panes on mobile.
 

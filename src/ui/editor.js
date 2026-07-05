@@ -39,6 +39,7 @@ import {
   getThreadsForPos,
   bumpThreadVersion
 } from './comments.js';
+import { sectionCollapseExtension, resetCollapseEffect } from './editor-sections.js';
 
 // ---------------------------------------------------------------------------
 // DSL-source range highlight
@@ -405,6 +406,10 @@ const baseExtensions = [
 
   // Shebang line decoration (#! section headers appear muted/italic)
   shebangDecoField,
+
+  // Collapsible front-matter / ABC-header sections (default-collapsed on load
+  // so the music body is what you see first).
+  sectionCollapseExtension,
 
   // Inject the catppuccin highlight CSS rules so sectionSyntaxField's
   // Decoration.mark({ class }) spans get styled. Using the StyleModule directly
@@ -829,7 +834,12 @@ export class Editor {
     if (!this._view) return;
     const current = this._view.state.doc.toString();
     if (current === text) return;
-    this._view.dispatch({ changes: { from: 0, to: current.length, insert: text ?? '' } });
+    // Loading a different document (checkout / branch switch / open) re-applies
+    // the load-time section collapse defaults.
+    this._view.dispatch({
+      changes: { from: 0, to: current.length, insert: text ?? '' },
+      effects: resetCollapseEffect.of(null),
+    });
   }
 
   focus() { this._view?.focus(); }

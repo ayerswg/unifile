@@ -223,6 +223,46 @@
 [data-theme="light"] .cm-fm-key { color: #8839ef; }
 .cm-fm-comment { color: var(--text-muted); font-style: italic; }
 
+/* Collapsible section header bars (front matter / ABC tune header).
+   Expanded = a thin bar above the section; collapsed = a bar replacing it. */
+.cm-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  margin: 2px 0;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-sub);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: background .1s, color .1s;
+}
+.cm-section-header:hover { background: var(--bg-surface); color: var(--text); }
+.cm-section-header .cm-sh-caret {
+  flex-shrink: 0;
+  transition: transform .12s ease;
+}
+/* Collapsed → caret points right (rotated from the down-pointing default). */
+.cm-section-header.collapsed .cm-sh-caret { transform: rotate(-90deg); }
+.cm-section-header .cm-sh-label { flex: 0 0 auto; }
+.cm-section-header .cm-sh-count {
+  margin-left: auto;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
 /* #! shebang line decoration — marks DSL section headers as muted/italic */
 .cm-shebang-line { color: var(--accent) !important; opacity: .55; font-style: italic; }
 [data-theme="light"] .cm-shebang-line { color: var(--accent) !important; opacity: .6; }
