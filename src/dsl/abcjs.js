@@ -1503,7 +1503,12 @@ function _selectionMsRange(from, to) {
   for (const n of flat) {
     if (n.ms > lastMs + 0.5 && n.ms < endMs) endMs = n.ms;
   }
-  return { startMs, endMs };
+  // Distinct notes the selection spans (a chord shares one startChar). Only two or
+  // more make it a *range*; selecting the chars of a single note/chord (e.g. `^d`)
+  // is a single-item selection and should play from there to the end, like a
+  // collapsed cursor or a preview note-click — not "play only this note".
+  const count = new Set(inSel.map(n => n.startChar)).size;
+  return { startMs, endMs, count };
 }
 
 /**
@@ -1523,7 +1528,7 @@ function _syncTransportToSelection(from, to) {
   const selTo   = Math.max(0, to   - _sectionOffset);
 
   const range = to > from ? _selectionMsRange(selFrom, selTo) : null;
-  if (range) {
+  if (range && range.count > 1) {
     const { startMs, endMs } = range;
     _selRangeMs = { startMs, endMs };
     _pausedAtMs = startMs;
@@ -1532,10 +1537,11 @@ function _syncTransportToSelection(from, to) {
   } else {
     _selRangeMs = null;
     state.emit('abc-range', null);
-    // Cursor → the note under it, or the start of the tune when it doesn't land
-    // on a note (e.g. parked in the front matter or a header) so ▶ plays from the
+    // Cursor or single-note/chord selection → cue to the note it lands on (so ▶
+    // plays from there to the end); the start of the tune when it doesn't land on
+    // a note (e.g. parked in the front matter or a header) so ▶ plays from the
     // beginning by default rather than from a stale position.
-    const ms = _charToMs(selFrom) ?? 0;
+    const ms = (range ? range.startMs : _charToMs(selFrom)) ?? 0;
     _pausedAtMs = ms;
     _emitProgress(ms);
   }
@@ -1669,11 +1675,15 @@ async function startPlayback(opts = {}) {
     // Transport seek / resume: play the whole tune from an absolute position.
     startSeconds = Math.max(0, opts.startMs / 1000);
   } else if (selFrom !== selTo && selTo > selFrom) {
-    // Range selection: start at the selection's first note, stop after its last.
+    // Text selection: a multi-note range starts at its first note and stops after
+    // its last; a single note/chord (count <= 1) plays from there to the end with
+    // no stop bound, matching a preview note-click / collapsed cursor.
     const range = _selectionMsRange(selFrom, selTo);
-    if (range) {
+    if (range && range.count > 1) {
       startSeconds = range.startMs / 1000;
       stopMs = range.endMs;
+    } else if (range) {
+      startSeconds = range.startMs / 1000;
     } else {
       const sMs = _charToMs(selFrom);
       if (sMs != null) startSeconds = sMs / 1000;
