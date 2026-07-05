@@ -157,7 +157,13 @@ function buildDecorations(edState, collapsed) {
   const builder = new RangeSetBuilder();
   for (const s of sections) {
     if (collapsed.has(s.id)) {
-      builder.add(s.from, s.to, Decoration.replace({
+      // A block replace must end at a line END (before the trailing newline),
+      // not at the next line's start. Ending on the next line's start collides
+      // with an adjacent section's expanded header widget (anchored there,
+      // side -1) and CM drops it — which made the next section bar vanish.
+      // `s.to` includes the section's trailing newline, so back up over it.
+      const blockTo = (s.to > s.from && text[s.to - 1] === '\n') ? s.to - 1 : s.to;
+      builder.add(s.from, blockTo, Decoration.replace({
         block: true,
         widget: new SectionHeaderWidget(s.id, s.label, true, s.lines),
       }));
