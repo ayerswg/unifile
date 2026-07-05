@@ -3181,6 +3181,11 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .blame-content { flex: 1; padding: 2px 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .blame-empty { color: var(--text-muted); text-align: center; padding: 2rem; font-style: italic; }
 
+/* Commit group header — shown only on mobile (desktop uses inline .blame-meta). */
+.blame-group { display: none; }
+/* Mobile-only dismiss for the detail bottom sheet. */
+.blame-detail-dismiss { display: none; }
+
 /* Commit color bands */
 .blame-line.color-0.selected, .blame-line.color-0:hover { background: rgba(137,180,250,.08); }
 .blame-line.color-1.selected, .blame-line.color-1:hover { background: rgba(203,166,247,.08); }
@@ -3552,10 +3557,124 @@ noscript .noscript-wrap {
   /* (title width is handled by the flex rules above — no hard cap, so it uses
      all the room left by the hamburger + branch chip before ellipsizing) */
   .vcs-pill .vcs-pill-text { display: none; }
-  .dialog { width: 95vw; }
-  .dialog-wide { width: 95vw; }
-  .blame-sidebar { width: 200px; }
-  .blame-meta { width: 140px; }
+
+  /* Full-screen modals on phones. A small centered box wastes space and is
+     awkward to reach one-handed — the modal fills the viewport with its close
+     button in the top-right, clear of the notch. Covers the .dialog system
+     (commit/merge/export/settings/new-doc). The .dsl-help modal is handled in
+     its own trailing media block (its base rules sit later in the file, so an
+     override here would lose on source order); blame is handled below. */
+  .dialog-overlay { padding: 0; }
+  .dialog, .dialog-wide {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border: none;
+    border-radius: 0;
+  }
+  .dialog-header {
+    padding-top: calc(16px + env(safe-area-inset-top));
+  }
+  .dialog-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  /* Bigger, unmistakable tap target for the close button. */
+  .dialog-close {
+    font-size: 26px;
+    padding: 6px 10px;
+    margin: -4px -4px -4px 0;
+  }
+  /* Panels (incl. blame) become true full-screen overlays: cover the pane
+     switch and notch instead of starting below the (hidden) top bar. */
+  #uf-panels { top: 0; }
+  .blame-header {
+    height: auto;
+    padding-top: calc(12px + env(safe-area-inset-top));
+    padding-bottom: 12px;
+  }
+  .blame-close { font-size: 15px; padding: 6px 10px; }
+  /* Blame view: the desktop side-by-side (lineno · meta · content + fixed
+     sidebar) is far too cramped at 375px. Restack it — group lines by commit
+     with a header row, wrap long source lines, and turn the detail panel into
+     an on-demand bottom sheet. */
+  /* Fill the overlay so the layout is stable for short docs and the bottom
+     sheet pins to the real bottom (the host otherwise sizes to content). */
+  #uf-blame-panel { position: absolute; inset: 0; }
+  .blame-lines { font-size: 13px; }
+
+  /* Hide the inline per-line meta; the group header carries the commit info. */
+  .blame-meta { display: none; }
+
+  .blame-line {
+    align-items: flex-start;
+    border-left: 3px solid var(--border);
+  }
+  .blame-lineno { width: 32px; padding: 3px 6px; font-size: 11px; }
+  .blame-content {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: 3px 8px;
+  }
+
+  /* Commit group header — the primary commit label on mobile. */
+  .blame-group {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 6px 10px;
+    margin-top: 4px;
+    background: var(--bg-alt);
+    border: none;
+    border-left: 3px solid var(--accent);
+    cursor: pointer;
+    font-family: var(--font-mono);
+  }
+  .blame-group:first-child { margin-top: 0; }
+  .blame-group .blame-hash { width: auto; }
+  .blame-group .blame-msg {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-sub);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Detail becomes a bottom sheet, hidden until a line/commit is tapped. */
+  .blame-sidebar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 55%;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -6px 24px rgba(0,0,0,.35);
+    transform: translateY(100%);
+    transition: transform .18s ease;
+    z-index: 5;
+  }
+  .blame-body { position: relative; }
+  .blame-view.has-detail .blame-sidebar { transform: translateY(0); }
+  .blame-hint { display: none; }
+  .blame-detail-card { position: relative; }
+  .blame-detail-dismiss {
+    display: block;
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
 }
 
 @media print {
@@ -3881,4 +4000,36 @@ noscript .noscript-wrap {
   font-size: 16px;
   line-height: 1;
   padding: 2px 6px;
+}
+
+/* ==============================================================
+   RESPONSIVE — trailing overrides
+   These must live at the end of the file: the .dsl-help modal system
+   (DSL syntax reference, new-document + extensions modals) is defined
+   AFTER the main responsive block, so mobile overrides placed there would
+   lose on source order. Full-screen these modals on phones, matching the
+   .dialog treatment above.
+   ============================================================== */
+@media (max-width: 640px) {
+  .dsl-help-overlay { padding: 0; }
+  .dsl-help-modal,
+  .newdoc-modal {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border: none;
+    border-radius: 0;
+  }
+  .dsl-help-header {
+    padding-top: calc(16px + env(safe-area-inset-top));
+  }
+  .dsl-help-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  .dsl-help-close {
+    font-size: 26px;
+    padding: 6px 10px;
+    margin: -4px -4px -4px 0;
+  }
 }

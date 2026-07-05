@@ -54,12 +54,28 @@ export class BlameView {
             </div>
           </div>
           <div class="blame-lines" id="blame-lines">
-            ${blame.map((item, i) => {
-              const commit = commits[item.commitHash];
-              const color = commitColors.get(item.commitHash) ?? 0;
-              return `
+            ${(() => {
+              let prevHash;
+              return blame.map((item, i) => {
+                const commit = commits[item.commitHash];
+                const color = commitColors.get(item.commitHash) ?? 0;
+                const hash = escHtml(item.commitHash ?? '');
+                // A group header precedes the first line of each commit run.
+                // It is hidden on desktop (inline meta is shown there instead)
+                // and is the primary commit label on mobile.
+                const startsGroup = item.commitHash !== prevHash;
+                prevHash = item.commitHash;
+                const header = startsGroup ? `
+                  <button type="button" class="blame-group color-${color}"
+                    data-hash="${hash}" data-line="${i + 1}">
+                    <span class="blame-hash">${shortHash(item.commitHash)}</span>
+                    <span class="blame-author">${escHtml(commit?.author ?? '?')}</span>
+                    <span class="blame-msg">${escHtml(commit?.message ?? '')}</span>
+                    <span class="blame-date">${formatDate(commit?.timestamp)}</span>
+                  </button>` : '';
+                return `${header}
                 <div class="blame-line color-${color} ${this._selectedHash === item.commitHash ? 'selected' : ''}"
-                  data-hash="${escHtml(item.commitHash ?? '')}"
+                  data-hash="${hash}"
                   data-line="${i + 1}">
                   <span class="blame-lineno">${i + 1}</span>
                   <span class="blame-meta">
@@ -70,7 +86,8 @@ export class BlameView {
                   <span class="blame-content">${escHtml(item.line)}</span>
                 </div>
               `;
-            }).join('')}
+              }).join('');
+            })()}
             ${blame.length === 0 ? '<p class="blame-empty">No commits yet — nothing to blame.</p>' : ''}
           </div>
         </div>
@@ -91,15 +108,17 @@ export class BlameView {
       state.closePanel();
     });
 
-    this.el.querySelectorAll('.blame-line').forEach(lineEl => {
-      lineEl.addEventListener('click', () => {
-        const hash = lineEl.dataset.hash;
-        const lineNum = parseInt(lineEl.dataset.line, 10);
+    this.el.querySelectorAll('.blame-line, .blame-group').forEach(rowEl => {
+      rowEl.addEventListener('click', () => {
+        const hash = rowEl.dataset.hash;
+        const lineNum = parseInt(rowEl.dataset.line, 10);
         if (!hash) return;
 
         this._selectedHash = hash;
         this._highlightCommit(hash);
         this._showCommitDetail(hash, lineNum);
+        // On mobile the detail sidebar is a bottom sheet, revealed on demand.
+        this.el.querySelector('.blame-view')?.classList.add('has-detail');
       });
     });
   }
@@ -119,6 +138,7 @@ export class BlameView {
 
     detail.innerHTML = `
       <div class="blame-detail-card">
+        <button type="button" class="blame-detail-dismiss" id="blame-detail-dismiss" aria-label="Close commit details">✕</button>
         <div class="blame-detail-hash">${shortHash(hash)}</div>
         ${commit.tag ? `<div class="blame-detail-tag">${escHtml(commit.tag)}</div>` : ''}
         <div class="blame-detail-msg">${escHtml(commit.message)}</div>
@@ -135,6 +155,10 @@ export class BlameView {
         </div>
       </div>
     `;
+
+    detail.querySelector('#blame-detail-dismiss')?.addEventListener('click', () => {
+      this.el.querySelector('.blame-view')?.classList.remove('has-detail');
+    });
 
     detail.querySelector('.blame-checkout')?.addEventListener('click', () => {
       if (state.isDirty && !confirm('Uncommitted changes will be lost. Continue?')) return;

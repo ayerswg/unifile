@@ -240,6 +240,7 @@ export class PaneSwitch {
       `<button class="ps-menu-item${extra}" data-act="${act}" role="menuitem"><span class="ps-menu-name">${label}</span></button>`;
     return `
       ${item('new-doc', 'New document…')}
+      ${item('rename', 'Rename document…')}
       ${item('dsl-help', `${_esc(dslName)} help…`)}
       ${item('blame', 'Blame view', hasCommits ? '' : ' disabled')}
       <div class="ps-menu-sep" role="separator"></div>
@@ -311,6 +312,7 @@ export class PaneSwitch {
       case 'new-branch':  close(); this._newBranch(); break;
 
       case 'new-doc':     close(); showNewDocumentModal(this.handlers); break;
+      case 'rename':      close(); this._renameDoc(); break;
       case 'dsl-help':    close(); showDslHelpModal(state.activeDslId ?? state.data?.dslType ?? 'markdown'); break;
       case 'blame':       close(); state.activePanel === PANELS.BLAME ? state.closePanel() : state.openPanel(PANELS.BLAME); break;
       case 'save-data':   close(); state.emit('save-data-file'); break;
@@ -323,6 +325,15 @@ export class PaneSwitch {
       case 'export':      close(); this._exportFormat(ds.key); break;
       case 'export-app':  close(); this._exportApp(); break;
     }
+  }
+
+  // ── Document rename (mobile has no editable top-bar title) ─────────────────
+
+  _renameDoc() {
+    const current = state.title || '';
+    const next = (window.prompt('Document title:', current) || '').trim();
+    if (!next || next === current) return;
+    state.update({ data: { ...state.data, title: next } });
   }
 
   // ── Branch actions (moved off the old commit-bar bottom bar) ───────────────
