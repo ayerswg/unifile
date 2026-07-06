@@ -39,12 +39,17 @@ export class PaneSwitch {
     this._active = 'editor';
     this._openMenu = null;         // 'commit' | 'code' | 'render' | null
     this._committing = false;
+    // Landscape only: the rail is a collapsible dock. Default collapsed so it
+    // takes no real space until tapped (portrait/desktop ignore this).
+    this._dockCollapsed = true;
 
     state.on('change', () => this.render());
     state.on('content-change', () => this.render());
     state.on('branch-switch', () => this.render());
     state.on('checkout', () => this.render());
     state.on('active-section-change', () => this.render());
+    // Reflect play/pause on the dock's play button (landscape).
+    state.on('abc-play-state', () => this.render());
     // Entering/leaving diff mode (or changing a side) swaps the segments between
     // the normal tabs and the diff pickers; drop any stale menu.
     state.on('diff-change', () => { this._openMenu = null; this.render(); });
@@ -92,7 +97,16 @@ export class PaneSwitch {
         </button>`;
     };
 
+    const isAbc = dslId === 'abcjs';
+    const playing = !!state.abcPlaying;
+
+    // The collapse handle + play/align live in the DOM always but are shown
+    // (via CSS) only in landscape, where the rail is a collapsible dock.
+    this.el.classList.toggle('ps-dock-collapsed', this._dockCollapsed);
+
     this.el.innerHTML = `
+      <button type="button" class="ps-handle" aria-label="${this._dockCollapsed ? 'Show controls' : 'Hide controls'}"
+        aria-expanded="${!this._dockCollapsed}">${_iconGrip()}</button>
       <span class="ps-thumb" aria-hidden="true"></span>
       ${seg('commit', 'commit', `
         <span class="ps-branch-icon" aria-hidden="true">${_iconBranch()}</span>
@@ -100,11 +114,18 @@ export class PaneSwitch {
         ${dirty || detached ? `<span class="ps-dirty-dot${detached ? ' detached' : ''}" aria-hidden="true"></span>` : ''}
       `, 'Commit history')}
       ${seg('editor', 'code', `
+        <span class="ps-code-icon" aria-hidden="true">${_iconDoc()}</span>
         <span class="ps-title">${_esc(state.title)}</span>
       `, 'Editor')}
       ${seg('render', 'render', `
         <span class="ps-render-icon" aria-hidden="true">${_renderIconFor(dslId)}</span>
       `, 'Preview')}
+      ${isAbc ? `
+        <button type="button" class="ps-play${playing ? ' playing' : ''}" data-act="play"
+          aria-label="Play or pause">${playing ? _iconPause() : _iconPlay()}</button>
+        <button type="button" class="ps-align" data-act="align"
+          aria-label="Align voices">${_iconAlign()}</button>
+      ` : ''}
       <div class="ps-menu ps-menu-${this._openMenu ?? 'none'}${this._openMenu ? ' open' : ''}" role="menu">
         ${this._openMenu ? this._renderMenu(this._openMenu) : ''}
       </div>
@@ -275,12 +296,22 @@ export class PaneSwitch {
   // ---------------------------------------------------------------------------
 
   _bind() {
+    // Landscape dock: the grip toggles the whole cluster open/closed.
+    this.el.querySelector('.ps-handle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._dockCollapsed = !this._dockCollapsed;
+      this.render();
+    });
+
     this.el.querySelectorAll('.ps-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._onSegment(btn.dataset.pane);
       });
     });
+    // Dock play / align (landscape only; not .ps-btn so the portrait bar ignores them).
+    this.el.querySelector('.ps-play')?.addEventListener('click', (e) => { e.stopPropagation(); state.emit('abc-play'); });
+    this.el.querySelector('.ps-align')?.addEventListener('click', (e) => { e.stopPropagation(); state.emit('mobile-align'); });
     this.el.querySelectorAll('.ps-menu-item').forEach(item => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -295,6 +326,9 @@ export class PaneSwitch {
     const menuKey = pane === 'editor' ? 'code' : pane;
     if (pane !== this._active) {
       this._openMenu = null;
+      // In the landscape dock, switching panes tucks the dock away again so it
+      // stops covering content (no visual effect in portrait/desktop).
+      this._dockCollapsed = true;
       state.emit('mobile-goto-pane', pane);   // app → setPane → setActive()
     } else {
       this._openMenu = this._openMenu === menuKey ? null : menuKey;
@@ -413,6 +447,29 @@ function _iconBranch() {
 function _iconCaret() {
   return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M4 6l4 4 4-4"/></svg>`;
+}
+
+// Landscape-dock icons.
+function _iconGrip() {
+  return `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <circle cx="5" cy="4" r="1.3"/><circle cx="11" cy="4" r="1.3"/>
+    <circle cx="5" cy="8" r="1.3"/><circle cx="11" cy="8" r="1.3"/>
+    <circle cx="5" cy="12" r="1.3"/><circle cx="11" cy="12" r="1.3"/></svg>`;
+}
+function _iconPlay() {
+  return `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><polygon points="4,2 13,8 4,14"/></svg>`;
+}
+function _iconPause() {
+  return `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="2" width="4" height="12" rx="1"/><rect x="9" y="2" width="4" height="12" rx="1"/></svg>`;
+}
+function _iconAlign() {
+  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">
+    <path d="M2 5.5h12M2 10.5h12" stroke-width="1.3"/>
+    <path d="M4 3v10M8 3v10M12 3v10" stroke-width="1.6"/></svg>`;
+}
+function _iconDoc() {
+  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/><path d="M6 8h4M6 11h4"/></svg>`;
 }
 
 function _renderIconFor(dslId) {

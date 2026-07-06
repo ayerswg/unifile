@@ -993,6 +993,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 /* Floating "align voices" button — mobile only, and only for a DSL that ships a
    source formatter (ABC → #unifile-app gets .abc-active from the transport). */
 .uf-align-btn { display: none; }
+/* Floating play/pause button — phones only (transport bar is hidden there). */
+.uf-play-btn { display: none; }
 
 /* Commit-log pane: a mobile-only far-left pane; hidden entirely on desktop
    (where the commit history lives in the topbar dropdown instead). */
@@ -1008,6 +1010,12 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
    ============================================================== */
 @media (max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
   #uf-main { overflow: hidden; position: relative; }
+
+  /* Phones drop the transport bar entirely (it ate scarce vertical space,
+     especially in landscape with the keyboard up) — playback is a floating
+     play/pause button instead (portrait FAB / landscape dock). Diff mode keeps
+     its own #uf-bottom picker. */
+  #uf-transport { display: none !important; }
 
   /* All three panes share the same box; only the active one is displayed.  The
      !important overrides the inline display the desktop view-mode logic sets. */
@@ -1025,15 +1033,15 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     display: flex !important;
   }
 
-  /* Align-voices FAB: bottom-right of the editor pane, above the transport bar.
-     Shown only for ABC (.abc-active), tucked into the code pane's corner. */
+  /* Align-voices FAB: bottom-right of the editor pane. Shown only for ABC
+     (.abc-active); sits ABOVE the play FAB so the two stack in the corner. */
   #unifile-app.abc-active #uf-editor-wrap .uf-align-btn {
     display: flex;
     align-items: center;
     justify-content: center;
     position: absolute;
     right: 12px;
-    bottom: 12px;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
     z-index: 6;
     width: 40px;
     height: 40px;
@@ -1048,6 +1056,31 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   }
   #unifile-app.abc-active #uf-editor-wrap .uf-align-btn:active { transform: scale(.94); }
   #unifile-app.abc-active #uf-editor-wrap .uf-align-btn svg { width: 20px; height: 20px; }
+
+  /* Play/pause FAB: bottom-right, global so it covers editor + render panes.
+     Hidden on the commit pane and (below) in landscape, where the pane dock
+     carries its own play control. */
+  #unifile-app.abc-active:not([data-mobile-pane="commit"]) .uf-play-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    z-index: 8;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--bg);
+    box-shadow: 0 2px 10px rgba(0,0,0,.4);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #unifile-app .uf-play-btn:active { transform: scale(.94); }
+  #unifile-app .uf-play-btn svg { width: 18px; height: 18px; }
 
   #uf-commit-log {
     flex-direction: column;
@@ -1071,6 +1104,12 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     background: var(--bg-alt);
     box-shadow: 0 1px 0 var(--border);
   }
+  /* Dock-only chrome (collapse grip + play/align) — landscape shows these; the
+     portrait top bar must not, or they'd steal flex space from the three tabs. */
+  .ps-handle, .ps-play, .ps-align { display: none; }
+  /* The editor tab shows its title in the portrait bar; the dock shows an icon
+     instead (title is too wide), so the icon is hidden here and shown below. */
+  .ps-code-icon { display: none; }
   .ps-btn {
     flex: 1 1 0;
     min-width: 0;
@@ -1224,14 +1263,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   /* #uf-bottom prefix raises specificity above the desktop `#uf-transport` rule. */
-  #uf-bottom #uf-transport { display: none; }
-  /* #uf-bottom owns the safe-area inset on mobile — don't double it on the child. */
-  #uf-bottom #uf-transport { padding-bottom: 0; }
-  /* The commit pane has NO bottom bar now (branch picker moved into the pane
-     switcher's commit menu). Only ABC's transport shows, on editor/render. */
-  #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-bottom { display: block; }
-  #unifile-app.abc-active:not([data-mobile-pane="commit"]) #uf-transport { display: flex; }
-  /* Diff mode: the contextual diff action bar (#uf-diff-bar) lives here too. */
+  /* The transport is hidden on phones (rule above); #uf-bottom now only carries
+     the diff picker. */
   #unifile-app[data-diff] #uf-bottom { display: block; }
 
   /* iOS: ≥16px on focusable controls prevents Safari's zoom-on-focus. */
@@ -1257,40 +1290,110 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-mobile-pane="render"] .ps-thumb { transform: translateX(200%); }
 }
 
-/* ── Pane switcher — LANDSCAPE (phone on its side): a vertical rail pinned to
-   the far right so the user can flick between panes one-handed.  It's absolutely
-   positioned relative to the fixed #unifile-app and vertically centred, so it
-   never covers the top bar / status chip; #uf-main reserves a right gutter for
-   it (plus the landscape notch inset). ── */
+/* ── Pane switcher — LANDSCAPE (phone on its side): a COLLAPSIBLE DOCK pinned to
+   the top-right. Collapsed (the default) it's just a small grip that takes no
+   real space; tapping the grip drops the controls down (pane tabs + play +
+   align). Switching a pane tucks it away again. It overlays content rather than
+   reserving a gutter, so the editor keeps full width. ── */
 @media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
-  #uf-main { padding-right: calc(52px + env(safe-area-inset-right, 0px)); }
+  /* No reserved right gutter — the dock floats over the corner. */
+  #uf-main { padding-right: 0; }
 
   #uf-pane-switch {
     position: absolute;
-    top: 50%;
+    top: calc(6px + env(safe-area-inset-top, 0px));
     right: calc(6px + env(safe-area-inset-right, 0px));
-    transform: translateY(-50%);
+    transform: none;
     width: 46px;
     flex-direction: column;
+    align-items: stretch;
     gap: 6px;
     padding: 5px;
     border-radius: 12px;
     background: var(--bg-alt);
     border: 1px solid var(--border);
     box-shadow: 0 4px 16px rgba(0,0,0,.28);
+    max-height: calc(100% - 12px - env(safe-area-inset-top, 0px));
+    overflow: hidden;
     z-index: 50;
   }
-  .ps-btn { flex: 0 0 auto; height: 44px; width: 100%; }
-  .ps-thumb {
-    left: 5px;
-    right: 5px;
-    top: 5px;
-    height: 44px;
-    transform: translateY(0);
+
+  /* The grip handle — always visible in the dock; it opens/closes the cluster. */
+  .ps-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    height: 36px;
+    width: 100%;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
-  /* Buttons are 44px tall with a 6px gap → step = 50px. */
-  #unifile-app[data-mobile-pane="editor"] .ps-thumb { transform: translateY(50px); }
-  #unifile-app[data-mobile-pane="render"] .ps-thumb { transform: translateY(100px); }
+  .ps-handle:active { color: var(--text); }
+  .ps-handle svg { width: 16px; height: 16px; display: block; }
+
+  /* No sliding thumb in the dock — the active tab just gets a filled background. */
+  .ps-thumb { display: none; }
+  .ps-btn {
+    flex: 0 0 auto;
+    height: 44px;
+    width: 100%;
+    padding: 0;
+    border-radius: 8px;
+  }
+  .ps-btn.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .ps-btn .ps-title, .ps-btn .ps-branch-name { display: none; }  /* icons only in the dock */
+  .ps-code-icon { display: inline-flex; }
+  .ps-code-icon svg { width: 19px; height: 19px; display: block; }
+  .ps-caret { display: none; }
+
+  /* Play + align live at the bottom of the dock (ABC only). */
+  .ps-play, .ps-align {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    height: 44px;
+    width: 100%;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ps-play:active, .ps-align:active { background: var(--bg-surface); }
+  .ps-play svg, .ps-align svg { width: 18px; height: 18px; display: block; }
+  .ps-play.playing { color: var(--accent); }
+
+  /* Dropdown menus open to the LEFT of the dock (it hugs the right edge). */
+  .ps-menu { right: calc(100% + 8px); left: auto; top: 0; }
+
+  /* Collapsed (default): only the grip shows; the dock shrinks to it and drops
+     its chrome so it's an unobtrusive corner handle. */
+  #uf-pane-switch.ps-dock-collapsed {
+    background: none;
+    border-color: transparent;
+    box-shadow: none;
+    padding: 0;
+  }
+  /* The lone grip reads as a tappable pill when the dock is closed. */
+  #uf-pane-switch.ps-dock-collapsed .ps-handle {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    box-shadow: 0 2px 8px rgba(0,0,0,.28);
+    color: var(--text-sub);
+  }
+  #uf-pane-switch.ps-dock-collapsed .ps-btn,
+  #uf-pane-switch.ps-dock-collapsed .ps-play,
+  #uf-pane-switch.ps-dock-collapsed .ps-align,
+  #uf-pane-switch.ps-dock-collapsed .ps-menu { display: none; }
 }
 
 /* ── Commit-log pane contents ─────────────────────────────────── */
@@ -2448,7 +2551,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 /* Bottom bar swaps to the diff picker. */
 #unifile-app[data-diff] #uf-diff-bar { display: block; }
 #unifile-app[data-diff] #uf-transport,
-#unifile-app[data-diff] #uf-commit-bar { display: none !important; }
+#unifile-app[data-diff] #uf-commit-bar,
+#unifile-app[data-diff] .uf-play-btn { display: none !important; }
 
 .dv-head { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--border); }
 .dv-head-label {

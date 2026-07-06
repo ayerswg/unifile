@@ -9,7 +9,7 @@
 // unifile PWAs installed on the same origin (markdown, abc, …) don't evict each
 // other's caches.  CACHE_VERSION appends a content hash so updates supersede.
 const CACHE_PREFIX  = 'unifile-abc';
-const CACHE_VERSION = 'unifile-abc-6d4b0453c973';
+const CACHE_VERSION = 'unifile-abc-53c6a2f93e09';
 const APP_SHELL = [
   './',
   './index.html',

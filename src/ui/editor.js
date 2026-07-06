@@ -39,7 +39,8 @@ import {
   getThreadsForPos,
   bumpThreadVersion
 } from './comments.js';
-import { sectionCollapseExtension, resetCollapseEffect } from './editor-sections.js';
+import { sectionCollapseExtension, resetCollapseEffect,
+         refreshSectionsEffect, landscapePhoneMql } from './editor-sections.js';
 
 // ---------------------------------------------------------------------------
 // DSL-source range highlight
@@ -582,6 +583,13 @@ export class Editor {
 
     this._unsub.push(state.on('checkout',     ({ content }) => this.setValue(content)));
     this._unsub.push(state.on('branch-switch',({ content }) => this.setValue(content)));
+
+    // Rotating between portrait/landscape suppresses or restores the section
+    // bars (see editor-sections.js). Rebuild them without disturbing the
+    // per-section collapse state.
+    landscapePhoneMql.addEventListener('change', () => {
+      this._view?.dispatch({ effects: refreshSectionsEffect.of(null) });
+    });
     this._unsub.push(state.on('view-mode-change', () => this._updateVisibility()));
 
     // Panel changes → update visibility only (accordion is now in CM6 state)

@@ -263,6 +263,30 @@ export class App {
     });
     document.getElementById('uf-editor-wrap').appendChild(alignBtn);
 
+    // Floating play/pause FAB (phones only — the transport bar is hidden there).
+    // Global (app-level) so it's reachable from both the editor and render panes;
+    // CSS shows it only on phones for ABC, and hides it in landscape where the
+    // collapsible pane dock provides its own play control instead.
+    const playBtn = document.createElement('button');
+    playBtn.className = 'uf-play-btn';
+    playBtn.type = 'button';
+    playBtn.title = 'Play / pause';
+    playBtn.setAttribute('aria-label', 'Play or pause playback');
+    playBtn.innerHTML = _playIcon(false);
+    playBtn.addEventListener('click', () => state.emit('abc-play'));
+    state.on('abc-play-state', ({ playing }) => {
+      playBtn.classList.toggle('playing', !!playing);
+      playBtn.innerHTML = _playIcon(!!playing);
+    });
+    document.getElementById('unifile-app').appendChild(playBtn);
+
+    // The landscape pane dock's align button routes through this event (the
+    // portrait FAB calls the editor directly above).
+    state.on('mobile-align', () => {
+      this._components.editor?.alignActiveDsl();
+      this._components.editor?.focus();
+    });
+
     // The DSL transport is a global bottom bar (sticks to the screen bottom and
     // is visible in both the editor and preview panes), not a per-pane footer.
     this._components.dslFooter = new DslFooter(document.getElementById('uf-transport'));
@@ -1059,6 +1083,13 @@ const _isMobile = () => _mql.matches;
 // ---------------------------------------------------------------------------
 // Divider icon helpers
 // ---------------------------------------------------------------------------
+
+/** Play or pause glyph for the floating mobile play button. */
+function _playIcon(playing) {
+  return playing
+    ? `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="2" width="4" height="12" rx="1"/><rect x="9" y="2" width="4" height="12" rx="1"/></svg>`
+    : `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><polygon points="4,2 13,8 4,14"/></svg>`;
+}
 
 /** Single right-pointing chevron — used for divider-to-split in PREVIEW mode.
  *  CSS flips it (scaleX(-1)) when data-mode="editor". */

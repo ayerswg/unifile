@@ -39,6 +39,16 @@ import { state } from './state.js';
 export const toggleSectionEffect = StateEffect.define();
 /** Re-apply the load-time default collapse (collapse all but the last section). */
 export const resetCollapseEffect = StateEffect.define();
+/** Rebuild the section decorations without touching the collapse set (e.g. on
+ *  orientation change, where bars are suppressed in landscape then restored). */
+export const refreshSectionsEffect = StateEffect.define();
+
+// A phone on its side has little vertical room, so the section bars are
+// suppressed in landscape (the same breakpoint the mobile CSS uses). The
+// collapse *state* is preserved so rotating back to portrait restores it.
+export const landscapePhoneMql = window.matchMedia(
+  '(orientation: landscape) and (max-height: 500px) and (pointer: coarse)'
+);
 
 // ---------------------------------------------------------------------------
 // Section detection
@@ -83,6 +93,10 @@ function _lineCount(text, from, to) {
  * @returns {Array<{id:string,label:string,from:number,to:number,lines:number}>}
  */
 function detectSections(text, dslType) {
+  // Landscape phone: pretend there are no sections (bars hidden). The field's
+  // collapse Set is untouched, so portrait restores the previous state.
+  if (landscapePhoneMql.matches) return [];
+
   const raw = [];
   const docLen = text.length;
 
@@ -212,6 +226,10 @@ const sectionCollapseField = StateField.define({
       } else if (e.is(resetCollapseEffect)) {
         const sections = detectSections(tr.state.doc.toString(), _docDslType());
         collapsed = defaultCollapsed(sections);
+        recompute = true;
+      } else if (e.is(refreshSectionsEffect)) {
+        // Orientation change: rebuild bars (may now be suppressed / restored)
+        // but keep the existing collapse set.
         recompute = true;
       }
     }
