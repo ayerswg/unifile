@@ -1299,6 +1299,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* No reserved right gutter — the dock floats over the corner. */
   #uf-main { padding-right: 0; }
 
+  /* The dock carries play + align in landscape, so hide the standalone FABs
+     here (they're the portrait affordance) — otherwise they show twice. */
+  .uf-play-btn, .uf-align-btn { display: none !important; }
+
   #uf-pane-switch {
     position: absolute;
     top: calc(6px + env(safe-area-inset-top, 0px));
