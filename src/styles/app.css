@@ -174,6 +174,23 @@
 [data-theme="light"] .cm-tooltip        { background: #dce0e8 !important; border-color: #ccd0da !important; color: #4c4f69 !important; }
 [data-theme="light"] .cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments { background: rgba(223,142,29,.18) !important; color: #df8e1d !important; }
 
+/* Editor gutter = a SINGLE thin rail (no line numbers), on desktop AND mobile.
+   The current line shows as a full-width accent segment, a commented line
+   yellow, and YAML front-matter lines a muted grey. Click/tap the rail to add
+   or view a line comment. */
+.cm-comment-ln .cm-ln-text { display: none; }
+#uf-editor-wrap .cm-comment-ln { min-width: 0; padding: 0; }
+#uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; margin: 0; min-width: 10px; }
+#uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
+#uf-editor-wrap .cm-comment-ln .cm-has-comments { background: #f9e2af !important; }
+/* Drop the border + container padding so the rail cell fills the gutter fully
+   (no dark sliver between the rail and the code). */
+#uf-editor-wrap .cm-gutters { border-right: none; padding: 0; }
+/* Buffer lives INSIDE the line (not the content) so the active-line highlight
+   covers it — no un-highlighted strip. Start flush at the top. */
+#uf-editor-wrap .cm-content { padding-top: 0; padding-left: 0; }
+#uf-editor-wrap .cm-line { padding-left: 6px; }
+
 /* YAML front-matter lines (incl. the --- fences) get a muted grey gutter so the
    block is visible at a glance.  Active-line + comment highlights take priority. */
 .cm-comment-ln .cm-gutterElement.cm-fm-line { background: rgba(127,132,156,.22); color: var(--text-muted); }
@@ -225,12 +242,14 @@
 
 /* Collapsible section header bars (front matter / ABC tune header).
    Expanded = a thin bar above the section; collapsed = a bar replacing it. */
+/* Padding (not margin) so CodeMirror's block-widget height measurement includes
+   the gap — an outer margin would desync the gutter markers (see toDOM note). */
+.cm-section-header-wrap { padding: 2px 0; }
 .cm-section-header {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  margin: 2px 0;
   font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 600;
@@ -1220,21 +1239,9 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
      (topmost element below the safe-area inset). Desktop keeps the top bar. */
   #uf-topbar { display: none; }
 
-  /* ── Editor gutter: a SINGLE thin rail (no line numbers). The current line
-     shows as a full-width accent segment, a commented line yellow, and YAML
-     front-matter lines a muted grey. Tap the rail to add/view a line comment. ── */
-  .cm-comment-ln .cm-ln-text { display: none; }
-  #uf-editor-wrap .cm-comment-ln { min-width: 0; padding: 0; }
-  #uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; margin: 0; min-width: 10px; }
-  #uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
-  #uf-editor-wrap .cm-comment-ln .cm-has-comments { background: #f9e2af !important; }
-  /* Drop the border + container padding so the rail cell fills the gutter fully
-     (no dark sliver between the rail and the code). */
-  #uf-editor-wrap .cm-gutters { border-right: none; padding: 0; }
-  /* Buffer lives INSIDE the line (not the content) so the active-line highlight
-     covers it — no un-highlighted strip. Start flush at the top. */
-  #uf-editor-wrap .cm-content { padding-top: 0; padding-left: 0; }
-  #uf-editor-wrap .cm-line { padding-left: 6px; }
+  /* The thin-rail gutter (no line numbers) is now global — see the shared rules
+     near the top of this file. Only the mobile-specific accordion sizing below
+     stays here. */
 
   /* Comments word-wrap within the visible width even though the DSL lines do
      NOT wrap (they stay horizontally scrollable). The accordion is pinned to

@@ -151,6 +151,14 @@ class SectionHeaderWidget extends WidgetType {
   }
 
   toDOM(view) {
+    // The bar's vertical spacing lives on this wrapper as PADDING, not as a
+    // margin on the bar itself: CodeMirror measures a block widget's height
+    // from its DOM border-box and ignores outer margins, so a margin here would
+    // desync the gutter from the content (the gutter markers drift upward by the
+    // uncounted margin). Padding is inside the measured box, so it stays aligned.
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-section-header-wrap';
+
     const el = document.createElement('div');
     el.className = 'cm-section-header' + (this.collapsed ? ' collapsed' : '');
     el.setAttribute('role', 'button');
@@ -164,12 +172,13 @@ class SectionHeaderWidget extends WidgetType {
     const toggle = () => view.dispatch({ effects: toggleSectionEffect.of(this.id) });
     // Stop mousedown reaching the editor (which would move the caret / close the
     // comment accordion) and drive the toggle on click.
-    el.addEventListener('mousedown', (e) => e.stopPropagation());
+    wrap.addEventListener('mousedown', (e) => e.stopPropagation());
     el.addEventListener('click', (e) => { e.preventDefault(); toggle(); });
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
     });
-    return el;
+    wrap.appendChild(el);
+    return wrap;
   }
 
   ignoreEvent() { return true; }
