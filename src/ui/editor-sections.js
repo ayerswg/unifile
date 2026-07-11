@@ -58,23 +58,35 @@ function _docDslType() {
   return state.data?.dslType ?? 'markdown';
 }
 
+/** A tune-header line: a column-0 info field (`X:`, `T:`, `K:`, …), a comment
+ *  (`%`) or a stylesheet directive (`%%`). Music/notes lines never match. */
+function _isAbcHeaderLine(line) {
+  return /^[A-Za-z]:/.test(line) || /^%/.test(line);
+}
+
 /**
- * Find the end of the ABC tune header: the offset just after the first `K:`
- * line (column-0 info field), which marks the start of the measures.
- * @returns {number|null} end offset, or null when there is no `K:` line yet.
+ * Find the end of the ABC tune header. The header is the contiguous run of
+ * header lines at the top of the tune body, and it must contain the required
+ * `K:` line. Crucially the run can extend PAST `K:`: info fields the user
+ * writes after the key (e.g. a `T:` title) are still header metadata and belong
+ * in the header group, not the music. The run ends at the first line that isn't
+ * a header line (the first actual music line, or a blank line).
+ * @returns {number|null} end offset (after the last header line's newline), or
+ *   null when there is no `K:` line in the leading run yet.
  */
 function _abcHeaderEnd(text, from) {
   let cursor = from;
-  const rest = text.slice(from);
-  for (const rawLine of rest.split('\n')) {
-    const lineEnd = cursor + rawLine.length;   // position before the newline
-    if (/^K:/.test(rawLine)) {
-      // Include this line's trailing newline so the collapse consumes it.
-      return Math.min(lineEnd + 1, text.length);
-    }
-    cursor = lineEnd + 1;                       // + newline
+  let sawK = false;
+  let headerEnd = null;                         // end of the last header line
+  for (const rawLine of text.slice(from).split('\n')) {
+    const lineEnd = cursor + rawLine.length;    // position before the newline
+    if (!_isAbcHeaderLine(rawLine)) break;      // body (music) starts here
+    if (/^K:/.test(rawLine)) sawK = true;
+    // Include this line's trailing newline so the collapse consumes it.
+    headerEnd = Math.min(lineEnd + 1, text.length);
+    cursor = lineEnd + 1;                        // + newline
   }
-  return null;
+  return sawK ? headerEnd : null;
 }
 
 /** Number of source lines covered by [from, to). */
