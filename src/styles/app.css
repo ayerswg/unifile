@@ -175,14 +175,25 @@
 [data-theme="light"] .cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments { background: rgba(223,142,29,.18) !important; color: #df8e1d !important; }
 
 /* Editor gutter = a SINGLE thin rail (no line numbers), on desktop AND mobile.
-   The current line shows as a full-width accent segment, a commented line
-   yellow, and YAML front-matter lines a muted grey. Click/tap the rail to add
-   or view a line comment. */
+   The current line shows as a full-width accent segment and a commented line
+   yellow. Click/tap the rail for line options (comment; mute/solo on ABC voice
+   lines). The rail is wide enough to hold a single mute/solo mark character. */
 .cm-comment-ln .cm-ln-text { display: none; }
 #uf-editor-wrap .cm-comment-ln { min-width: 0; padding: 0; }
-#uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; margin: 0; min-width: 10px; }
+#uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; margin: 0; min-width: 14px; }
 #uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
 #uf-editor-wrap .cm-comment-ln .cm-has-comments { background: #f9e2af !important; }
+
+/* Mute (M) / Solo (S) mark shown in the rail for an ABC voice line. */
+.cm-comment-ln .cm-ln-mark {
+  display: block;
+  text-align: center;
+  font: 700 10px var(--font-mono);
+  line-height: inherit;
+  user-select: none;
+}
+.cm-comment-ln .cm-ln-mark.mark-M { color: var(--error); }
+.cm-comment-ln .cm-ln-mark.mark-S { color: var(--success); }
 /* Drop the border + container padding so the rail cell fills the gutter fully
    (no dark sliver between the rail and the code). */
 #uf-editor-wrap .cm-gutters { border-right: none; padding: 0; }
@@ -191,9 +202,10 @@
 #uf-editor-wrap .cm-content { padding-top: 0; padding-left: 0; }
 #uf-editor-wrap .cm-line { padding-left: 6px; }
 
-/* YAML front-matter lines (incl. the --- fences) get a muted grey gutter so the
-   block is visible at a glance.  Active-line + comment highlights take priority. */
-.cm-comment-ln .cm-gutterElement.cm-fm-line { background: rgba(127,132,156,.22); color: var(--text-muted); }
+/* Muted ABC voice — dim the source lines in the editor so it's clear they won't
+   sound or highlight during playback (the collapsible section bars now show the
+   front-matter block, so the gutter no longer tints it). */
+.cm-line.cm-voice-muted { opacity: .38; }
 /* Comment range mark — visible while accordion is open */
 [data-theme="light"] .cm-comment-range        { background: rgba(223,142,29,.12) !important; border-bottom: 1px solid rgba(223,142,29,.45) !important; }
 [data-theme="light"] .cm-comment-range-active { background: rgba(223,142,29,.22) !important; border-bottom: 1px solid rgba(223,142,29,.8)  !important; }
@@ -1710,6 +1722,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .abc-preview-wrap svg g.abcjs-note_selected {
   filter: drop-shadow(0 0 5px #ff0000);
 }
+
+/* Muted / non-soloed voice — its notes are dimmed in the score so it's clear
+   they won't sound or highlight (the class is toggled per note group in abcjs.js). */
+.abc-preview-wrap svg g.abc-voice-muted { opacity: .3; }
 
 /* While ABC audio is playing, .abcjs-note_playing is added directly to each
    simultaneously-playing SVG group element (one per voice).  CSS fill overrides

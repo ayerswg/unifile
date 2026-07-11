@@ -31,6 +31,7 @@ import { state, VIEW_MODES, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
 import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
+import { voiceIdOfLine, buildVoiceMap } from '../core/abc-voices.js';
 import {
   accordionField,
   openAccordionEffect,
@@ -167,35 +168,41 @@ const shebangDecoField = StateField.define({
 // ---------------------------------------------------------------------------
 
 class LineNumMarker extends GutterMarker {
-  constructor(lineNum, hasThread, isActive, isFrontMatter) {
+  constructor(lineNum, hasThread, isActive, voiceMark) {
     super();
     this.lineNum        = lineNum;
     this.hasThread      = hasThread;
     this.isActive       = isActive;
-    this.isFrontMatter  = isFrontMatter;
+    // voiceMark: 'M' (muted) / 'S' (soloed) shown in the rail for voice lines, else ''.
+    this.voiceMark      = voiceMark || '';
     // elementClass is applied to the wrapper gutter cell element by CM6.
-    // cm-fm-line tints the gutter for YAML front-matter lines (incl. the ---
-    // fences); the active-line + comment classes take visual priority.
-    this.elementClass = [
-      isActive ? 'cm-has-comments cm-accordion-active' : (hasThread ? 'cm-has-comments' : ''),
-      isFrontMatter ? 'cm-fm-line' : '',
-    ].filter(Boolean).join(' ');
+    // The active-line + comment classes take visual priority.
+    this.elementClass = isActive
+      ? 'cm-has-comments cm-accordion-active'
+      : (hasThread ? 'cm-has-comments' : '');
   }
 
   toDOM() {
     const el = document.createElement('div');
+    if (this.voiceMark) {
+      el.className = 'cm-ln-mark mark-' + this.voiceMark;
+      el.textContent = this.voiceMark;
+      el.title = this.voiceMark === 'S' ? 'Soloed voice — click to change'
+                                        : 'Muted voice — click to change';
+      return el;
+    }
     el.className = 'cm-ln-text';
     el.textContent = String(this.lineNum);
-    el.title = this.hasThread ? 'Comment — click to view' : 'Click to add a comment';
+    el.title = this.hasThread ? 'Comment — click to view' : 'Click for options';
     return el;
   }
 
   eq(other) {
     return (
-      this.lineNum       === other.lineNum   &&
-      this.hasThread     === other.hasThread &&
-      this.isActive      === other.isActive  &&
-      this.isFrontMatter === other.isFrontMatter
+      this.lineNum   === other.lineNum   &&
+      this.hasThread === other.hasThread &&
+      this.isActive  === other.isActive  &&
+      this.voiceMark === other.voiceMark
     );
   }
 }
@@ -210,12 +217,15 @@ class LineNumSpacer extends GutterMarker {
   }
 }
 
-// End offset of the YAML front matter (0 if none). Recomputed on doc change so
-// the gutter can tint front-matter lines without re-parsing per line.
-const frontMatterEndField = StateField.define({
-  create: (s) => parseGlobalFrontMatter(s.doc.toString()).bodyFrom,
-  update: (val, tr) => tr.docChanged ? parseGlobalFrontMatter(tr.state.doc.toString()).bodyFrom : val,
-});
+/** The M/S voice mark for a line, or '' — only for ABC voice (`V:`) lines. */
+function _voiceMarkForLine(lineText) {
+  if ((state.data?.dslType) !== 'abcjs') return '';
+  const id = voiceIdOfLine(lineText);
+  if (id == null) return '';
+  if (state.abcSoloVoices.has(id)) return 'S';
+  if (state.abcMutedVoices.has(id)) return 'M';
+  return '';
+}
 
 const commentLineNumbersExt = gutter({
   class: 'cm-lineNumbers cm-comment-ln',
@@ -227,31 +237,126 @@ const commentLineNumbersExt = gutter({
     const acc        = view.state.field(accordionField);
     const isActive   = acc.anchorPos !== null &&
       view.state.doc.lineAt(acc.anchorPos).from === lineInfo.from;
-    const fmEnd      = view.state.field(frontMatterEndField, false) ?? 0;
-    const isFm       = fmEnd > 0 && lineInfo.from < fmEnd;
-    return new LineNumMarker(lineInfo.number, threads.length > 0, isActive, isFm);
+    const voiceMark  = _voiceMarkForLine(lineInfo.text);
+    return new LineNumMarker(lineInfo.number, threads.length > 0, isActive, voiceMark);
   },
 
   lineMarkerChange: () => true,
   initialSpacer: () => new LineNumSpacer(),
 
   domEventHandlers: {
-    // Click the gutter → create or view a LINE-LEVEL comment for that line.
-    // (Comments are line-level only; clicking opens the existing thread if any,
-    // else the new-comment form anchored at the line start.)
-    click(view, line) {
+    // Click the gutter → open a small menu of line options (Comment always;
+    // Mute / Solo for ABC voice lines). See _showGutterMenu.
+    click(view, line, event) {
       const lineDoc = view.state.doc.lineAt(line.from);
-      const threads = getThreadsForLine(line.from, view.state.doc);
-      view.dispatch({
-        effects: openAccordionEffect.of({
-          anchorPos: lineDoc.to,
-          threadId:  threads[0]?.id ?? null,
-          newRange:  threads.length ? null : { from: lineDoc.from, to: lineDoc.from },
-        })
-      });
+      _showGutterMenu(view, event.clientX, event.clientY, lineDoc);
       return true;
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Gutter line-options menu (floating popup on gutter click)
+//
+// Every line offers "comment"; ABC voice (`V:`) lines also offer Mute / Solo,
+// which silence / isolate that voice for the whole song (see state + abcjs.js).
+// ---------------------------------------------------------------------------
+
+let _gutterMenuEl = null;
+
+function _hideGutterMenu() {
+  _gutterMenuEl?.remove();
+  _gutterMenuEl = null;
+}
+
+function _showGutterMenu(view, x, y, lineDoc) {
+  _hideGutterMenu();
+
+  const threads   = getThreadsForLine(lineDoc.from, view.state.doc);
+  const voiceId   = (state.data?.dslType) === 'abcjs' ? voiceIdOfLine(lineDoc.text) : null;
+
+  const menu = document.createElement('div');
+  menu.className = 'cm-comment-context-menu cm-gutter-menu';
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+
+  const addItem = (label, onClick) => {
+    const btn = document.createElement('button');
+    btn.className = 'cm-ccm-add';
+    btn.textContent = label;
+    btn.addEventListener('click', () => { _hideGutterMenu(); onClick(); });
+    menu.appendChild(btn);
+  };
+
+  addItem(threads.length ? 'View comment' : 'Add comment', () => {
+    view.dispatch({
+      effects: openAccordionEffect.of({
+        anchorPos: lineDoc.to,
+        threadId:  threads[0]?.id ?? null,
+        newRange:  threads.length ? null : { from: lineDoc.from, to: lineDoc.from },
+      })
+    });
+  });
+
+  if (voiceId != null) {
+    addItem(state.abcMutedVoices.has(voiceId) ? 'Unmute voice' : 'Mute voice',
+      () => state.toggleVoiceMute(voiceId));
+    addItem(state.abcSoloVoices.has(voiceId) ? 'Unsolo voice' : 'Solo voice',
+      () => state.toggleVoiceSolo(voiceId));
+  }
+
+  document.body.appendChild(menu);
+  _gutterMenuEl = menu;
+
+  // Keep the menu on-screen (it's positioned from the click point).
+  const r = menu.getBoundingClientRect();
+  if (r.right > window.innerWidth)  menu.style.left = Math.max(4, window.innerWidth  - r.width  - 4) + 'px';
+  if (r.bottom > window.innerHeight) menu.style.top  = Math.max(4, window.innerHeight - r.height - 4) + 'px';
+
+  const dismiss = (e) => {
+    if (!menu.contains(e.target)) {
+      _hideGutterMenu();
+      document.removeEventListener('mousedown', dismiss, true);
+    }
+  };
+  document.addEventListener('mousedown', dismiss, true);
+}
+
+// ---------------------------------------------------------------------------
+// Muted-voice fade (editor)
+//
+// Lines belonging to a muted/non-soloed ABC voice are dimmed so it's clear
+// they won't sound or highlight during playback. Rebuilt on doc change and
+// whenever the mute/solo selection changes (refreshVoiceFadeEffect).
+// ---------------------------------------------------------------------------
+
+const refreshVoiceFadeEffect = StateEffect.define();
+
+function _buildVoiceFade(editorState) {
+  if ((state.data?.dslType) !== 'abcjs') return Decoration.none;
+  if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return Decoration.none;
+  const doc = editorState.doc;
+  const vmap = buildVoiceMap(doc.toString());
+  const builder = new RangeSetBuilder();
+  for (let n = 1; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    const id = vmap.at(line.from);
+    if (id != null && state.isVoiceMuted(id)) {
+      builder.add(line.from, line.from, Decoration.line({ class: 'cm-voice-muted' }));
+    }
+  }
+  return builder.finish();
+}
+
+const voiceFadeField = StateField.define({
+  create: (s) => _buildVoiceFade(s),
+  update(deco, tr) {
+    if (tr.docChanged || tr.effects.some(e => e.is(refreshVoiceFadeEffect))) {
+      return _buildVoiceFade(tr.state);
+    }
+    return deco.map(tr.changes);
+  },
+  provide: f => EditorView.decorations.from(f)
 });
 
 // ---------------------------------------------------------------------------
@@ -374,8 +479,7 @@ const sectionSyntaxField = StateField.define({
 // ---------------------------------------------------------------------------
 
 const baseExtensions = [
-  commentLineNumbersExt,        // replaces lineNumbers(); comment + front-matter gutter
-  frontMatterEndField,          // tracks the YAML front-matter range for the gutter
+  commentLineNumbersExt,        // replaces lineNumbers(); comment + voice-mark gutter
   accordionField,               // inline accordion widget + range marks
   // Gutter line-number cell for the active line gets an accent highlight (the
   // left rail on mobile). We intentionally do NOT highlightActiveLine() the
@@ -404,6 +508,9 @@ const baseExtensions = [
 
   // Playback cursor highlight (green, tracks currently playing note)
   playHighlightField,
+
+  // Muted-voice fade — dims lines of muted / non-soloed ABC voices
+  voiceFadeField,
 
   // Shebang line decoration (#! section headers appear muted/italic)
   shebangDecoField,
@@ -600,6 +707,11 @@ export class Editor {
     // Thread data mutations (archive/restore) → force gutter re-render
     this._unsub.push(state.on('comments-change', () => {
       if (this._view) this._view.dispatch({});
+    }));
+
+    // Voice mute/solo change → refresh the gutter M/S marks + the muted-voice fade.
+    this._unsub.push(state.on('abc-voices-change', () => {
+      if (this._view) this._view.dispatch({ effects: refreshVoiceFadeEffect.of(null) });
     }));
 
     // DSL element clicked in preview → highlight the source range in the editor.

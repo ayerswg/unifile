@@ -123,6 +123,12 @@ class AppState extends EventBus {
     /** @type {boolean} Whether the Web MIDI API is available in this browser */
     this.abcMidiSupported = typeof navigator !== 'undefined' && !!navigator.requestMIDIAccess;
 
+    /** @type {Set<string>} ABC voice ids explicitly muted (won't play/highlight) */
+    this.abcMutedVoices = new Set();
+
+    /** @type {Set<string>} ABC voice ids soloed — when non-empty, only these play */
+    this.abcSoloVoices = new Set();
+
     /** @type {string|null} DSL id at current cursor position; null → use data.dslType */
     this.activeDslId = null;
 
@@ -221,6 +227,46 @@ class AppState extends EventBus {
     if (!this.diff) return;
     this.diff = null;
     this.emit('diff-change', null);
+  }
+
+  // -------------------------------------------------------------------------
+  // ABC voice mute / solo
+  //
+  // Muting silences a voice for the whole song (no sound, no play highlight,
+  // faded in the editor + score). Solo is the inverse: when any voice is soloed
+  // only the soloed voices play — every other voice is effectively muted.
+  // Keyed by voice id (see core/abc-voices.js) so they apply across every
+  // `V:` line of that voice.
+  // -------------------------------------------------------------------------
+
+  /** Whether a voice is effectively silenced (explicit mute, or solo elsewhere). */
+  isVoiceMuted(id) {
+    if (id == null) return false;
+    if (this.abcMutedVoices.has(id)) return true;
+    if (this.abcSoloVoices.size > 0 && !this.abcSoloVoices.has(id)) return true;
+    return false;
+  }
+
+  toggleVoiceMute(id) {
+    if (id == null) return;
+    if (this.abcMutedVoices.has(id)) this.abcMutedVoices.delete(id);
+    else this.abcMutedVoices.add(id);
+    this.emit('abc-voices-change', this);
+  }
+
+  toggleVoiceSolo(id) {
+    if (id == null) return;
+    if (this.abcSoloVoices.has(id)) this.abcSoloVoices.delete(id);
+    else this.abcSoloVoices.add(id);
+    this.emit('abc-voices-change', this);
+  }
+
+  /** Clear all mute/solo selections (e.g. when loading a different document). */
+  clearVoiceSelections() {
+    if (this.abcMutedVoices.size === 0 && this.abcSoloVoices.size === 0) return;
+    this.abcMutedVoices.clear();
+    this.abcSoloVoices.clear();
+    this.emit('abc-voices-change', this);
   }
 }
 

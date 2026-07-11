@@ -22,6 +22,7 @@ import { alignAbcVoices } from './abc-align.js';
 import { state } from '../ui/state.js';
 import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
+import { buildVoiceMap } from '../core/abc-voices.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -189,6 +190,40 @@ let _noteEvents = [];
 // `!name!` articulation tokens — abcjs drops unknown decorations, so we read
 // them from the source ourselves; their indices line up with note startChars.
 let _lastAbcSource = '';
+
+// Voice map for the last render (section-relative char → voice id + score order),
+// used to mute/solo voices for playback, highlighting and the score fade.
+let _voiceMap = buildVoiceMap('');
+
+/** True when the voice at a section-relative char offset is muted/non-soloed. */
+function _isMutedAtChar(sectionChar) {
+  if (sectionChar == null) return false;
+  const id = _voiceMap.at(sectionChar);
+  return id != null && state.isVoiceMuted(id);
+}
+
+/** Score-order voice indices that are muted (for the synth `voicesOff` option). */
+function _mutedVoiceIndices() {
+  const idx = [];
+  _voiceMap.order.forEach((id, i) => { if (state.isVoiceMuted(id)) idx.push(i); });
+  return idx;
+}
+
+/** Dim the note groups of muted voices in the rendered score (toggled on change). */
+function _applyVoiceFade() {
+  if (!_playEl) return;
+  _playEl.querySelectorAll('.abc-voice-muted').forEach(el => el.classList.remove('abc-voice-muted'));
+  if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return;
+  for (const ev of _noteEvents) {
+    const starts = ev.startCharArray ?? [ev.startChar];
+    const groups = ev.elements ?? [];
+    starts.forEach((s, i) => {
+      if (s != null && _isMutedAtChar(s)) {
+        (groups[i] ?? []).forEach(el => el?.classList?.add('abc-voice-muted'));
+      }
+    });
+  }
+}
 
 // The preview container element; we add/remove 'abc-playing' class on it.
 let _playEl = null;
@@ -364,6 +399,7 @@ async function render(content, el) {
     _engraver    = localEngraver;
     _tuneObjects = localTuneObjects;
     _lastAbcSource = content;
+    _voiceMap    = buildVoiceMap(content);
     _playEl      = container;
 
     // If a note from this block was selected before the re-render, restore the
@@ -392,6 +428,7 @@ async function render(content, el) {
     _syncTransportToSelection(_lastEditorSel.from, _lastEditorSel.to);
     _updateScoreRange();
     _updateScoreCursor(_pausedAtMs);
+    _applyVoiceFade();
   } catch (e) {
     el.innerHTML = `<pre class="error">ABC parse error:\n${e.message}</pre>`;
     _setHasTune(false);
@@ -453,6 +490,22 @@ state.on('dsl-select', ({ from }) => {
   // Clicking a note in the preview cues the transport to that note.
   _syncTransportToSelection(from, from);
 });
+
+// Voice mute/solo toggled → re-fade the score, and if we're mid-playback restart
+// from the current position so the newly muted/soloed voices take effect at once.
+state.on('abc-voices-change', () => {
+  _applyVoiceFade();
+  if (state.abcPlaying) {
+    const ms = _currentMs();
+    stopPlayback({ keepPosition: true });
+    startPlayback({ startMs: ms });
+  }
+});
+
+// Loading a different document (checkout / branch switch) clears voice selections
+// so stale voice ids don't silence the new tune.
+state.on('checkout',      () => state.clearVoiceSelections());
+state.on('branch-switch', () => state.clearVoiceSelections());
 
 // ---------------------------------------------------------------------------
 // Playback
@@ -550,6 +603,7 @@ function _scheduleOscillators(noteEvents, startSeconds, stopMs) {
 
     for (const p of (event.midiPitches ?? [])) {
       if (p?.pitch == null) continue;
+      if (_isMutedAtChar(p.startChar)) continue; // muted / non-soloed voice
 
       const { type, attack, decay, sustain, volScale } = _gmConfig(p.instrument);
 
@@ -909,6 +963,7 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopMs, meterSize, ks
     for (const p of (ev.midiPitches ?? [])) {
       if (p?.pitch == null) continue;
       const sc = p.startChar;
+      if (_isMutedAtChar(sc)) continue; // muted / non-soloed voice
       const voice = ksPlan ? ksPlan.charToVoice(sc) : 1;
       const ch = ksPlan ? ksPlan.channelForVoice(voice) : 0;
       const st = ksPlan ? vget(voice) : null;
@@ -1046,9 +1101,6 @@ function _highlightEvent(event) {
     _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
       el.classList.remove('abcjs-note_playing')
     );
-    if (event?.elements) {
-      event.elements.flat().forEach(svgEl => svgEl?.classList.add('abcjs-note_playing'));
-    }
   }
   if (!event) { state.emit('abc-play-cursor', null); return; }
 
@@ -1056,18 +1108,22 @@ function _highlightEvent(event) {
   // abcjs char indices are section-relative → add _sectionOffset to map them to
   // document positions; and trim leading decorations/whitespace so the green
   // covers the note, not its `!legato!`/`.` marks (abcjs's startChar can point
-  // at the decoration that precedes the note).
-  const doc = state.currentContent ?? '';
+  // at the decoration that precedes the note).  Muted / non-soloed voices are
+  // skipped entirely — neither the SVG note nor the editor cursor lights up
+  // (`elements[i]` parallels `startCharArray[i]`, one entry per sounding voice).
+  const doc    = state.currentContent ?? '';
   const starts = event.startCharArray ?? [event.startChar];
   const ends   = event.endCharArray   ?? [event.endChar];
-  const ranges = starts
-    .map((s, i) => {
-      if (s === undefined || ends[i] === undefined) return null;
-      const to = ends[i] + _sectionOffset;
-      const from = _trimToNoteStart(doc, s + _sectionOffset, to);
-      return { from, to };
-    })
-    .filter(r => r && r.from < r.to);
+  const groups = event.elements ?? [];
+  const ranges = [];
+  starts.forEach((s, i) => {
+    if (s === undefined || ends[i] === undefined) return;
+    if (_isMutedAtChar(s)) return;
+    if (_playEl) (groups[i] ?? []).forEach(el => el?.classList?.add('abcjs-note_playing'));
+    const to   = ends[i] + _sectionOffset;
+    const from = _trimToNoteStart(doc, s + _sectionOffset, to);
+    if (from < to) ranges.push({ from, to });
+  });
   state.emit('abc-play-cursor', ranges.length ? ranges : null);
 }
 
@@ -1759,6 +1815,10 @@ async function startPlayback(opts = {}) {
     // Arbitrary start offsets are handled by seek() before start() (below).
     try {
       const synth = new abcjs.synth.CreateSynth();
+      // Muted / non-soloed voices → drop them from the synth sequence by their
+      // score-order index (abcjs's `voicesOff`), so the internal piano plays only
+      // the audible voices. Highlighting is filtered separately (_highlightEvent).
+      const voicesOff = _mutedVoiceIndices();
       await synth.init({
         audioContext: _audioContext,
         visualObj:    tune,
@@ -1766,6 +1826,7 @@ async function startPlayback(opts = {}) {
           // Omit soundFontUrl to use abcjs's default FluidR3 base — for which
           // this build serves acoustic_grand_piano from the bundle offline.
           ...(soundfontUrl ? { soundFontUrl: soundfontUrl } : {}),
+          ...(voicesOff.length ? { voicesOff } : {}),
           // Only react to a NATURAL end.  Manually stopping the synth (pause /
           // seek / stop) also fires onEnded; guarding on abcPlaying stops that
           // re-entrant call from wiping the remembered pause position.
