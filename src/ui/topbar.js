@@ -992,70 +992,23 @@ Content on page 2.</code></pre>
     docsUrl: 'https://abcnotation.com/wiki/abc:standard:v2.1',
     docsLabel: 'ABC Standard v2.1',
     sections: [
+      // ── Getting started ──────────────────────────────────────────────────
       {
-        title: 'Header Fields',
-        content: `<pre><code>X:1           % Reference number (required, must be first)
-T:My Song     % Title
-C:Composer    % Composer
-M:4/4         % Meter (time signature)
-L:1/8         % Default note length
-Q:1/4=120     % Tempo (quarter note = 120 bpm)
-R:reel        % Rhythm
-K:G           % Key (must appear before body)</code></pre>
-<p class="help-note">Headers go before the music body. <code>K:</code> is required and marks the start of the body.</p>`
+        group: 'Getting started',
+        title: 'Document Structure',
+        content: `<pre><code>---              &lt;- front matter (optional, unifile)
+title: My Tune
+---
+X:1              &lt;- tune header starts here
+T:My Tune
+M:4/4
+L:1/8
+K:G              &lt;- K: ends the header
+GABc d2 e2 |     &lt;- music body</code></pre>
+<p class="help-note">A document is an optional <code>---</code> <strong>front matter</strong> block, then the <strong>tune header</strong> (fields like <code>X:</code> <code>T:</code> <code>M:</code>), then the <strong>music body</strong>. <code>K:</code> is required and marks where the header ends and the notes begin.</p>`
       },
       {
-        title: 'Notes & Rests',
-        content: `<pre><code>C D E F G A B    % lower octave (middle C to B)
-c d e f g a b    % upper octave
-C, D,            % comma = one octave lower
-c' d'            % apostrophe = one octave higher
-^C _E =F         % ^sharp  _flat  =natural
-z                % rest
-Z                % full-bar rest</code></pre>`
-      },
-      {
-        title: 'Note Lengths',
-        content: `<pre><code>A     % default length (set by L:)
-A2    % double length
-A/2   % half length  (also A/)
-A3/2  % dotted note (3/2 of default)
-A>B   % A dotted, B halved  (A3/2 B/)
-A<B   % A halved, B dotted</code></pre>`
-      },
-      {
-        title: 'Barlines & Repeats',
-        content: `<pre><code>|       % barline
-||      % double barline (end of section)
-|]      % thin-thick final barline
-|:      % start repeat
-:|      % end repeat
-::      % end+start repeat
-|1      % first ending
-|2      % second ending</code></pre>`
-      },
-      {
-        title: 'Chords & Slurs',
-        content: `<pre><code>[CEG]   % chord (simultaneous notes)
-"G"A    % guitar chord symbol above note
-(ABC)   % slur
--       % tie to next note</code></pre>`
-      },
-      {
-        title: 'Multiple Voices',
-        content: `<pre><code>V:1 clef=treble
-V:2 clef=bass
-K:C
-[V:1] e2fe d2ed | c2dc B4 |
-[V:2] C,4 G,4   | C,8    |</code></pre>`
-      },
-      {
-        title: 'Tablature',
-        content: `<pre><code>%%tablature instrument=guitar capo=0 label=Tab
-%%tablature instrument=mandolin</code></pre>
-<p class="help-note">Instruments: <code>guitar</code>, <code>mandolin</code>, <code>violin</code>, <code>fiddle</code>, <code>fiveString</code>. Place <code>%%tablature</code> directives before <code>K:</code>.</p>`
-      },
-      {
+        group: 'Getting started',
         title: 'Minimal Example',
         content: `<pre><code>X:1
 T:Ode to Joy
@@ -1064,6 +1017,294 @@ L:1/4
 Q:100
 K:C
 E E F G | G F E D | C C D E | E3/2 D/ D2 |</code></pre>`
+      },
+
+      // ── Front matter (unifile) ───────────────────────────────────────────
+      {
+        group: 'Front matter (unifile)',
+        title: 'The --- Block',
+        content: `<pre><code>---
+title: Silence Speaks
+author: A. Composer
+midi:
+  octave: c3
+---</code></pre>
+<p class="help-note">unifile adds an optional YAML block before <code>X:1</code>. It sets the document <code>title</code> (the tune's <code>T:</code> is derived from it unless you write an explicit <code>T:</code>) and configures playback under <code>midi:</code>. It is unifile-specific — plain <code>.abc</code> files ignore it.</p>`
+      },
+      {
+        group: 'Front matter (unifile)',
+        title: 'MIDI: Dynamics & Accents',
+        content: `<pre><code>---
+midi:
+  map:
+    ff:     { velocity: 120 }   # sticky level (1-127)
+    pp:     { velocity: 40 }
+    accent: { velocity: +25 }   # per-note bump (+/-)
+    soft:   { velocity: 0.8 }   # scale of default
+---</code></pre>
+<p class="help-note">Standard ABC dynamics (<code>!ff!</code>…<code>!pp!</code>) already affect velocity. <code>midi.map</code> lets you redefine any marking: an integer is an absolute level, <code>+n</code>/<code>-n</code> is a per-note bump (accents), a decimal scales the default.</p>`
+      },
+      {
+        group: 'Front matter (unifile)',
+        title: 'MIDI: Articulations / Keyswitches',
+        content: `<pre><code>---
+midi:
+  octave: c3          # octave that middle C (60) is named
+  lead-ms: 20         # fire keyswitch this early
+  hold: momentary     # momentary | held
+  map:
+    pizzicato: { note: C0 }        # keyswitch note
+    legato:    { cc: 32, value: 6 }
+    arco:      { program: 1 }
+---
+K:C
+!pizzicato! CDEF | !arco! G4 |</code></pre>
+<p class="help-note">Route <code>!name!</code> markings to a keyswitch <code>note</code>, a <code>cc</code>, or a <code>program</code> change for external instruments (MIDI-out only). <code>octave</code> matches your sampler's octave numbering (<code>c3</code> = Kontakt). Marks are sticky until changed.</p>`
+      },
+      {
+        group: 'Front matter (unifile)',
+        title: 'MIDI: Per-Voice Mix',
+        content: `<pre><code>---
+midi:
+  voices:
+    1: { channel: 1, volume: 100, pan: 54 }
+    2: { channel: 2, volume: 85,  pan: 74, velocity: 0.9 }
+---</code></pre>
+<p class="help-note">Per voice (by number): <code>channel</code>, <code>volume</code> (CC7), <code>pan</code> (CC10, 0-127), a velocity <code>scale</code>, and its own <code>map</code>/<code>keyswitches</code> that override the global ones. Applies on the external MIDI path.</p>`
+      },
+
+      // ── Tune header ──────────────────────────────────────────────────────
+      {
+        group: 'Tune header',
+        title: 'Header Fields',
+        content: `<pre><code>X:1           % Reference number (required, first line)
+T:My Song     % Title  (subsequent T: = subtitle)
+C:Composer    % Composer
+O:Ireland     % Origin
+R:reel        % Rhythm
+M:4/4         % Meter (time signature)
+L:1/8         % Default (unit) note length
+Q:1/4=120     % Tempo (quarter = 120 bpm)
+K:G           % Key — must be LAST; ends the header</code></pre>
+<p class="help-note">Fields are <code>Letter:</code> at the start of a line. Everything from <code>X:</code> down to <code>K:</code> is the header; the body follows <code>K:</code>.</p>`
+      },
+      {
+        group: 'Tune header',
+        title: 'Meter (M:)',
+        content: `<pre><code>M:4/4      % four-four
+M:C        % common time (= 4/4)
+M:C|       % cut time  (= 2/2)
+M:6/8      % compound
+M:3/4      % waltz
+M:none     % free / no meter</code></pre>`
+      },
+      {
+        group: 'Tune header',
+        title: 'Key & Mode (K:)',
+        content: `<pre><code>K:C            % C major
+K:Am           % A minor
+K:Gm           % G minor
+K:D mix        % D mixolydian (dor/phr/lyd/loc…)
+K:Eb           % E-flat major
+K:C clef=bass  % set clef in the key field
+K:none         % no key signature</code></pre>
+<p class="help-note">A second <code>K:</code> mid-body (or inline <code>[K:…]</code>) changes key from that point.</p>`
+      },
+
+      // ── Notes & rhythm ───────────────────────────────────────────────────
+      {
+        group: 'Notes & rhythm',
+        title: 'Notes & Octaves',
+        content: `<pre><code>C D E F G A B    % lower octave (middle C … B)
+c d e f g a b    % octave above
+C, D,            % comma  = an octave lower
+c' d'            % apostrophe = an octave higher
+C,, ... c''      % stack for further octaves</code></pre>`
+      },
+      {
+        group: 'Notes & rhythm',
+        title: 'Accidentals',
+        content: `<pre><code>^C   % sharp
+^^C  % double sharp
+_E   % flat
+__E  % double flat
+=F   % natural</code></pre>
+<p class="help-note">An accidental lasts to the end of the bar (like standard notation).</p>`
+      },
+      {
+        group: 'Notes & rhythm',
+        title: 'Note Lengths',
+        content: `<pre><code>A     % the unit length (set by L:)
+A2    % twice as long
+A/2   % half   (A/ is shorthand for A/2)
+A/4   % quarter
+A3    % three units
+A3/2  % dotted (one-and-a-half units)</code></pre>`
+      },
+      {
+        group: 'Notes & rhythm',
+        title: 'Broken Rhythm',
+        content: `<pre><code>A&gt;B   % dotted A, halved B   (= A3/2 B/2)
+A&lt;B   % halved A, dotted B
+A&gt;&gt;B  % double-dotted</code></pre>`
+      },
+      {
+        group: 'Notes & rhythm',
+        title: 'Rests',
+        content: `<pre><code>z     % rest (same length rules as notes: z2, z/2…)
+Z     % whole-bar rest  (Z2 = two bars)
+x     % invisible rest</code></pre>`
+      },
+      {
+        group: 'Notes & rhythm',
+        title: 'Tuplets',
+        content: `<pre><code>(3ABC        % triplet — 3 in the time of 2
+(3ABC (3DEF  % two triplets
+(5ABCDE      % 5 in the time of 2 (simple meter)
+(6ABCDEF     % 6 in the time of 2
+(3:2:4 A2Bc  % general: p in time of q, over r notes</code></pre>
+<p class="help-note">Shorthand <code>(p</code> fits <em>p</em> notes into the usual time; the full form <code>(p:q:r</code> spells it out (<em>p</em> notes in the time of <em>q</em>, spanning <em>r</em> notes).</p>`
+      },
+      {
+        group: 'Notes & rhythm',
+        title: 'Ties, Slurs & Chords',
+        content: `<pre><code>A-A      % tie (same pitch, joined into one)
+(ABCD)   % slur over a phrase
+[CEG]    % chord — notes sounding together
+[CEG]2   % chord with a length
+[C2E2G2] % lengths inside a chord</code></pre>
+<p class="help-note"><strong>Slur vs chord:</strong> <code>(CEG)</code> = three separate slurred notes; <code>[CEG]</code> = one chord.</p>`
+      },
+
+      // ── Notation ─────────────────────────────────────────────────────────
+      {
+        group: 'Notation',
+        title: 'Barlines & Repeats',
+        content: `<pre><code>|       % barline
+||      % double barline
+|]      % final (thin-thick) barline
+|:      % start repeat
+:|      % end repeat
+::      % end + start repeat
+|1  :|2 % first / second endings</code></pre>`
+      },
+      {
+        group: 'Notation',
+        title: 'Grace Notes',
+        content: `<pre><code>{g}A     % grace note before A
+{gege}B  % multiple grace notes
+{/g}A    % acciaccatura (slashed)</code></pre>`
+      },
+      {
+        group: 'Notation',
+        title: 'Decorations & Ornaments',
+        content: `<pre><code>.A          % staccato (dot)
+!trill!A    % trill
+!fermata!A  % pause
+!turn!A  !mordent!A  !accent!A
+!&gt;!A        % accent (shorthand)
+HA          % legacy fermata (H = !fermata!)</code></pre>
+<p class="help-note">Write the decoration immediately before the note. Many <code>!name!</code> decorations are available; unknown ones are ignored on the score but can still drive playback via <code>midi.map</code>.</p>`
+      },
+      {
+        group: 'Notation',
+        title: 'Dynamics',
+        content: `<pre><code>!pp!A !p!A !mp!A !mf!A !f!A !ff!A
+!crescendo(! ABCD !crescendo)!
+!diminuendo(! ABCD !diminuendo)!</code></pre>
+<p class="help-note">These affect both the printed marking and playback velocity.</p>`
+      },
+      {
+        group: 'Notation',
+        title: 'Chord Symbols & Text',
+        content: `<pre><code>"Gm7"A       % chord symbol above the note
+"^above"A    % annotation above
+"_below"A    % annotation below
+"&lt;"A "&gt;"A     % left / right of the note</code></pre>`
+      },
+      {
+        group: 'Notation',
+        title: 'Lyrics (w:)',
+        content: `<pre><code>K:C
+CDEF GABc |
+w: Twin-kle twin-kle lit-tle star</code></pre>
+<p class="help-note">A <code>w:</code> line under a music line aligns syllables to notes. <code>-</code> splits a word across notes, <code>_</code> holds a syllable, <code>*</code> skips a note.</p>`
+      },
+      {
+        group: 'Notation',
+        title: 'Inline Fields & Comments',
+        content: `<pre><code>ABC [M:3/4] DEF     % change meter mid-line
+GAB [K:D] cde       % change key mid-line
+[V:2] C,4           % switch voice inline
+% a full-line comment
+ABC % end-of-line comment</code></pre>`
+      },
+
+      // ── Voices & layout ──────────────────────────────────────────────────
+      {
+        group: 'Voices & layout',
+        title: 'Multiple Voices',
+        content: `<pre><code>V:1 clef=treble name="Flute"
+V:2 clef=bass   name="Cello"
+K:C
+[V:1] e2fe d2ed | c2dc B4 |
+[V:2] C,4 G,4   | C,8    |</code></pre>
+<p class="help-note">Declare voices with <code>V:</code> in the header (id, then options like <code>clef=</code>, <code>name=</code>, <code>transpose=</code>). In the body, prefix lines with <code>[V:id]</code> or a standalone <code>V:id</code> line.</p>`
+      },
+      {
+        group: 'Voices & layout',
+        title: 'Grand Staff & Staff Groups',
+        content: `<pre><code>%%score {(RH) | (LH)}
+V:RH clef=treble
+V:LH clef=bass
+K:C
+[V:RH] E2G2 c2e2 | d2c2 B2A2 |
+[V:LH] C,2G,,2 C,2E,2 | G,,2C,2 E,2G,,2 |</code></pre>
+<p class="help-note"><code>%%score</code> lays out staves: <code>{ }</code> = piano brace, <code>[ ]</code> = bracket, <code>( )</code> = voices sharing one staff. A <code>|</code> between the groups makes barlines <strong>bridge the staves</strong> (needed for a proper grand staff). Place it before <code>K:</code>.</p>`
+      },
+      {
+        group: 'Voices & layout',
+        title: 'Clefs',
+        content: `<pre><code>V:1 clef=treble    % treble (G)
+V:2 clef=bass      % bass (F)
+V:3 clef=alto      % alto (C)
+V:4 clef=tenor
+clef=treble+8      % octave up   (-8 = down)
+clef=none          % no clef / percussion</code></pre>`
+      },
+      {
+        group: 'Voices & layout',
+        title: 'Tablature',
+        content: `<pre><code>%%tablature instrument=guitar capo=0 label=Tab
+%%tablature instrument=mandolin</code></pre>
+<p class="help-note">Adds a tab staff under the notes. Instruments: <code>guitar</code>, <code>mandolin</code>, <code>violin</code>, <code>fiddle</code>, <code>fiveString</code>. Put <code>%%tablature</code> directives before <code>K:</code>.</p>`
+      },
+      {
+        group: 'Voices & layout',
+        title: 'Formatting Directives',
+        content: `<pre><code>%%staffwidth 500
+%%scale 1.2
+%%stretchlast true
+%%titlefont Helvetica 18</code></pre>
+<p class="help-note"><code>%%</code> directives tune layout and fonts. They can go in the file header or the tune header.</p>`
+      },
+
+      // ── Playback (unifile) ───────────────────────────────────────────────
+      {
+        group: 'Playback (unifile)',
+        title: 'Sound & Transport',
+        content: `<p class="help-note">Playback uses a built-in, fully-offline acoustic piano. Use the transport bar (play / scrubber / time) at the bottom, the floating play button on mobile, or press <code>Space</code>-like controls in the app. Put the cursor in a note to play from there; select a range to play just that range.</p>
+<p class="help-note">A custom soundfont URL can be set under <strong>Settings → Extensions</strong> (<code>soundfont-url</code>).</p>`
+      },
+      {
+        group: 'Playback (unifile)',
+        title: 'Mute / Solo Voices',
+        content: `<p class="help-note">Click the <strong>gutter rail</strong> next to any <code>V:</code> line and choose <strong>Mute</strong> or <strong>Solo</strong>. Muted voices don't sound or highlight and are dimmed in the editor and score (marked <code>M</code>); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
+      },
+      {
+        group: 'Playback (unifile)',
+        title: 'External MIDI Output',
+        content: `<p class="help-note">Under <strong>Settings → Audio output</strong> you can route playback to an external MIDI port (e.g. macOS IAC → a DAW/sampler) instead of the internal piano. This is where <code>midi.map</code> keyswitches, per-voice channels, volume and pan take effect. Web MIDI is Chromium-only.</p>`
       }
     ]
   },
@@ -1176,18 +1417,34 @@ h1 {
 export function showDslHelpModal(dslType) {
   const help = DSL_HELP[dslType] ?? DSL_HELP.markdown;
 
-  // Build sections HTML
-  const sectionsHtml = help.sections.map(s => `
-    <div class="dsl-help-section">
-      <h3 class="dsl-help-section-title">${escHtml(s.title)}</h3>
-      <div class="dsl-help-section-body">${s.content}</div>
-    </div>
-  `).join('');
+  // A stable id per section (for the nav anchors + scroll-spy).
+  const slug = (s, i) =>
+    'dslhelp-' + i + '-' + String(s.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+  // Build the body (sections, with a heading whenever the group changes) and the
+  // navigation list (grouped the same way) in one pass so they stay in sync.
+  let sectionsHtml = '';
+  let navHtml = '';
+  let lastGroup = null;
+  help.sections.forEach((s, i) => {
+    const id = slug(s, i);
+    if (s.group && s.group !== lastGroup) {
+      lastGroup = s.group;
+      sectionsHtml += `<div class="dsl-help-group-title">${escHtml(s.group)}</div>`;
+      navHtml += `<div class="dsl-help-nav-group">${escHtml(s.group)}</div>`;
+    }
+    sectionsHtml += `
+      <div class="dsl-help-section" id="${id}">
+        <h3 class="dsl-help-section-title">${escHtml(s.title)}</h3>
+        <div class="dsl-help-section-body">${s.content}</div>
+      </div>`;
+    navHtml += `<button type="button" class="dsl-help-nav-item" data-target="${id}">${escHtml(s.title)}</button>`;
+  });
 
   const overlay = document.createElement('div');
   overlay.className = 'dsl-help-overlay';
   overlay.innerHTML = `
-    <div class="dsl-help-modal" role="dialog" aria-modal="true" aria-label="${escHtml(help.name)} syntax reference">
+    <div class="dsl-help-modal dsl-help-modal--nav" role="dialog" aria-modal="true" aria-label="${escHtml(help.name)} syntax reference">
       <div class="dsl-help-header">
         <div class="dsl-help-title">
           <span class="dsl-help-badge">${escHtml(help.name)}</span>
@@ -1195,8 +1452,11 @@ export function showDslHelpModal(dslType) {
         </div>
         <button class="dsl-help-close" aria-label="Close">&times;</button>
       </div>
-      <div class="dsl-help-body">
-        ${sectionsHtml}
+      <div class="dsl-help-main">
+        <nav class="dsl-help-nav" aria-label="Sections">${navHtml}</nav>
+        <div class="dsl-help-body">
+          ${sectionsHtml}
+        </div>
       </div>
       <div class="dsl-help-footer">
         <a class="dsl-help-docs-link" href="${escHtml(help.docsUrl)}" target="_blank" rel="noopener noreferrer">
@@ -1214,6 +1474,47 @@ export function showDslHelpModal(dslType) {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('.dsl-help-close').addEventListener('click', close);
   document.addEventListener('keydown', onKey);
+
+  const body = overlay.querySelector('.dsl-help-body');
+  const nav  = overlay.querySelector('.dsl-help-nav');
+  const navItems = [...nav.querySelectorAll('.dsl-help-nav-item')];
+
+  // Nav click → scroll the target section to the top of the scroll container.
+  // offsetTop is relative to the positioned overlay (not the body), so measure
+  // the delta with bounding rects and offset from the body's current scroll.
+  nav.addEventListener('click', (e) => {
+    const btn = e.target.closest('.dsl-help-nav-item');
+    if (!btn) return;
+    const target = overlay.querySelector('#' + CSS.escape(btn.dataset.target));
+    if (!target) return;
+    const delta = target.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    body.scrollTo({ top: Math.max(0, body.scrollTop + delta - 8) });
+    setActive(btn.dataset.target);   // immediate highlight; scroll-spy keeps it synced
+  });
+
+  const setActive = (id) => {
+    navItems.forEach(b => b.classList.toggle('active', b.dataset.target === id));
+    // Keep the active item visible in the (independently scrolling) nav —
+    // vertical sidebar on desktop, horizontal chip strip on mobile.
+    nav.querySelector('.dsl-help-nav-item.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  };
+
+  // Scroll-spy: the active section is the last one whose top has reached (just
+  // past) the top of the scrolling body. A scroll listener is used rather than
+  // IntersectionObserver, which doesn't fire reliably inside a nested scroller
+  // in every environment.
+  const sections = [...overlay.querySelectorAll('.dsl-help-section')];
+  const syncActive = () => {
+    const bodyTop = body.getBoundingClientRect().top;
+    let currentId = sections[0]?.id ?? null;
+    for (const sec of sections) {
+      if (sec.getBoundingClientRect().top - bodyTop <= 24) currentId = sec.id;
+      else break;
+    }
+    if (currentId) setActive(currentId);
+  };
+  body.addEventListener('scroll', syncActive, { passive: true });
+  syncActive();
 
   // Focus the modal for keyboard accessibility
   overlay.querySelector('.dsl-help-modal').focus?.();

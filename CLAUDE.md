@@ -57,7 +57,7 @@ src/
     editor.js        CodeMirror 6 setup: gutter, per-section highlighting, comments, front-matter tint
     editor-sections.js  Collapsible front-matter / ABC-header section bars (default-collapsed on load)
     preview.js       Renders the active model/DSL to the preview pane
-    topbar.js        Title, DSL menu, VCS pills (desktop); mobile top bar = menu + centred title + dirty dot; commit-log pane (pending node + export marker)
+    topbar.js        Title, DSL menu, VCS pills (desktop); mobile top bar = menu + centred title + dirty dot; commit-log pane (pending node + export marker). Also `showDslHelpModal` = the per-DSL syntax reference (grouped, navigable sidebar; `DSL_HELP[dsl].sections[]` with optional `group`)
     commit-bar.js    Mobile commit-pane bottom bar = branch selector (drop-up). Commit composing moved into the log's pending node.
     commit-dialog.js Full commit dialog (identity + message + tag)
     diff-view.js     DiffView overlay + DiffBar (read-only commit diff)

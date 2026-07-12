@@ -3992,7 +3992,68 @@ noscript .noscript-wrap {
   gap: 20px;
 }
 
-.dsl-help-section {}
+/* Navigable variant: a table-of-contents sidebar beside the scrolling body. */
+.dsl-help-modal--nav { width: min(920px, 100%); }
+.dsl-help-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+.dsl-help-nav {
+  flex: 0 0 200px;
+  overflow-y: auto;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  scrollbar-width: thin;
+}
+.dsl-help-nav-group {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-muted);
+  padding: 12px 10px 4px;
+}
+.dsl-help-nav-group:first-child { padding-top: 2px; }
+.dsl-help-nav-item {
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-sub);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background .1s, color .1s;
+}
+.dsl-help-nav-item:hover { background: var(--bg-surface); color: var(--text); }
+.dsl-help-nav-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+/* Group heading inside the scrolling body. */
+.dsl-help-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  color: var(--accent);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.dsl-help-group-title:not(:first-child) { margin-top: 8px; }
+
+.dsl-help-section { scroll-margin-top: 8px; }
 
 .dsl-help-section-title {
   font-size: 12px;
@@ -4202,5 +4263,32 @@ noscript .noscript-wrap {
     font-size: 26px;
     padding: 6px 10px;
     margin: -4px -4px -4px 0;
+  }
+  /* Navigable help: nav becomes a horizontal, scrollable chip strip on top. */
+  .dsl-help-modal--nav { width: 100%; }
+  .dsl-help-main { flex-direction: column; }
+  .dsl-help-nav {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .dsl-help-nav-group { display: none; }
+  .dsl-help-nav-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 14px;
+    background: var(--bg-surface);
+  }
+  .dsl-help-nav-item.active {
+    border-left-color: transparent;
+    border-bottom-color: transparent;
   }
 }
