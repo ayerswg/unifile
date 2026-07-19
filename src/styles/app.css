@@ -1734,12 +1734,24 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .abc2svg-wrap svg { max-width: 100%; }
 .abc2svg-wrap rect.abcr { fill: var(--accent); fill-opacity: 0; cursor: pointer; }
 .abc2svg-wrap rect.abcr.uf-range { fill-opacity: .13; }  /* playback-range band */
-.abc2svg-wrap rect.abcr.uf-hl    { fill-opacity: .3;  }  /* selection highlight */
-.abc2svg-wrap rect.abcr.uf-play  { fill-opacity: .45; }  /* sounding now */
-/* Muted/non-soloed voice: bg-tinted veil dims the glyphs underneath (glyphs are
-   raw paths, not per-voice groups, so the fade is an overlay). Declared last —
-   mute wins over range/selection tints on the same symbol. */
-.abc2svg-wrap rect.abcr.uf-muted { fill: var(--bg); fill-opacity: .65; }
+/* Note highlights colour the symbol's own glyph elements (mapped per symbol in
+   abc2svg-render.js), matching the old abcjs look: clicked/selected note = red,
+   sounding note = green, each with a soft glow. No invert filter here (abc2svg
+   draws with currentColor), so the colours are direct — `fill` (!important
+   beats presentation attributes) for filled heads/flags, `color` resolves the
+   currentColor strokes (stems, staff-relative lines). */
+.abc2svg-wrap svg .uf-hl   { fill: #ff0000 !important; color: #ff0000; filter: drop-shadow(0 0 4px #ff0000); }
+.abc2svg-wrap svg .uf-play { fill: #00c800 !important; color: #00c800; filter: drop-shadow(0 0 4px #00c800); }
+[data-theme="light"] .abc2svg-wrap svg .uf-hl   { fill: #d20f39 !important; color: #d20f39; filter: drop-shadow(0 0 4px #d20f39); }
+[data-theme="light"] .abc2svg-wrap svg .uf-play { fill: #40a02b !important; color: #40a02b; filter: drop-shadow(0 0 4px #40a02b); }
+/* Fallback when a symbol has no mapped glyphs: tint its overlay rect instead
+   (fill-opacity overrides the 0 base; the red/green fill comes from above). */
+.abc2svg-wrap svg rect.abcr.uf-hl   { fill-opacity: .3;  filter: none; }
+.abc2svg-wrap svg rect.abcr.uf-play { fill-opacity: .45; filter: none; }
+/* Muted/non-soloed voice: dim the glyphs (abcjs-style opacity fade); bg-tinted
+   rect veil for unmapped symbols. Declared last — mute wins over range tint. */
+.abc2svg-wrap svg .uf-muted { opacity: .3; }
+.abc2svg-wrap svg rect.abcr.uf-muted { fill: var(--bg); fill-opacity: .65; opacity: 1; }
 /* Tablature fret digits get a white feFlood halo (masks the staff line under
    the number — fine in print, a white box in dark theme). Theme the flood to
    the app background so the mask matches whatever the score sits on. */

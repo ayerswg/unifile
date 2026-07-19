@@ -1,6 +1,6 @@
 {
   "name": "unifile",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Framework for single-file offline HTML quines with version control",
   "type": "module",
   "scripts": {

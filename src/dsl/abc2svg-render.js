@@ -58,6 +58,11 @@ function engrave(content, { annotate = false } = {}) {
     img_out: (s) => chunks.push(s),
   };
   if (annotate) {
+    // NOTE: do NOT try to wrap each symbol's output in a <g> via anno_start/
+    // anno_stop — abc2svg buffers SVG per staff and interleaves symbol output,
+    // so the open/close tags mis-nest and one group swallows its neighbours.
+    // Rect overlays (its own editor's pattern) + geometric glyph mapping
+    // (below, in renderAbc2svg) are the reliable route.
     user.anno_stop = (type, start, stop, x, y, w, h, s) => {
       if (SKIP_ANNO.has(type)) return;
       annos.push({ start, end: stop, voice: s?.p_v?.id ?? null });
@@ -75,6 +80,37 @@ function engrave(content, { annotate = false } = {}) {
     errors.push(e && e.message ? e.message : String(e));
   }
   return { chunks, errors, annos };
+}
+
+/**
+ * abc2svg batches a whole line of music glyphs into ONE <text> element with
+ * per-character x/y coordinate lists (SMuFL codepoints: clefs, noteheads,
+ * rests…). Individual notes therefore aren't addressable elements. Split each
+ * such text into per-character <tspan>s carrying their own x/y — rendering is
+ * identical, but every glyph becomes an element the highlight mapping can
+ * colour. Texts with a font class (f0…, titles/labels) or a single position
+ * are left alone.
+ */
+const _SVG_NS = 'http://www.w3.org/2000/svg';
+function explodeGlyphTexts(el) {
+  el.querySelectorAll('svg text').forEach((t) => {
+    if (t.getAttribute('class') || t.firstElementChild) return;
+    const xs = (t.getAttribute('x') || '').split(',');
+    if (xs.length < 2) return;
+    const ys = (t.getAttribute('y') || '').split(',');
+    const chars = [...t.textContent];
+    if (chars.length !== xs.length) return;   // unexpected shape — don't touch
+    t.textContent = '';
+    t.removeAttribute('x');
+    t.removeAttribute('y');
+    chars.forEach((ch, i) => {
+      const ts = document.createElementNS(_SVG_NS, 'tspan');
+      ts.setAttribute('x', xs[i]);
+      ts.setAttribute('y', ys[i] ?? ys[ys.length - 1]);
+      ts.textContent = ch;
+      t.appendChild(ts);
+    });
+  });
 }
 
 /**
@@ -130,6 +166,7 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
 
   el.innerHTML = chunks.join('');
   makeResponsive(el);
+  explodeGlyphTexts(el);
 
   // Pair each rect with its anno record via the istart baked into its class.
   // NOT by emission index: abc2svg buffers SVG output per staff and joins the
@@ -143,8 +180,49 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     const start = Number((r.getAttribute('class').match(/_(\d+)_/) || [])[1]);
     const a = byStart.get(start);
     if (!a || start < prefix.length) return null;
-    return { start: start - prefix.length, end: a.end - prefix.length, voice: a.voice, el: r };
+    return {
+      start: start - prefix.length, end: a.end - prefix.length,
+      voice: a.voice, el: r, glyphs: null,
+    };
   }).filter(Boolean).sort((a, b) => a.start - b.start);
+
+  // Map drawn glyphs to symbols geometrically: an element belongs to the
+  // smallest annotation box containing its centre (screen space, so staff
+  // <g transform> contexts don't matter). Gives the red/green note colouring
+  // its targets — the note's own paths/texts/uses, like abcjs's note groups.
+  // Built LAZILY on first highlight use: at render time the pane may have no
+  // layout yet (hidden pane / first paint), where every box measures 0×0.
+  // Until it succeeds, highlights fall back to the overlay-rect tint.
+  let glyphsMapped = false;
+  const ensureGlyphMap = () => {
+    if (glyphsMapped) return;
+    const symBoxes = syms
+      .map(s => ({ s, b: s.el.getBoundingClientRect() }))
+      .filter(({ b }) => b.width > 0 && b.height > 0);
+    if (!symBoxes.length) return;               // no layout yet — retry next call
+    let assigned = 0;
+    el.querySelectorAll('svg :is(path, text, tspan, use, ellipse, circle, polygon)').forEach((gl) => {
+      if (gl.classList.contains('abcr')) return;
+      if (gl.tagName === 'text' && gl.firstElementChild) return;   // exploded container
+      const b = gl.getBoundingClientRect();
+      if (!b.width && !b.height) return;
+      const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+      let best = null;
+      for (const { s, b: rb } of symBoxes) {
+        if (cx < rb.x || cx > rb.right || cy < rb.y || cy > rb.bottom) continue;
+        if (b.width > rb.width * 3) continue;   // spans neighbours (staff/bar lines)
+        const area = rb.width * rb.height;
+        if (!best || area < best.area) best = { s, area };
+      }
+      if (best) { (best.s.glyphs ??= []).push(gl); assigned++; }
+    });
+    // Only latch a map that actually assigned glyphs: at render time the music
+    // font may not have loaded yet, so every tspan measures 0×0 and nothing
+    // maps — latching then would freeze the empty map forever. Retrying on the
+    // next highlight call (font loaded by then) succeeds.
+    if (assigned) glyphsMapped = true;
+    else syms.forEach(s => { s.glyphs = null; });
+  };
 
   // Playback cursor bar: an HTML div positioned over the rect that's sounding.
   const cursor = document.createElement('div');
@@ -166,17 +244,36 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   const inRange = (from, to) => syms.filter(s => s.start >= from && s.start < to);
 
   const clearClass = (cls) => {
-    el.querySelectorAll(`rect.abcr.${cls}`).forEach(r => r.classList.remove(cls));
+    el.querySelectorAll(`.${cls}`).forEach(n => n.classList.remove(cls));
   };
+  // Note-colouring classes (uf-hl red / uf-play green) go on the symbol's own
+  // glyph elements — colouring the note itself like abcjs did. Band/veil
+  // classes (uf-range / uf-muted) stay on the overlay rect. Symbols with no
+  // mapped glyphs fall back to a rect tint.
+  const GLYPH_CLS = new Set(['uf-hl', 'uf-play']);
   const markPairs = (pairs, cls) => {
     clearClass(cls);
     if (!pairs) return;
-    for (const p of pairs) inRange(p.from, p.to).forEach(s => s.el.classList.add(cls));
+    const onGlyph = GLYPH_CLS.has(cls);
+    if (onGlyph) ensureGlyphMap();
+    for (const p of pairs) {
+      inRange(p.from, p.to).forEach((s) => {
+        if (onGlyph && s.glyphs) s.glyphs.forEach(g => g.classList.add(cls));
+        else s.el.classList.add(cls);
+      });
+    }
   };
 
   return {
     el,
     symCount: syms.length,
+    _debug: () => ({
+      mapped: glyphsMapped,
+      symsWithGlyphs: syms.filter(s => s.glyphs?.length).length,
+      totalGlyphs: syms.reduce((n, s) => n + (s.glyphs?.length ?? 0), 0),
+      tspans: el.querySelectorAll('svg tspan').length,
+      firstRectBox: (() => { const b = syms[0]?.el.getBoundingClientRect(); return b ? [b.x, b.y, b.width, b.height].map(Math.round) : null; })(),
+    }),
     // Width the score was engraved for, so callers can re-engrave when the pane
     // ends up meaningfully different (first layout, window resize). null when
     // the document sets its own %%pagewidth — the user's layout is fixed.
@@ -185,16 +282,24 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
       : (prefix ? Math.min(paneW, 1600) : 794),
 
     highlightRange(from, to) {
-      clearClass('uf-hl');
-      if (to > from) inRange(from, to).forEach(s => s.el.classList.add('uf-hl'));
+      markPairs(to > from ? [{ from, to }] : null, 'uf-hl');
     },
 
     setPlaying(pairs)  { markPairs(pairs, 'uf-play');  },
     setRange(pairs)    { markPairs(pairs, 'uf-range'); },
 
     setVoiceFade(isMuted) {
+      ensureGlyphMap();
       for (const s of syms) {
-        s.el.classList.toggle('uf-muted', !!(s.voice && isMuted(s.voice)));
+        const muted = !!(s.voice && isMuted(s.voice));
+        // Fade the glyphs themselves (abcjs-style opacity dim); the rect veil
+        // is the fallback for symbols with no mapped glyphs.
+        if (s.glyphs) {
+          s.glyphs.forEach(g => g.classList.toggle('uf-muted', muted));
+          s.el.classList.remove('uf-muted');
+        } else {
+          s.el.classList.toggle('uf-muted', muted);
+        }
       }
     },
 
