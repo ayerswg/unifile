@@ -216,8 +216,25 @@ export function abc2svgExportSvg(content) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${maxW}" height="${y}" viewBox="0 0 ${maxW} ${y}">\n${parts.join('\n')}\n</svg>`;
 }
 
+/**
+ * Prepend a format directive unless the document already sets it (a user's
+ * explicit %%directive always wins). File-level %% lines are valid before X:.
+ */
+function withDefaultDirective(content, name, value) {
+  return new RegExp(`^%%${name}\\b`, 'm').test(content)
+    ? content
+    : `%%${name} ${value}\n${content}`;
+}
+
 /** Export: print-ready HTML body — each system responsive in its own <div>. */
 export function abc2svgExportPrintBody(content) {
+  // Size the engraving for US-letter (the print window sets @page{size:letter}
+  // with 0.5in body padding): 8.5in − 2×0.5in = 7.5in content column. abc2svg's
+  // own default is A4 (21cm) with 1.8cm margins — page geometry belongs to the
+  // print CSS here, so zero abc2svg's margins and let padding do the framing.
+  content = withDefaultDirective(content, 'pagewidth',   '7.5in');
+  content = withDefaultDirective(content, 'leftmargin',  '0');
+  content = withDefaultDirective(content, 'rightmargin', '0');
   const { chunks } = engrave(content);            // no annotation rects in exports
   if (!chunks.length) return null;
   const tmp = document.createElement('div');
