@@ -1,6 +1,6 @@
 {
   "name": "unifile",
-  "version": "0.1.18",
+  "version": "0.2.0",
   "description": "Framework for single-file offline HTML quines with version control",
   "type": "module",
   "scripts": {
@@ -27,6 +27,7 @@
     "@codemirror/view": "^6.39.15",
     "@lezer/highlight": "^1.2.3",
     "@marp-team/marp-core": "^4.3.0",
+    "abc2svg": "^1.22.1",
     "abcjs": "^6.0.0",
     "docx": "^8.5.0",
     "dompurify": "^3.0.0",

@@ -106,6 +106,35 @@ const loadNoteOverridePlugin = {
   },
 };
 
+/*
+ * abc2svg is a <script>-tag library: its core does `var abc2svg = {}` and hangs
+ * everything off that global — no ESM/CJS exports.  To bundle it with esbuild
+ * we append an `export default` so `import abc2svg from '.../abc2svg-1.js'`
+ * resolves to the populated object.  (`typeof abc2svg == "undefined"` is true
+ * for the hoisted-but-unassigned `var`, so its own guard still initialises it.)
+ *
+ * Its add-on modules (strtab-1.js = string tablature) assume the same globals:
+ * `abc2svg` (now module-scoped in the core file, so import it) and a bare
+ * `user` (declared by abc2svg's own web frontends; a module-scope var suffices
+ * — the module only writes a no-op `user.nul` decoration handler onto it).
+ */
+const abc2svgExportPlugin = {
+  name: 'abc2svg-export',
+  setup(build) {
+    build.onLoad({ filter: /abc2svg[\\/]abc2svg-1\.js$/ }, async (args) => {
+      const src = await readFile(args.path, 'utf8');
+      return { contents: src + '\nexport default abc2svg;\n', loader: 'js' };
+    });
+    build.onLoad({ filter: /abc2svg[\\/]strtab-1\.js$/ }, async (args) => {
+      const src = await readFile(args.path, 'utf8');
+      return {
+        contents: `import abc2svg from './abc2svg-1.js';\nvar user = {};\n${src}`,
+        loader: 'js',
+      };
+    });
+  },
+};
+
 // ---------------------------------------------------------------------------
 // CLI flags
 // ---------------------------------------------------------------------------
@@ -195,7 +224,7 @@ function makeInitialData(defaultDslType = DEFAULT_DSL_TYPE) {
 function buildOptions(entryPoint, unifileMode, plugins) {
   const esPlugins = [];
   if (plugins.includes('mermaid')) esPlugins.push(elkjsStubPlugin);
-  if (plugins.includes('abcjs'))   esPlugins.push(loadNoteOverridePlugin);
+  if (plugins.includes('abcjs'))   esPlugins.push(loadNoteOverridePlugin, abc2svgExportPlugin);
 
   return {
     entryPoints: [entryPoint],

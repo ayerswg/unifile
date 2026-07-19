@@ -1712,6 +1712,35 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   vector-effect: non-scaling-stroke;
 }
 
+/* ── abc2svg score (default engraving engine; see dsl/abc2svg-render.js) ──
+   abc2svg draws with currentColor, so theming is just `color` — no invert
+   filter needed. Interactivity rides on the per-symbol annotation rects
+   (class "abcr"): invisible by default, tinted by state classes. */
+.abc2svg-wrap { position: relative; color: var(--fg); }
+.abc2svg-wrap svg { max-width: 100%; }
+.abc2svg-wrap rect.abcr { fill: var(--accent); fill-opacity: 0; cursor: pointer; }
+.abc2svg-wrap rect.abcr.uf-range { fill-opacity: .13; }  /* playback-range band */
+.abc2svg-wrap rect.abcr.uf-hl    { fill-opacity: .3;  }  /* selection highlight */
+.abc2svg-wrap rect.abcr.uf-play  { fill-opacity: .45; }  /* sounding now */
+/* Muted/non-soloed voice: bg-tinted veil dims the glyphs underneath (glyphs are
+   raw paths, not per-voice groups, so the fade is an overlay). Declared last —
+   mute wins over range/selection tints on the same symbol. */
+.abc2svg-wrap rect.abcr.uf-muted { fill: var(--bg); fill-opacity: .65; }
+/* Tablature fret digits get a white feFlood halo (masks the staff line under
+   the number — fine in print, a white box in dark theme). Theme the flood to
+   the app background so the mask matches whatever the score sits on. */
+.abc2svg-wrap feFlood { flood-color: var(--bg); }
+/* Playback cursor bar (positioned by cursorAt() in px within the wrap). */
+.uf-a2s-cursor {
+  position: absolute;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: .8;
+  pointer-events: none;
+  z-index: 2;
+}
+
 /* Clickable note/rest elements get a pointer cursor */
 .abc-preview-wrap svg g[class*="abcjs-note"],
 .abc-preview-wrap svg g[class*="abcjs-rest"],

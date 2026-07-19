@@ -19,6 +19,9 @@ import { linter } from '@codemirror/lint';
 import { hoverTooltip } from '@codemirror/view';
 import { registerDSL } from './registry.js';
 import { alignAbcVoices } from './abc-align.js';
+import {
+  renderAbc2svg, useAbc2svg, abc2svgExportSvg, abc2svgExportPrintBody,
+} from './abc2svg-render.js';   // default engraving engine (abcjs stays for audio)
 import { state } from '../ui/state.js';
 import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
@@ -211,6 +214,8 @@ function _mutedVoiceIndices() {
 
 /** Dim the note groups of muted voices in the rendered score (toggled on change). */
 function _applyVoiceFade() {
+  // abc2svg score: every annotation rect knows its voice id — one pass.
+  if (_a2sScore) { _a2sScore.setVoiceFade(id => state.isVoiceMuted(id)); return; }
   if (!_playEl) return;
   _playEl.querySelectorAll('.abc-voice-muted').forEach(el => el.classList.remove('abc-voice-muted'));
   if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return;
@@ -264,9 +269,32 @@ function _scheduleRangeHighlight(adjFrom, adjTo) {
   if (_rangeHighlightRaf) cancelAnimationFrame(_rangeHighlightRaf);
   _rangeHighlightRaf = requestAnimationFrame(() => {
     _rangeHighlightRaf = 0;
-    if (!_engraver) return;
-    try { _engraver.rangeHighlight(adjFrom, adjTo); } catch { /* stale after re-render */ }
+    _rangeHighlightNow(adjFrom, adjTo);
   });
+}
+
+// The abc2svg score object for the active block (null when the abcjs renderer
+// is active — localStorage escape hatch — or abc2svg failed on this content).
+// Mirrors _engraver's lifecycle: replaced per render, re-established on click.
+let _a2sScore = null;
+
+// Debug introspection for preview automation (harmless in production).
+if (typeof globalThis !== 'undefined') {
+  globalThis.__ufAbcDebug = Object.assign(() => ({
+    engraver: !!_engraver,
+    a2s: !!_a2sScore,
+    a2sSyms: _a2sScore?.symCount ?? null,
+    a2sLive: _a2sScore ? document.contains(_a2sScore.el) : null,
+    sectionOffset: _sectionOffset,
+    noteEvents: _noteEvents.length,
+  }), { exportSvg: abc2svgExportSvg, exportPrintBody: abc2svgExportPrintBody });
+}
+
+/** Selection highlight on whichever engraver is live (section-relative chars). */
+function _rangeHighlightNow(adjFrom, adjTo) {
+  if (_a2sScore) { _a2sScore.highlightRange(adjFrom, adjTo); return; }
+  if (!_engraver) return;
+  try { _engraver.rangeHighlight(adjFrom, adjTo); } catch { /* stale after re-render */ }
 }
 
 // Active playback handles (null when not playing).
@@ -313,6 +341,7 @@ async function render(content, el) {
   // active-section-change does not flash the play button away after a note click.
   _engraver    = null;
   _tuneObjects = null;
+  _a2sScore    = null;
   _playEl      = null;
   el.innerHTML = '';
 
@@ -402,10 +431,45 @@ async function render(content, el) {
     _voiceMap    = buildVoiceMap(content);
     _playEl      = container;
 
+    // abc2svg engraving (default): abcjs's render above stays in the DOM but
+    // hidden — its engraver/TimingCallbacks/synth remain the audio + timing
+    // engine — while abc2svg draws the score the user sees. If abc2svg can't
+    // render this content, fall back to showing the abcjs render.
+    //
+    // `%%tablature`/`%%tab` (the abcjs pragma) keeps the abcjs renderer: abcjs
+    // ADDS a tab staff below the notation, while abc2svg's %%strtab CONVERTS a
+    // voice into a tab staff — falling back preserves those docs exactly.
+    // abc2svg-native tablature is available via %%strtab (strtab-1.js bundled).
+    let localScore = null;
+    if (useAbc2svg() && !tablature) {
+      const engravingEl = document.createElement('div');
+      engravingEl.className = 'abc2svg-wrap';
+      el.appendChild(engravingEl);
+      localScore = renderAbc2svg(content, engravingEl, {
+        onSelect: (from, to) => {
+          // Re-establish this block as the active playback context (parity
+          // with the abcjs clickListener above).
+          _engraver    = localEngraver;
+          _tuneObjects = localTuneObjects;
+          _a2sScore    = localScore;
+          _playEl      = container;
+          _sectionOffset = localOffset;
+          _lastNoteBlockOffset = localOffset;
+          _lastNoteClickRange  = { from, to };
+          state.emit('dsl-select', { from: from + localOffset, to: to + localOffset });
+          _setNoteSelected(true);
+          localScore.highlightRange(from, to);
+        },
+      });
+      if (localScore) container.style.display = 'none';
+      else engravingEl.remove();
+    }
+    _a2sScore = localScore;
+
     // If a note from this block was selected before the re-render, restore the
     // visual highlight on the freshly-created SVG elements.
-    if (_hasNoteHighlight && _lastNoteClickRange && localOffset === _lastNoteBlockOffset && localEngraver) {
-      try { localEngraver.rangeHighlight(_lastNoteClickRange.from, _lastNoteClickRange.to); } catch { /* stale */ }
+    if (_hasNoteHighlight && _lastNoteClickRange && localOffset === _lastNoteBlockOffset) {
+      _rangeHighlightNow(_lastNoteClickRange.from, _lastNoteClickRange.to);
     }
 
     _setHasTune(!!(tuneObjects?.[0]));
@@ -1102,7 +1166,11 @@ function _highlightEvent(event) {
       el.classList.remove('abcjs-note_playing')
     );
   }
-  if (!event) { state.emit('abc-play-cursor', null); return; }
+  if (!event) {
+    _a2sScore?.setPlaying(null);
+    state.emit('abc-play-cursor', null);
+    return;
+  }
 
   // Editor: emit all voice char ranges for green text-colour highlighting.
   // abcjs char indices are section-relative → add _sectionOffset to map them to
@@ -1116,14 +1184,17 @@ function _highlightEvent(event) {
   const ends   = event.endCharArray   ?? [event.endChar];
   const groups = event.elements ?? [];
   const ranges = [];
+  const secPairs = [];   // section-relative pairs for the abc2svg score
   starts.forEach((s, i) => {
     if (s === undefined || ends[i] === undefined) return;
     if (_isMutedAtChar(s)) return;
     if (_playEl) (groups[i] ?? []).forEach(el => el?.classList?.add('abcjs-note_playing'));
+    secPairs.push({ from: s, to: ends[i] });
     const to   = ends[i] + _sectionOffset;
     const from = _trimToNoteStart(doc, s + _sectionOffset, to);
     if (from < to) ranges.push({ from, to });
   });
+  _a2sScore?.setPlaying(secPairs.length ? secPairs : null);
   state.emit('abc-play-cursor', ranges.length ? ranges : null);
 }
 
@@ -1187,6 +1258,10 @@ function _setupScoreCursor(container) {
   _lineExtents = new Map();
   _overlayResizeObs?.disconnect();
   _overlayResizeObs = null;
+
+  // abc2svg mode: the cursor bar is the score object's own positioned div
+  // (see abc2svg-render.js cursorAt) — no abcjs-viewBox overlay to build.
+  if (_a2sScore) return;
 
   const svg = container?.querySelector('svg');
   const viewBox = svg?.getAttribute('viewBox');
@@ -1336,8 +1411,33 @@ function _scoreSnapForMs(ms) {
   return { x: _noteCenterX(ev), y, h };
 }
 
+/** Last placed note event at/before `ms` (or the first, when ms precedes it). */
+function _eventAtMs(ms) {
+  let ev = null;
+  for (const e of _noteEvents) {
+    if (e.left == null) continue;                // skip bar/end entries
+    if (e.milliseconds <= ms + 0.5) ev = e; else break;
+  }
+  return ev ?? _noteEvents.find(e => e.left != null) ?? null;
+}
+
+/** The unmuted section-relative char pairs of a note event (for the a2s score). */
+function _eventCharPairs(ev, { includeMuted = false } = {}) {
+  if (!ev) return null;
+  const starts = ev.startCharArray ?? [ev.startChar];
+  const ends   = ev.endCharArray   ?? [ev.endChar];
+  const pairs  = [];
+  starts.forEach((s, i) => {
+    if (s == null || ends[i] == null) return;
+    if (!includeMuted && _isMutedAtChar(s)) return;
+    pairs.push({ from: s, to: ends[i] });
+  });
+  return pairs.length ? pairs : null;
+}
+
 /** Position the playback cursor bar at `ms` (the true scrubber position). */
 function _updateScoreCursor(ms) {
+  if (_a2sScore) { _a2sScore.cursorAt(_eventCharPairs(_eventAtMs(ms))); return; }
   if (!_cursorLine) return;
   const p = _scoreSnapForMs(ms);
   if (!p) { _cursorLine.style.display = 'none'; return; }
@@ -1351,6 +1451,20 @@ function _updateScoreCursor(ms) {
 
 /** Draw (or clear) the selected-range band + start/end edge bars in the score. */
 function _updateScoreRange() {
+  if (_a2sScore) {
+    const r = _selRangeMs;
+    if (!r || !_noteEvents.length) { _a2sScore.setRange(null); return; }
+    // Every voice's chars of every note that will play (onset in [start, end)) —
+    // the band covers all voices; muting shows through the uf-muted fade instead.
+    const pairs = [];
+    for (const e of _noteEvents) {
+      if (e.left == null) continue;
+      if (e.milliseconds < r.startMs - 0.5 || e.milliseconds >= r.endMs - 0.5) continue;
+      pairs.push(...(_eventCharPairs(e, { includeMuted: true }) ?? []));
+    }
+    _a2sScore.setRange(pairs.length ? pairs : null);
+    return;
+  }
   if (!_rangeGroup) return;
   while (_rangeGroup.firstChild) _rangeGroup.removeChild(_rangeGroup.firstChild);
   const r = _selRangeMs;
@@ -1927,6 +2041,7 @@ function stopPlayback(opts = {}) {
       el.classList.remove('abcjs-note_playing')
     );
   }
+  _a2sScore?.setPlaying(null);
   _playEl?.classList.remove('abc-playing');
 
   state.abcPlaying = false;
@@ -1947,10 +2062,10 @@ function stopPlayback(opts = {}) {
   // For note-click selections (collapsed _lastEditorSel), abcjs's own
   // abcjs-note_selected fill survives naturally — don't call rangeHighlight(0,0)
   // which would erase it.
-  if (_engraver && _lastEditorSel.from !== _lastEditorSel.to) {
+  if (_lastEditorSel.from !== _lastEditorSel.to) {
     const adjFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
     const adjTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
-    try { _engraver.rangeHighlight(adjFrom, adjTo); } catch { /* stale */ }
+    _rangeHighlightNow(adjFrom, adjTo);
   }
   } finally {
     _stopping = false;
@@ -2024,9 +2139,15 @@ async function renderToString(content) {
 
 async function exportSVG(content) {
   content = _withDerivedTitle(content);
+  const tablature = parseTabDirectives(content);
+  // abc2svg engraving for exports too (same engine as the on-screen score);
+  // falls through to abcjs on failure, %%tablature docs, or the escape hatch.
+  if (useAbc2svg() && !tablature) {
+    const svg = abc2svgExportSvg(content);
+    if (svg) return new Blob([svg], { type: 'image/svg+xml' });
+  }
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
-  const tablature = parseTabDirectives(content);
   abcjs.renderAbc(tmp, content, { ...(tablature ? { tablature } : {}) });
   const svgContent = tmp.innerHTML;
   document.body.removeChild(tmp);
@@ -2048,25 +2169,34 @@ async function exportPDF(content) {
   // call getBBox() on each staff <g> during the split.  position:fixed +
   // left:-9999px keeps it off-screen while still being layout-computed.
   const STAFF_W = 680;
-  const tmp = document.createElement('div');
-  tmp.style.cssText = `position:fixed;left:-9999px;top:0;width:${STAFF_W}px;visibility:hidden;`;
-  document.body.appendChild(tmp);
-
   const tablature = parseTabDirectives(content);
-  try {
-    abcjs.renderAbc(tmp, content, {
-      oneSvgPerLine: true,
-      staffwidth: STAFF_W,
-      add_classes: true,
-      ...(tablature ? { tablature } : {}),
-    });
-  } catch (e) {
-    document.body.removeChild(tmp);
-    return null;
-  }
+  let bodyHtml = null;
 
-  const bodyHtml = tmp.innerHTML;
-  document.body.removeChild(tmp);
+  // abc2svg engraving for print/PDF (it naturally emits one SVG per system —
+  // exactly the per-system page-break structure this export needs).
+  // %%tablature docs stay on abcjs (see render()).
+  if (useAbc2svg() && !tablature) bodyHtml = abc2svgExportPrintBody(content);
+
+  if (bodyHtml == null) {
+    const tmp = document.createElement('div');
+    tmp.style.cssText = `position:fixed;left:-9999px;top:0;width:${STAFF_W}px;visibility:hidden;`;
+    document.body.appendChild(tmp);
+
+    try {
+      abcjs.renderAbc(tmp, content, {
+        oneSvgPerLine: true,
+        staffwidth: STAFF_W,
+        add_classes: true,
+        ...(tablature ? { tablature } : {}),
+      });
+    } catch (e) {
+      document.body.removeChild(tmp);
+      return null;
+    }
+
+    bodyHtml = tmp.innerHTML;
+    document.body.removeChild(tmp);
+  }
 
   // ── 2. Build a clean, self-contained print page ────────────────────────────
   //
