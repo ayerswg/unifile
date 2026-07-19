@@ -1648,12 +1648,26 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   overscroll-behavior: contain;  /* don't chain overscroll to the document (iOS shift) */
   background: var(--bg);
   border-left: 1px solid var(--border);
+  container-type: inline-size;   /* 100cqw = pane width (score-block breakout below) */
 }
 
 .preview-content {
   padding: 24px 32px;
   max-width: 800px;
   margin: 0 auto;
+}
+
+/* Sheet music breaks out of the 800px prose column: scores want width. Sized to
+   the PANE via container-query units (not vw — wrong in split view), capped at
+   1100px, centred over the column by the negative side margin. In panes
+   narrower than the column this resolves back to 100%. Browsers without cq
+   units drop these declarations → the score stays in the column (safe). The
+   abc2svg render measures the wrap's clientWidth for %%pagewidth, so the wider
+   box directly becomes a wider engraving (more bars per line). */
+.preview-content .abc2svg-wrap,
+.preview-content .abc-preview-wrap {
+  width: clamp(100%, 100cqw - 64px, 1100px);
+  margin-left: calc((100% - clamp(100%, 100cqw - 64px, 1100px)) / 2);
 }
 
 .preview-empty {

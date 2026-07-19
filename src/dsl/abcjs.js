@@ -278,6 +278,14 @@ function _scheduleRangeHighlight(adjFrom, adjTo) {
 // Mirrors _engraver's lifecycle: replaced per render, re-established on click.
 let _a2sScore = null;
 
+// Re-engrave when the pane width settles or changes: abc2svg engraves to a
+// fixed page width measured at render time, which is 0/stale on the very first
+// render (pane not laid out yet) and goes stale on window/split resizes
+// (abcjs's responsive mode re-flowed CSS-only; abc2svg needs a re-render).
+// Deferred while playing — a re-render would reset the transport position.
+let _a2sResizeObs   = null;
+let _a2sResizeTimer = 0;
+
 // Debug introspection for preview automation (harmless in production).
 if (typeof globalThis !== 'undefined') {
   globalThis.__ufAbcDebug = Object.assign(() => ({
@@ -343,6 +351,9 @@ async function render(content, el) {
   _tuneObjects = null;
   _a2sScore    = null;
   _playEl      = null;
+  _a2sResizeObs?.disconnect();
+  _a2sResizeObs = null;
+  clearTimeout(_a2sResizeTimer);
   el.innerHTML = '';
 
   if (!content.trim()) {
@@ -463,6 +474,26 @@ async function render(content, el) {
       });
       if (localScore) container.style.display = 'none';
       else engravingEl.remove();
+
+      // Watch the wrap's width and re-engrave when it differs meaningfully
+      // from the width the score was engraved for (first-layout settle,
+      // window/split resize). pageWidth is null when the doc pins its own
+      // %%pagewidth — then the layout is the author's, don't second-guess it.
+      if (localScore?.pageWidth) {
+        try {
+          _a2sResizeObs = new ResizeObserver(() => {
+            clearTimeout(_a2sResizeTimer);
+            _a2sResizeTimer = setTimeout(() => {
+              if (_a2sScore !== localScore || state.abcPlaying) return;
+              const w = engravingEl.clientWidth;
+              if (w && Math.abs(w - localScore.pageWidth) / w > 0.1) {
+                render(content, el);   // re-measures and re-engraves
+              }
+            }, 250);
+          });
+          _a2sResizeObs.observe(engravingEl);
+        } catch { /* ResizeObserver unsupported — engraved width stays as-is */ }
+      }
     }
     _a2sScore = localScore;
 

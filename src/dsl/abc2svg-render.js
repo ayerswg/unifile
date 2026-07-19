@@ -107,24 +107,43 @@ function makeResponsive(el) {
  * startChar/endChar space — identical source string, so offsets line up).
  */
 export function renderAbc2svg(content, el, { onSelect } = {}) {
-  const { chunks, errors, annos } = engrave(content, { annotate: true });
+  // Fill the pane (parity with abcjs's responsive:'resize'): abc2svg engraves
+  // to its page width — default A4 (~794px) — and AUTO-WRAPS source lines that
+  // overflow it, so without this a wide system breaks early no matter how wide
+  // the pane is. Inject the pane width as the page width (default-only; an
+  // explicit %%pagewidth wins), with slim screen margins. A hidden pane
+  // measures 0 → keep abc2svg's own default.
+  //
+  // The injected prefix shifts every istart abc2svg reports; syms are adjusted
+  // back to content-relative offsets below so click/highlight mapping and the
+  // editor stay in sync.
+  const paneW = Math.round(el.clientWidth || el.parentElement?.clientWidth || 0);
+  let prefix = '';
+  if (paneW >= 300 && !/^%%pagewidth\b/m.test(content)) {
+    prefix += `%%pagewidth ${Math.min(paneW, 1600)}\n`;
+    if (!/^%%leftmargin\b/m.test(content))  prefix += '%%leftmargin 14\n';
+    if (!/^%%rightmargin\b/m.test(content)) prefix += '%%rightmargin 14\n';
+  }
+
+  const { chunks, errors, annos } = engrave(prefix + content, { annotate: true });
   if (!chunks.length) return null;
 
   el.innerHTML = chunks.join('');
   makeResponsive(el);
 
-  // Pair each emitted rect with its anno record (same emission order). If the
-  // counts ever disagree (defensive), fall back to parsing the class name.
   // Pair each rect with its anno record via the istart baked into its class.
   // NOT by emission index: abc2svg buffers SVG output per staff and joins the
   // buffers at flush time, so rect DOM order ≠ anno callback order.
+  // Offsets are then shifted back by the injected prefix length so sym.start/
+  // .end are content-relative (annos from inside the prefix are dropped).
   const rects = [...el.querySelectorAll('rect.abcr')];
   const byStart = new Map();
   annos.forEach(a => { if (!byStart.has(a.start)) byStart.set(a.start, a); });
   const syms = rects.map((r) => {
     const start = Number((r.getAttribute('class').match(/_(\d+)_/) || [])[1]);
     const a = byStart.get(start);
-    return a ? { start, end: a.end, voice: a.voice, el: r } : null;
+    if (!a || start < prefix.length) return null;
+    return { start: start - prefix.length, end: a.end - prefix.length, voice: a.voice, el: r };
   }).filter(Boolean).sort((a, b) => a.start - b.start);
 
   // Playback cursor bar: an HTML div positioned over the rect that's sounding.
@@ -134,11 +153,12 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   el.appendChild(cursor);
 
   // Click → source range (delegated; rects sit on top of their symbols).
+  // Match by element identity — sym.start is content-relative while the class
+  // name still carries the raw (prefix-shifted) istart.
   el.addEventListener('click', (ev) => {
     const r = ev.target.closest?.('rect.abcr');
     if (!r) return;
-    const start = Number((r.getAttribute('class').match(/_(\d+)_/) || [])[1]);
-    const sym = syms.find(s => s.start === start);
+    const sym = syms.find(s => s.el === r);
     if (sym && onSelect) { ev.stopPropagation(); onSelect(sym.start, sym.end); }
   });
 
@@ -157,6 +177,12 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   return {
     el,
     symCount: syms.length,
+    // Width the score was engraved for, so callers can re-engrave when the pane
+    // ends up meaningfully different (first layout, window resize). null when
+    // the document sets its own %%pagewidth — the user's layout is fixed.
+    pageWidth: /^%%pagewidth\b/m.test(content)
+      ? null
+      : (prefix ? Math.min(paneW, 1600) : 794),
 
     highlightRange(from, to) {
       clearClass('uf-hl');
