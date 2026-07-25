@@ -648,6 +648,44 @@ state.on('branch-switch', () => state.clearVoiceSelections());
 let _lastAuditionChar    = -1;    // startChar last auditioned by a cursor move (dedupe)
 let _auditionTimer       = 0;     // trailing debounce for cursor-move audition
 let _pendingTypeAudition = null;  // { pos: doc-relative char, at: timestamp }
+let _auditionFlashTimer  = 0;     // clears the green "now sounding" flash
+
+/** Playback-style highlight on the audited note for `durMs`: green glyphs in
+ *  the score and the green play-cursor colour in the editor, exactly as
+ *  _highlightEvent does during playback — but for this one note only (a
+ *  timing *moment* spans every voice sounding at once; the audition sounds
+ *  just the note under the cursor). Cleared on a timer; a real playback
+ *  started mid-flash owns the highlight and the clear stands down. */
+function _auditionFlash(startChar, endChar, durMs) {
+  const doc  = state.currentContent ?? '';
+  const to   = endChar + _sectionOffset;
+  const from = _trimToNoteStart(doc, startChar + _sectionOffset, to);
+
+  // abcjs-engraver fallback (escape hatch / %%tablature): the note's own SVG
+  // groups, green via the container's playback palette class.
+  const groups = [];
+  for (const ev of _noteEvents) {
+    const starts = ev.startCharArray ?? [ev.startChar];
+    (ev.elements ?? []).forEach((els, i) => {
+      if (starts[i] === startChar) groups.push(...(els ?? []));
+    });
+  }
+  _playEl?.classList.add('abc-playing');
+  groups.forEach(el => el?.classList?.add('abcjs-note_playing'));
+
+  _a2sScore?.setPlaying([{ from: startChar, to: endChar }]);
+  state.emit('abc-play-cursor', from < to ? [{ from, to }] : null);
+
+  clearTimeout(_auditionFlashTimer);
+  _auditionFlashTimer = setTimeout(() => {
+    if (state.abcPlaying) return;   // playback started mid-flash — leave its highlight
+    _playEl?.classList.remove('abc-playing');
+    _playEl?.querySelectorAll('.abcjs-note_playing').forEach(el =>
+      el.classList.remove('abcjs-note_playing'));
+    _a2sScore?.setPlaying(null);
+    state.emit('abc-play-cursor', null);
+  }, durMs);
+}
 
 /** Debounced cursor-move audition (skimming lines doesn't machine-gun). */
 function _auditionSoon(adjChar) {
@@ -685,6 +723,12 @@ function _auditionAt(adjChar, { force = false } = {}) {
 
   const { pitches, msPerMeasure } = _pitchesAtStart(note.startChar);
   if (!pitches.length) return;   // rest, or the whole chord is muted
+
+  // Green "now sounding" flash for roughly the note's sounding length,
+  // regardless of which output route makes the sound.
+  const flashMs = Math.min(1500, Math.max(150,
+    ...pitches.map(p => (p.duration ?? 0.25) * msPerMeasure / _meterSize)));
+  _auditionFlash(note.startChar, note.endChar, flashMs);
 
   const out = _resolveMidiOut();
   if (out) {
@@ -2367,10 +2411,15 @@ async function exportPDF(content) {
   //                          wrapper so the scaled SVG sets the div's height,
   //                          and prevents the browser from splitting a staff
   //                          system across a page.
+  // The window title becomes the browser's suggested PDF filename — use the
+  // document's real title so "Save as PDF" lands as "Silence Speaks.pdf",
+  // not "Sheet Music.pdf".
+  const docTitle = (state.data?.title || 'Sheet Music')
+    .replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
   const printHtml = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Sheet Music</title>
+<title>${docTitle}</title>
 <style>
   @page { size: letter; margin: 0; }
   *, *::before, *::after { box-sizing: border-box; }

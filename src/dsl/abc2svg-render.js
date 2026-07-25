@@ -329,6 +329,15 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
 
 /** Export: one self-contained SVG (systems stacked as nested <svg y=…>). */
 export function abc2svgExportSvg(content) {
+  // %%fullsvg: make every emitted <svg> self-contained — abc2svg then embeds a
+  // <style> per svg holding ALL the rules it needs, critically the @font-face
+  // for its music font (a data-URI ttf baked into abc2svg-1.js). In-app those
+  // rules live in a document-level stylesheet abc2svg injects (abc2svg.sheet),
+  // which does NOT travel with a serialized export: without this directive the
+  // exported score's SMuFL codepoints have no font and every notehead/clef/rest
+  // renders as a tofu box. The directive's value suffixes abc2svg's class names
+  // (f0x…) so they can't collide with page CSS.
+  content = withDefaultDirective(content, 'fullsvg', 'x');
   const { chunks } = engrave(content);            // no annotation rects in exports
   if (!chunks.length) return null;
   const tmp = document.createElement('div');
@@ -366,6 +375,9 @@ export function abc2svgExportPrintBody(content) {
   content = withDefaultDirective(content, 'pagewidth',   '7.5in');
   content = withDefaultDirective(content, 'leftmargin',  '0');
   content = withDefaultDirective(content, 'rightmargin', '0');
+  // Embed the music font in each svg — the print window is a fresh document
+  // without abc2svg's injected stylesheet (see abc2svgExportSvg).
+  content = withDefaultDirective(content, 'fullsvg', 'x');
   const { chunks } = engrave(content);            // no annotation rects in exports
   if (!chunks.length) return null;
   const tmp = document.createElement('div');
