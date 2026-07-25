@@ -524,6 +524,9 @@ async function render(content, el) {
     _updateScoreRange();
     _updateScoreCursor(_pausedAtMs);
     _applyVoiceFade();
+    // If this render was triggered by typing a note, sound it now that the
+    // timing table can resolve its pitch.
+    _consumePendingTypeAudition();
   } catch (e) {
     el.innerHTML = `<pre class="error">ABC parse error:\n${e.message}</pre>`;
     _setHasTune(false);
@@ -570,6 +573,13 @@ state.on('editor-select', ({ from, to }) => {
   // Move the transport to match: jump the scrubber to the note under the cursor,
   // or highlight the range a selection will play (and cue its start).
   _syncTransportToSelection(from, to);
+
+  // Audition: a collapsed cursor landing on a note sounds it (debounced so
+  // skimming with held arrow keys doesn't machine-gun; per-note dedupe inside).
+  if (from === to && !state.abcPlaying &&
+      (state.activeDslId ?? state.data?.dslType) === 'abcjs') {
+    _auditionSoon(Math.max(0, from - _sectionOffset));
+  }
 });
 
 // When the user clicks a note in the ABC preview, 'dsl-select' fires and the
@@ -584,6 +594,23 @@ state.on('dsl-select', ({ from }) => {
   _lastEditorSel = { from, to: from };
   // Clicking a note in the preview cues the transport to that note.
   _syncTransportToSelection(from, from);
+  // …and sounds it (forced: re-clicking the same note plays it again).
+  _auditionAt(Math.max(0, from - _sectionOffset), { force: true });
+});
+
+// A note letter (or an octave mark extending one) typed in the editor is
+// auditioned — but its pitch only exists after the debounced re-render re-parses
+// the tune, so just record it here; render() consumes it once the fresh timing
+// table is up.  Accidentals (^ _ =) precede the letter in ABC, so the letter
+// keystroke completes the note and the audition includes them.
+state.on('editor-type', ({ pos, ch }) => {
+  if ((state.activeDslId ?? state.data?.dslType) !== 'abcjs') return;
+  if (!/[A-Ga-g,']/.test(ch)) return;
+  _pendingTypeAudition = { pos, at: performance.now() };
+  // Create/unlock the AudioContext now, inside the keystroke (a user gesture) —
+  // the audition itself runs from the debounced re-render, outside the gesture,
+  // where a first-ever AudioContext would be blocked by the autoplay policy.
+  if (!_resolveMidiOut()) { try { _acquireAudioContext(); } catch { /* no audio */ } }
 });
 
 // Voice mute/solo toggled → re-fade the score, and if we're mid-playback restart
@@ -601,6 +628,98 @@ state.on('abc-voices-change', () => {
 // so stale voice ids don't silence the new tune.
 state.on('checkout',      () => state.clearVoiceSelections());
 state.on('branch-switch', () => state.clearVoiceSelections());
+
+// ---------------------------------------------------------------------------
+// Note audition — sound a single note/chord when it is written or selected
+//
+// Triggers:
+//   • editor cursor lands on a note (collapsed cursor, 'editor-select')
+//   • a note is clicked in the rendered score ('dsl-select')
+//   • a note letter / octave mark is typed ('editor-type', consumed by render()
+//     via _consumePendingTypeAudition once the new timing table exists)
+//
+// Output follows the playback routing: the selected external MIDI port when one
+// is set (single note on/off, default channel — per-voice channel/keyswitch
+// state is a playback concern), else abcjs.synth.playEvent on the persistent
+// AudioContext (the bundled offline piano). Muted / non-soloed voices stay
+// silent. Never fires during playback.
+// ---------------------------------------------------------------------------
+
+let _lastAuditionChar    = -1;    // startChar last auditioned by a cursor move (dedupe)
+let _auditionTimer       = 0;     // trailing debounce for cursor-move audition
+let _pendingTypeAudition = null;  // { pos: doc-relative char, at: timestamp }
+
+/** Debounced cursor-move audition (skimming lines doesn't machine-gun). */
+function _auditionSoon(adjChar) {
+  clearTimeout(_auditionTimer);
+  _auditionTimer = setTimeout(() => _auditionAt(adjChar), 80);
+}
+
+/** All unmuted midiPitches sounding the note/chord starting at `startChar`
+ *  (a chord's pitches share one startChar), plus the tempo for duration. */
+function _pitchesAtStart(startChar) {
+  const pitches = [];
+  let msPerMeasure = 1000;
+  for (const ev of _noteEvents) {
+    for (const p of ev.midiPitches ?? []) {
+      if (p?.pitch == null || p.startChar !== startChar) continue;
+      if (_isMutedAtChar(p.startChar)) continue;
+      pitches.push(p);
+      msPerMeasure = ev.millisecondsPerMeasure || msPerMeasure;
+    }
+  }
+  return { pitches, msPerMeasure };
+}
+
+/** Sound the note/chord whose source token covers section-relative `adjChar`.
+ *  Strictly covering — a cursor between notes plays nothing (no "nearest note"
+ *  fallback; that would audition a half-typed accidental as the NEXT note).
+ *  Consecutive cursor events inside the same token play once; `force` (preview
+ *  click, fresh keystroke) always plays. */
+function _auditionAt(adjChar, { force = false } = {}) {
+  if (state.abcPlaying || !_noteEvents.length) return;
+  const note = _flatNotes().find(n => n.startChar <= adjChar && adjChar < n.endChar);
+  if (!note) { _lastAuditionChar = -1; return; }
+  if (!force && note.startChar === _lastAuditionChar) return;
+  _lastAuditionChar = note.startChar;
+
+  const { pitches, msPerMeasure } = _pitchesAtStart(note.startChar);
+  if (!pitches.length) return;   // rest, or the whole chord is muted
+
+  const out = _resolveMidiOut();
+  if (out) {
+    for (const p of pitches) {
+      const pitch = Math.round(p.pitch);
+      const vel   = Math.max(1, Math.min(127, Math.round(p.volume ?? 92)));
+      const durMs = Math.min(1500, Math.max(60, (p.duration ?? 0.25) * msPerMeasure / _meterSize));
+      try { out.send([0x90, pitch, vel]); } catch { return; }
+      setTimeout(() => { try { out.send([0x80, pitch, 0]); } catch { /* port vanished */ } }, durMs);
+    }
+    return;
+  }
+
+  try {
+    // Same iOS rules as playback: persistent context, media-style session.
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* unsupported */ }
+    _acquireAudioContext();
+    abcjs.synth.registerAudioContext(_audioContext);
+    // playEvent builds a throwaway one-moment synth; with no soundFontUrl it
+    // resolves through the overridden load-note → the bundled offline piano.
+    abcjs.synth.playEvent(pitches, undefined, msPerMeasure).catch(() => { /* no audio */ });
+  } catch { /* audio unavailable — audition is best-effort */ }
+}
+
+/** Called at the end of render(): play the note the user just typed, now that
+ *  the fresh timing table can resolve its pitch (key signature, accidentals,
+ *  octave marks included). Staleness-guarded so an unrelated later render
+ *  (resize re-engrave, checkout) doesn't replay an old keystroke. */
+function _consumePendingTypeAudition() {
+  if (!_pendingTypeAudition) return;
+  const { pos, at } = _pendingTypeAudition;
+  _pendingTypeAudition = null;
+  if (performance.now() - at > 2000) return;
+  _auditionAt(Math.max(0, pos - _sectionOffset), { force: true });
+}
 
 // ---------------------------------------------------------------------------
 // Playback
@@ -1559,6 +1678,7 @@ function _updateScoreRange() {
 // ---------------------------------------------------------------------------
 
 let _totalMs       = 0;   // total tune duration (ms) — drives the scrubber
+let _meterSize     = 1;   // meter fraction (num/den) of the rendered tune — note duration→ms for audition
 let _pausedAtMs    = 0;   // remembered position when paused / sought (ms)
 let _progressRaf   = 0;   // rAF id for progress emission
 let _progressJog   = 0;   // setTimeout id: jogger fallback when rAF is throttled
@@ -1616,7 +1736,10 @@ function _buildNoteEvents(tune) {
     tune.setUpAudio({});
     const tc = new abcjs.TimingCallbacks(tune, { eventCallback: () => {} });
     _noteEvents = (tc.noteTimings ?? []).filter(e => e.type === 'event');
+    const mf = tune.getMeterFraction?.() ?? { num: 4, den: 4 };
+    _meterSize = (mf.num / mf.den) || 1;
   } catch { _noteEvents = []; }
+  _lastAuditionChar = -1;   // fresh table — cursor audition dedupe restarts
 }
 
 /** Total tune duration (ms) from the cached events, for the transport display. */

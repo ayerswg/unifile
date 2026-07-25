@@ -17,6 +17,7 @@
 
 import { EditorView, keymap, Decoration,
          highlightActiveLineGutter, drawSelection,
+         rectangularSelection, crosshairCursor,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder, Text } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
@@ -488,6 +489,12 @@ const baseExtensions = [
   highlightActiveLineGutter(),
   highlightSpecialChars(),
   drawSelection(),
+  // Vertical (column) selection, following the common IDE convention:
+  // Alt+drag selects a rectangle (one cursor per row — multiple selections are
+  // already enabled above); the crosshair cursor while Alt is held signals the
+  // mode. Type/delete then edits every row of the column at once.
+  rectangularSelection(),
+  crosshairCursor(),
   // NOTE: highlightSelectionMatches() intentionally omitted — selecting text
   // should not light up every other occurrence of that text in the document.
 
@@ -798,6 +805,17 @@ export class Editor {
         state.setContent(update.state.doc.toString(), {
           cursorPos: update.state.selection.main.head,
         });
+
+        // Announce single typed characters so DSLs can audition what was just
+        // written (ABC plays the typed note once the preview re-renders).
+        // Only real keystrokes ('input.type') — paste/undo/autocomplete stay silent.
+        if (update.transactions.some(tr => tr.isUserEvent('input.type'))) {
+          update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+            if (inserted.length === 1) {
+              state.emit('editor-type', { pos: fromB, ch: inserted.toString() });
+            }
+          });
+        }
       }
 
       // Detect whether this update came from a DSL-element click (dsl-select event).
