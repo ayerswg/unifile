@@ -32,7 +32,7 @@ import { state, VIEW_MODES, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
 import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
-import { voiceIdOfLine, buildVoiceMap } from '../core/abc-voices.js';
+import { buildVoiceMap } from '../core/abc-voices.js';
 import {
   accordionField,
   openAccordionEffect,
@@ -218,10 +218,29 @@ class LineNumSpacer extends GutterMarker {
   }
 }
 
-/** The M/S voice mark for a line, or '' — only for ABC voice (`V:`) lines. */
-function _voiceMarkForLine(lineText) {
-  if ((state.data?.dslType) !== 'abcjs') return '';
-  const id = voiceIdOfLine(lineText);
+// Voice map over the whole editor doc, cached per (immutable) doc instance —
+// the gutter asks per visible line, so don't rebuild the map for each one.
+let _docVmapCache = { doc: null, vmap: null };
+function _docVoiceMap(doc) {
+  if (_docVmapCache.doc !== doc) {
+    _docVmapCache = { doc, vmap: buildVoiceMap(doc.toString()) };
+  }
+  return _docVmapCache.vmap;
+}
+
+/** The voice a doc line belongs to (via `V:` lines OR inline `[V:id]`), or null. */
+function _voiceIdAtLine(doc, line) {
+  if ((state.data?.dslType) !== 'abcjs') return null;
+  // Blank / `%` comment / `%%` directive lines never sound — no voice for them.
+  const t = line.text.trim();
+  if (t === '' || t.startsWith('%')) return null;
+  return _docVoiceMap(doc).at(line.from);
+}
+
+/** The M/S voice mark for a line, or '' — shown on EVERY line of the voice. */
+function _voiceMarkForLine(doc, line) {
+  if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return '';
+  const id = _voiceIdAtLine(doc, line);
   if (id == null) return '';
   if (state.abcSoloVoices.has(id)) return 'S';
   if (state.abcMutedVoices.has(id)) return 'M';
@@ -238,7 +257,7 @@ const commentLineNumbersExt = gutter({
     const acc        = view.state.field(accordionField);
     const isActive   = acc.anchorPos !== null &&
       view.state.doc.lineAt(acc.anchorPos).from === lineInfo.from;
-    const voiceMark  = _voiceMarkForLine(lineInfo.text);
+    const voiceMark  = _voiceMarkForLine(view.state.doc, lineInfo);
     return new LineNumMarker(lineInfo.number, threads.length > 0, isActive, voiceMark);
   },
 
@@ -259,8 +278,9 @@ const commentLineNumbersExt = gutter({
 // ---------------------------------------------------------------------------
 // Gutter line-options menu (floating popup on gutter click)
 //
-// Every line offers "comment"; ABC voice (`V:`) lines also offer Mute / Solo,
-// which silence / isolate that voice for the whole song (see state + abcjs.js).
+// Every line offers "comment"; any line belonging to an ABC voice (declared by
+// a `V:` line or an inline `[V:id]` prefix) also offers Mute / Solo, which
+// silence / isolate that voice for the whole song (see state + abcjs.js).
 // ---------------------------------------------------------------------------
 
 let _gutterMenuEl = null;
@@ -274,7 +294,7 @@ function _showGutterMenu(view, x, y, lineDoc) {
   _hideGutterMenu();
 
   const threads   = getThreadsForLine(lineDoc.from, view.state.doc);
-  const voiceId   = (state.data?.dslType) === 'abcjs' ? voiceIdOfLine(lineDoc.text) : null;
+  const voiceId   = _voiceIdAtLine(view.state.doc, lineDoc);
 
   const menu = document.createElement('div');
   menu.className = 'cm-comment-context-menu cm-gutter-menu';
@@ -300,9 +320,9 @@ function _showGutterMenu(view, x, y, lineDoc) {
   });
 
   if (voiceId != null) {
-    addItem(state.abcMutedVoices.has(voiceId) ? 'Unmute voice' : 'Mute voice',
+    addItem((state.abcMutedVoices.has(voiceId) ? 'Unmute voice ' : 'Mute voice ') + voiceId,
       () => state.toggleVoiceMute(voiceId));
-    addItem(state.abcSoloVoices.has(voiceId) ? 'Unsolo voice' : 'Solo voice',
+    addItem((state.abcSoloVoices.has(voiceId) ? 'Unsolo voice ' : 'Solo voice ') + voiceId,
       () => state.toggleVoiceSolo(voiceId));
   }
 
@@ -337,11 +357,10 @@ function _buildVoiceFade(editorState) {
   if ((state.data?.dslType) !== 'abcjs') return Decoration.none;
   if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return Decoration.none;
   const doc = editorState.doc;
-  const vmap = buildVoiceMap(doc.toString());
   const builder = new RangeSetBuilder();
   for (let n = 1; n <= doc.lines; n++) {
     const line = doc.line(n);
-    const id = vmap.at(line.from);
+    const id = _voiceIdAtLine(doc, line);
     if (id != null && state.isVoiceMuted(id)) {
       builder.add(line.from, line.from, Decoration.line({ class: 'cm-voice-muted' }));
     }

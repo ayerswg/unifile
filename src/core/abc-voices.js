@@ -12,6 +12,11 @@
 // an ABC comment, so it terminates the token.
 const VOICE_LINE_RE = /^\s*V:\s*([^\s%]+)/;
 
+// An inline voice field in the music body: `[V:PR1]`, `[V: 2]`, `[V:1 name="x"]`.
+// Interleaved scores commonly prefix each music line with one instead of using
+// standalone `V:` lines, and a mid-line one switches the voice mid-line.
+const INLINE_VOICE_RE = /\[V:\s*([^\s\]%]+)[^\]]*\]/g;
+
 /** Voice id of a `V:` field line, or null when the line isn't one. */
 export function voiceIdOfLine(lineText) {
   const m = VOICE_LINE_RE.exec(lineText ?? '');
@@ -32,12 +37,21 @@ export function voiceIdOfLine(lineText) {
 export function buildVoiceMap(source) {
   const boundaries = []; // { from, voiceId } in increasing `from`
   const order = [];
+  const note = (from, voiceId) => {
+    boundaries.push({ from, voiceId });
+    if (!order.includes(voiceId)) order.push(voiceId);
+  };
   let pos = 0;
   for (const raw of String(source ?? '').split(/(?<=\n)/)) {
     const id = voiceIdOfLine(raw);
     if (id != null) {
-      boundaries.push({ from: pos, voiceId: id });
-      if (!order.includes(id)) order.push(id);
+      note(pos, id);
+    } else {
+      INLINE_VOICE_RE.lastIndex = 0;
+      let m;
+      while ((m = INLINE_VOICE_RE.exec(raw)) !== null) {
+        note(pos + m.index, m[1].replace(/^"|"$/g, ''));
+      }
     }
     pos += raw.length;
   }
