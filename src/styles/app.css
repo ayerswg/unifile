@@ -1752,6 +1752,9 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
    rect veil for unmapped symbols. Declared last — mute wins over range tint. */
 .abc2svg-wrap svg .uf-muted { opacity: .3; }
 .abc2svg-wrap svg rect.abcr.uf-muted { fill: var(--bg); fill-opacity: .65; opacity: 1; }
+/* Full-width band over a staff whose every voice is muted/non-soloed —
+   fades the staff lines, clef and key signature along with the notes. */
+.abc2svg-wrap svg rect.uf-staff-veil { fill: var(--bg); fill-opacity: .72; pointer-events: none; }
 /* Tablature fret digits get a white feFlood halo (masks the staff line under
    the number — fine in print, a white box in dark theme). Theme the flood to
    the app background so the mask matches whatever the score sits on. */

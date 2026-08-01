@@ -293,6 +293,7 @@ if (typeof globalThis !== 'undefined') {
     a2s: !!_a2sScore,
     a2sSyms: _a2sScore?.symCount ?? null,
     a2sLive: _a2sScore ? document.contains(_a2sScore.el) : null,
+    a2s_debug: _a2sScore?._debug?.() ?? null,
     sectionOffset: _sectionOffset,
     noteEvents: _noteEvents.length,
   }), { exportSvg: abc2svgExportSvg, exportPrintBody: abc2svgExportPrintBody });
@@ -1629,9 +1630,30 @@ function _eventCharPairs(ev, { includeMuted = false } = {}) {
   return pairs.length ? pairs : null;
 }
 
+/** Char pairs of the last AUDIBLE event at/before `ms`. Events whose every
+ *  voice is muted are skipped — the cursor bar parks on the previous sounding
+ *  note instead of blinking out on each silenced onset (the timeline behaves
+ *  as if only the unmuted voices exist). Falls forward to the first audible
+ *  event when `ms` precedes them all; null when everything is muted. */
+function _audiblePairsAtMs(ms) {
+  let pairs = null;
+  for (const e of _noteEvents) {
+    if (e.left == null) continue;                // skip bar/end entries
+    if (e.milliseconds > ms + 0.5) break;
+    pairs = _eventCharPairs(e) ?? pairs;
+  }
+  if (pairs) return pairs;
+  for (const e of _noteEvents) {
+    if (e.left == null) continue;
+    const p = _eventCharPairs(e);
+    if (p) return p;
+  }
+  return null;
+}
+
 /** Position the playback cursor bar at `ms` (the true scrubber position). */
 function _updateScoreCursor(ms) {
-  if (_a2sScore) { _a2sScore.cursorAt(_eventCharPairs(_eventAtMs(ms))); return; }
+  if (_a2sScore) { _a2sScore.cursorAt(_audiblePairsAtMs(ms)); return; }
   if (!_cursorLine) return;
   const p = _scoreSnapForMs(ms);
   if (!p) { _cursorLine.style.display = 'none'; return; }

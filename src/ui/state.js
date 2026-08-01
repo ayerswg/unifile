@@ -256,8 +256,11 @@ class AppState extends EventBus {
 
   toggleVoiceSolo(id) {
     if (id == null) return;
-    if (this.abcSoloVoices.has(id)) this.abcSoloVoices.delete(id);
-    else this.abcSoloVoices.add(id);
+    // Solo is exclusive: soloing a voice replaces any previous solo; toggling
+    // the currently soloed voice clears it.
+    const wasSolo = this.abcSoloVoices.has(id);
+    this.abcSoloVoices.clear();
+    if (!wasSolo) this.abcSoloVoices.add(id);
     this.emit('abc-voices-change', this);
   }
 
