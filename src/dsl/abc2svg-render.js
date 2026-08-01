@@ -53,9 +53,17 @@ const SKIP_ANNO = new Set(['beam', 'slur', 'tuplet']);
  * each annotated symbol { start, end, voice } in emission order (1:1 with the
  * `rect.abcr` elements when `annotate` is on).
  */
-function engrave(content, { annotate = false } = {}) {
+function engrave(content, { annotate = false, preserveSheet = false } = {}) {
   const chunks = [], errors = [], annos = [];
   let abc = null;
+  // Every Abc instance's first style insertion WIPES the shared document
+  // stylesheet (abc2svg.sheet) and refills it with its own class names. An
+  // export engraves with %%fullsvg, whose class names are suffixed (f0x…) —
+  // so without restoring, an export leaves the sheet holding only f0x rules
+  // while the live in-app svg still references f0/f1: every notehead/clef in
+  // the APP turned to tofu right after using print/SVG export (real bug).
+  const sheet = preserveSheet ? abc2svg.sheet : null;
+  const savedRules = sheet ? [...sheet.cssRules].map(r => r.cssText) : null;
   const user = {
     read_file: () => '',                       // %%abc-include: offline, unsupported
     errmsg: (msg) => errors.push(String(msg)),
@@ -82,6 +90,13 @@ function engrave(content, { annotate = false } = {}) {
     abc2svg.abc_end();
   } catch (e) {
     errors.push(e && e.message ? e.message : String(e));
+  } finally {
+    if (savedRules && abc2svg.sheet === sheet) {
+      for (let i = sheet.cssRules.length - 1; i >= 0; i--) sheet.deleteRule(i);
+      for (const t of savedRules) {
+        try { sheet.insertRule(t, sheet.cssRules.length); } catch { /* rule not re-insertable */ }
+      }
+    }
   }
   return { chunks, errors, annos };
 }
@@ -488,7 +503,7 @@ export function abc2svgExportSvg(content) {
   // renders as a tofu box. The directive's value suffixes abc2svg's class names
   // (f0x…) so they can't collide with page CSS.
   content = withDefaultDirective(content, 'fullsvg', 'x');
-  const { chunks } = engrave(content);            // no annotation rects in exports
+  const { chunks } = engrave(content, { preserveSheet: true }); // no annotation rects in exports
   if (!chunks.length) return null;
   const tmp = document.createElement('div');
   tmp.innerHTML = chunks.join('');
@@ -528,7 +543,7 @@ export function abc2svgExportPrintBody(content) {
   // Embed the music font in each svg — the print window is a fresh document
   // without abc2svg's injected stylesheet (see abc2svgExportSvg).
   content = withDefaultDirective(content, 'fullsvg', 'x');
-  const { chunks } = engrave(content);            // no annotation rects in exports
+  const { chunks } = engrave(content, { preserveSheet: true }); // no annotation rects in exports
   if (!chunks.length) return null;
   const tmp = document.createElement('div');
   tmp.innerHTML = chunks.join('');
