@@ -400,20 +400,37 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
         // unclassed cubic-bezier <path>s (beams are unclassed too, but use
         // line segments: `m…l…`). Assign each arc to the nearest staff core
         // and union its box when that staff is faded, so a muted voice's
-        // slurs fade instead of arcing crisply over a veiled system. Needs
-        // live geometry (getBBox) — skipped harmlessly in a hidden pane.
+        // slurs fade instead of arcing crisply over a veiled system. The
+        // bbox MUST be mapped from the path's local space into root svg
+        // coords — abc2svg nests some arcs in <g transform=…> (local y was
+        // negative and the veil box landed off-target: the arc showed
+        // through with a dashed look where note boxes crossed it, real bug).
+        // Needs live geometry (getBBox/getScreenCTM) — skipped in a hidden
+        // pane.
         if (rects.length) {
-          for (const p of svg.querySelectorAll('path:not([class])')) {
+          let rootInv = null;
+          try { rootInv = svg.getScreenCTM()?.inverse() ?? null; } catch { /* not rendered */ }
+          for (const p of (rootInv ? svg.querySelectorAll('path:not([class])') : [])) {
             if (!/^M[-\d. ]+c/.test(p.getAttribute('d') || '')) continue;
-            let bb; try { bb = p.getBBox(); } catch { continue; }
-            if (!bb || (!bb.width && !bb.height)) continue;
-            const cy = bb.y + bb.height / 2;
+            let bb, m;
+            try { bb = p.getBBox(); m = p.getScreenCTM(); } catch { continue; }
+            if (!bb || (!bb.width && !bb.height) || !m) continue;
+            const t = rootInv.multiply(m);
+            const xs = [], ys = [];
+            for (const [px, py] of [[bb.x, bb.y], [bb.x + bb.width, bb.y],
+                                    [bb.x, bb.y + bb.height], [bb.x + bb.width, bb.y + bb.height]]) {
+              xs.push(t.a * px + t.c * py + t.e);
+              ys.push(t.b * px + t.d * py + t.f);
+            }
+            const rx = Math.min(...xs), ry = Math.min(...ys);
+            const rw = Math.max(...xs) - rx, rh = Math.max(...ys) - ry;
+            const cy = ry + rh / 2;
             let best = null;
             for (const stv of staves) {
               const dist = Math.abs((stv.top + stv.bot) / 2 - cy);
               if (!best || dist < best.dist) best = { stv, dist };
             }
-            if (best?.stv.faded) rects.push([bb.x, bb.y, bb.width, bb.height]);
+            if (best?.stv.faded) rects.push([rx, ry, rw, rh]);
           }
         }
         // Mixed staves (still audible): veil only the muted voice's sounding
