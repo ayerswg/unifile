@@ -40,8 +40,11 @@ export function useAbc2svg() {
 abc2svg.abc_end = abc2svg.abc_end || function () {};
 abc2svg.loadjs  = abc2svg.loadjs  || function (_fn, relay) { if (relay) relay(); };
 
-// Symbol types whose annotation rects would only add noise (they span other
-// symbols' geometry). Same exclusions as abc2svg's own editor.
+// Symbol types excluded from INTERACTIVE annotation rects (they span other
+// symbols' geometry and would swallow their clicks/highlights — same
+// exclusions as abc2svg's own editor). They still get a non-interactive
+// `abcd` geometry rect so the muted-staff veil can cover them (a muted
+// voice's slur arcs above the band otherwise stayed crisp).
 const SKIP_ANNO = new Set(['beam', 'slur', 'tuplet']);
 
 /**
@@ -65,10 +68,10 @@ function engrave(content, { annotate = false } = {}) {
     // Rect overlays (its own editor's pattern) + geometric glyph mapping
     // (below, in renderAbc2svg) are the reliable route.
     user.anno_stop = (type, start, stop, x, y, w, h, s) => {
-      if (SKIP_ANNO.has(type)) return;
-      annos.push({ start, end: stop, voice: s?.p_v?.id ?? null, staff: s?.st ?? null, type });
+      const deco = SKIP_ANNO.has(type);
+      annos.push({ start, end: stop, voice: s?.p_v?.id ?? null, staff: s?.st ?? null, type, deco });
       // The abc2svg editor's exact pattern: out_sxsy/sh map staff coords → SVG.
-      abc.out_svg(`<rect class="abcr _${start}_" x="`);
+      abc.out_svg(`<rect class="${deco ? 'abcd' : 'abcr'} _${start}_" x="`);
       abc.out_sxsy(x, '" y="', y);
       abc.out_svg(`" width="${w.toFixed(2)}" height="${abc.sh(h).toFixed(2)}"/>\n`);
     };
@@ -174,18 +177,26 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   // buffers at flush time, so rect DOM order ≠ anno callback order.
   // Offsets are then shifted back by the injected prefix length so sym.start/
   // .end are content-relative (annos from inside the prefix are dropped).
-  const rects = [...el.querySelectorAll('rect.abcr')];
-  const byStart = new Map();
-  annos.forEach(a => { if (!byStart.has(a.start)) byStart.set(a.start, a); });
-  const syms = rects.map((r) => {
+  const byStart = new Map(), decoByStart = new Map();
+  annos.forEach(a => {
+    const m = a.deco ? decoByStart : byStart;
+    if (!m.has(a.start)) m.set(a.start, a);
+  });
+  const pair = (r, m) => {
     const start = Number((r.getAttribute('class').match(/_(\d+)_/) || [])[1]);
-    const a = byStart.get(start);
+    const a = m.get(start);
     if (!a || start < prefix.length) return null;
     return {
       start: start - prefix.length, end: a.end - prefix.length,
       voice: a.voice, staff: a.staff, type: a.type, el: r, glyphs: null,
     };
-  }).filter(Boolean).sort((a, b) => a.start - b.start);
+  };
+  const syms = [...el.querySelectorAll('rect.abcr')]
+    .map(r => pair(r, byStart)).filter(Boolean).sort((a, b) => a.start - b.start);
+  // Slur/beam/tuplet geometry rects — never interactive, only consulted by the
+  // muted-staff veil so a silenced voice's slur arcs fade with everything else.
+  const decoSyms = [...el.querySelectorAll('rect.abcd')]
+    .map(r => pair(r, decoByStart)).filter(Boolean);
 
   // Map drawn glyphs to symbols geometrically: an element belongs to the
   // smallest annotation box containing its centre (screen space, so staff
@@ -272,6 +283,9 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
       syms: syms.map(s => ({ start: s.start, voice: s.voice, staff: s.staff, type: s.type,
         y: s.el.getAttribute('y'), h: s.el.getAttribute('height'),
         svg: s.el.ownerSVGElement ? [...el.querySelectorAll('svg')].indexOf(s.el.ownerSVGElement) : -1 })),
+      decoSyms: decoSyms.map(s => ({ start: s.start, voice: s.voice, staff: s.staff, type: s.type,
+        y: s.el.getAttribute('y'), h: s.el.getAttribute('height'),
+        svg: s.el.ownerSVGElement ? [...el.querySelectorAll('svg')].indexOf(s.el.ownerSVGElement) : -1 })),
       mapped: glyphsMapped,
       symsWithGlyphs: syms.filter(s => s.glyphs?.length).length,
       totalGlyphs: syms.reduce((n, s) => n + (s.glyphs?.length ?? 0), 0),
@@ -300,64 +314,124 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
       // must keep its furniture crisp, so:
       //   fully muted staff  → full-width veil band over the staff
       //   mixed staff        → per-symbol veil on the muted voice's notes/rests
-      el.querySelectorAll('rect.uf-staff-veil').forEach(r => r.remove());
+      el.querySelectorAll('.uf-staff-veil').forEach(r => r.remove());
       clearClass('uf-muted');
 
       const SOUNDING = new Set(['note', 'rest', 'grace', 'mrest']);
-      // Symbols whose annotation geometry reliably stays on their own staff.
-      // Excluded deliberately (each blew the band up to the whole system —
-      // real bugs): 'bar' (a systemic barline spans every staff but is
-      // reported on staff 0) and 'key'/'meter' (engraved once PER STAFF but
-      // every copy is annotated with the first voice's staff). Clefs are
-      // annotated per staff correctly, and key/meter sit within the vertical
-      // range the clef + notes already establish.
-      const STAFF_LOCAL = new Set([...SOUNDING, 'clef']);
+      const attrRect = (r) => {
+        const v = ['x', 'y', 'width', 'height'].map(a => parseFloat(r.getAttribute(a)));
+        return v.every(isFinite) ? v : null;
+      };
 
       // Staff indices are PER SYSTEM: abc2svg hides staves that are tacet for
       // a whole system and renumbers the rest, so the same staff index can
       // hold different voices in different systems. Group by system svg.
-      const bySvg = new Map();                // svg → Map(staff → {voices, min, max, syms})
+      const bySvg = new Map();                // svg → Map(staff → {voices, syms})
       for (const s of syms) {
         const svg = s.el.ownerSVGElement;
         if (!svg || s.staff == null) continue;
         let perStaff = bySvg.get(svg);
         if (!perStaff) bySvg.set(svg, perStaff = new Map());
         let st = perStaff.get(s.staff);
-        if (!st) perStaff.set(s.staff, st = { voices: new Set(), min: Infinity, max: -Infinity, syms: [] });
+        if (!st) perStaff.set(s.staff, st = { voices: new Set(), syms: [] });
         if (s.voice && SOUNDING.has(s.type)) st.voices.add(s.voice);
         st.syms.push(s);
-        // Band extent from the annotation rects' own svg-coordinate attributes
-        // — layout-independent, so this works even in a hidden pane.
-        if (STAFF_LOCAL.has(s.type)) {
-          const y = parseFloat(s.el.getAttribute('y'));
-          const h = parseFloat(s.el.getAttribute('height'));
-          if (isFinite(y) && isFinite(h)) { st.min = Math.min(st.min, y); st.max = Math.max(st.max, y + h); }
-        }
       }
 
-      const PAD = 6;
+      // The veil is ONE compound <path> per system svg: overlapping subpaths
+      // fill exactly once (nonzero winding), so adjacent bands and outlier
+      // note boxes can't stack into a darker double-fade. Bands are sized
+      // from the CLEF annos — the only symbol annotated per staff correctly
+      // whose box brackets the staff lines + key/meter ('key'/'meter' are
+      // engraved per staff but all annotated with the first voice's staff;
+      // 'bar' spans the whole system on staff 0; and unioning note extents
+      // dragged the band over the title/tempo header text — all real bugs).
+      // Notes on ledger lines above/below the band are covered by unioning
+      // each sounding symbol's own anno box into the path.
+      const PAD = 4;
       for (const [svg, perStaff] of bySvg) {
         const vb = (svg.getAttribute('viewBox') || '').split(/\s+/);
         const w = parseFloat(vb[2]) || parseFloat(svg.getAttribute('width')) || 0;
-        for (const st of perStaff.values()) {
-          const allMuted = st.voices.size > 0 && [...st.voices].every(v => isMuted(v));
-          if (allMuted && isFinite(st.min)) {
-            const r = document.createElementNS(_SVG_NS, 'rect');
-            r.setAttribute('class', 'uf-staff-veil');
-            r.setAttribute('x', '0');
-            r.setAttribute('y', (st.min - PAD).toFixed(1));
-            r.setAttribute('width', String(w));
-            r.setAttribute('height', (st.max - st.min + 2 * PAD).toFixed(1));
-            svg.appendChild(r);
-          } else if (!allMuted) {
-            // Mixed staff: veil only the muted voice's sounding symbols so the
-            // shared clef/key/meter/bars stay fully visible.
+
+        const staves = [...perStaff.values()].map((st) => {
+          let top = Infinity, bot = -Infinity;
+          for (const types of [['clef'], ['bar', 'rest', 'note']]) {   // fallback if no clef
             for (const s of st.syms) {
-              if (SOUNDING.has(s.type) && s.voice && isMuted(s.voice)) {
-                s.el.classList.add('uf-muted');
-              }
+              if (!types.includes(s.type)) continue;
+              const r = attrRect(s.el);
+              if (r) { top = Math.min(top, r[1]); bot = Math.max(bot, r[1] + r[3]); }
+            }
+            if (isFinite(top)) break;
+          }
+          const faded = st.voices.size > 0 && [...st.voices].every(v => isMuted(v));
+          return { st, top, bot, faded };
+        }).filter(s => isFinite(s.top)).sort((a, b) => a.top - b.top);
+
+        const rects = [];                     // [x, y, w, h] subpaths to union
+        const fadedStaffIds = new Set();
+        // Consecutive faded staves merge into one continuous block (a fully
+        // muted piano brace fades as a unit, connecting barlines included).
+        for (let i = 0; i < staves.length; i++) {
+          if (!staves[i].faded) continue;
+          let j = i;
+          while (j + 1 < staves.length && staves[j + 1].faded) j++;
+          rects.push([0, staves[i].top, w, staves[j].bot - staves[i].top + PAD]);
+          for (let k = i; k <= j; k++) {
+            fadedStaffIds.add(staves[k].st);
+            for (const s of staves[k].st.syms) {
+              if (!SOUNDING.has(s.type)) continue;
+              const r = attrRect(s.el);
+              if (r) rects.push(r);
             }
           }
+          i = j;
+        }
+        // Beam/tuplet boxes of fully faded staves (they can poke outside the
+        // band). Skipped on mixed staves — such a box spans the notes under
+        // it, and veiling it would tint the audible co-voice's notes.
+        for (const d of decoSyms) {
+          if (d.el.ownerSVGElement !== svg) continue;
+          const stEntry = perStaff.get(d.staff);
+          if (!stEntry || !fadedStaffIds.has(stEntry)) continue;
+          const r = attrRect(d.el);
+          if (r) rects.push(r);
+        }
+        // Slur/tie arcs get NO annotation callback at all — they're drawn as
+        // unclassed cubic-bezier <path>s (beams are unclassed too, but use
+        // line segments: `m…l…`). Assign each arc to the nearest staff core
+        // and union its box when that staff is faded, so a muted voice's
+        // slurs fade instead of arcing crisply over a veiled system. Needs
+        // live geometry (getBBox) — skipped harmlessly in a hidden pane.
+        if (rects.length) {
+          for (const p of svg.querySelectorAll('path:not([class])')) {
+            if (!/^M[-\d. ]+c/.test(p.getAttribute('d') || '')) continue;
+            let bb; try { bb = p.getBBox(); } catch { continue; }
+            if (!bb || (!bb.width && !bb.height)) continue;
+            const cy = bb.y + bb.height / 2;
+            let best = null;
+            for (const stv of staves) {
+              const dist = Math.abs((stv.top + stv.bot) / 2 - cy);
+              if (!best || dist < best.dist) best = { stv, dist };
+            }
+            if (best?.stv.faded) rects.push([bb.x, bb.y, bb.width, bb.height]);
+          }
+        }
+        // Mixed staves (still audible): veil only the muted voice's sounding
+        // symbols so the shared clef/key/meter/bars stay fully visible.
+        for (const stv of staves) {
+          if (stv.faded) continue;
+          for (const s of stv.st.syms) {
+            if (SOUNDING.has(s.type) && s.voice && isMuted(s.voice)) {
+              s.el.classList.add('uf-muted');
+            }
+          }
+        }
+        if (rects.length) {
+          const p = document.createElementNS(_SVG_NS, 'path');
+          p.setAttribute('class', 'uf-staff-veil');
+          p.setAttribute('d', rects.map(([x, y, rw, rh]) =>
+            `M${x.toFixed(1)} ${y.toFixed(1)}h${rw.toFixed(1)}v${rh.toFixed(1)}h${(-rw).toFixed(1)}Z`).join(''));
+          svg.appendChild(p);
         }
       }
     },

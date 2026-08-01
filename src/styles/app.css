@@ -1733,6 +1733,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .abc2svg-wrap { position: relative; color: var(--fg); }
 .abc2svg-wrap svg { max-width: 100%; }
 .abc2svg-wrap rect.abcr { fill: var(--accent); fill-opacity: 0; cursor: pointer; }
+/* Slur/beam/tuplet geometry rects — data for the muted-staff veil, never visible. */
+.abc2svg-wrap rect.abcd { fill-opacity: 0; pointer-events: none; }
 .abc2svg-wrap rect.abcr.uf-range { fill-opacity: .13; }  /* playback-range band */
 /* Note highlights colour the symbol's own glyph elements (mapped per symbol in
    abc2svg-render.js), matching the old abcjs look: clicked/selected note = red,
@@ -1752,9 +1754,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
    rect veil for unmapped symbols. Declared last — mute wins over range tint. */
 .abc2svg-wrap svg .uf-muted { opacity: .3; }
 .abc2svg-wrap svg rect.abcr.uf-muted { fill: var(--bg); fill-opacity: .65; opacity: 1; }
-/* Full-width band over a staff whose every voice is muted/non-soloed —
-   fades the staff lines, clef and key signature along with the notes. */
-.abc2svg-wrap svg rect.uf-staff-veil { fill: var(--bg); fill-opacity: .72; pointer-events: none; }
+/* Compound veil path over staves whose every voice is muted/non-soloed —
+   fades the staff lines, clef and key signature along with the notes.
+   One <path> per system: overlapping subpaths fill once (no double-fade). */
+.abc2svg-wrap svg .uf-staff-veil { fill: var(--bg); fill-opacity: .72; pointer-events: none; }
 /* Tablature fret digits get a white feFlood halo (masks the staff line under
    the number — fine in print, a white box in dark theme). Theme the flood to
    the app background so the mask matches whatever the score sits on. */

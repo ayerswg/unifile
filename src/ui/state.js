@@ -247,8 +247,13 @@ class AppState extends EventBus {
     return false;
   }
 
+  // Mute and solo are mutually exclusive MODES, not just per-voice flags:
+  // soloing fades everything else by default, muting is a per-voice opt-in —
+  // so entering either mode clears the other wholesale.
+
   toggleVoiceMute(id) {
     if (id == null) return;
+    this.abcSoloVoices.clear();
     if (this.abcMutedVoices.has(id)) this.abcMutedVoices.delete(id);
     else this.abcMutedVoices.add(id);
     this.emit('abc-voices-change', this);
@@ -256,6 +261,7 @@ class AppState extends EventBus {
 
   toggleVoiceSolo(id) {
     if (id == null) return;
+    this.abcMutedVoices.clear();
     // Solo is exclusive: soloing a voice replaces any previous solo; toggling
     // the currently soloed voice clears it.
     const wasSolo = this.abcSoloVoices.has(id);
