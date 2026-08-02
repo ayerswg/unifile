@@ -762,18 +762,30 @@ export class PianoRoll {
     return best.midi;
   }
 
-  /** Skip leading decorations/dots/whitespace/grace-groups inside a token span. */
-  _trimTokenStart(src, from, to) {
+  /**
+   * Walk a token span to its payload: the first char matching `stopRe`.
+   * Skips `!…!` decorations, `"…"` chord symbols, `{…}` grace groups and
+   * inline `[V:…]`-style fields wholesale, and steps over ANY other char —
+   * abcjs startChars can include slur opens `(`, ties, broken-rhythm marks,
+   * shortcut decorations (`~`, `.`, …) and even a line's leading voice field.
+   * (Stopping at the first unknown char was a real bug: a chord under a slur
+   * read as a single note, and "delete" wrote `[zd]2` — the lower pitch became
+   * a rest and the clicked one halved.)  Returns -1 when nothing matches.
+   */
+  _walkToken(src, from, to, stopRe) {
     let i = from;
     while (i < to) {
       const ch = src[i];
-      if (ch === '!') { const e = src.indexOf('!', i + 1); if (e === -1 || e >= to) break; i = e + 1; continue; }
-      if (ch === '{') { const e = src.indexOf('}', i + 1); if (e === -1 || e >= to) break; i = e + 1; continue; }
-      if (ch === '"') { const e = src.indexOf('"', i + 1); if (e === -1 || e >= to) break; i = e + 1; continue; }
-      if (ch === '.' || /\s/.test(ch)) { i++; continue; }
-      break;
+      if (ch === '!') { const e = src.indexOf('!', i + 1); if (e === -1 || e >= to) return -1; i = e + 1; continue; }
+      if (ch === '"') { const e = src.indexOf('"', i + 1); if (e === -1 || e >= to) return -1; i = e + 1; continue; }
+      if (ch === '{') { const e = src.indexOf('}', i + 1); if (e === -1 || e >= to) return -1; i = e + 1; continue; }
+      if (ch === '[' && /^\[[A-Za-z]:/.test(src.slice(i, i + 3))) {
+        const e = src.indexOf(']', i + 1); if (e === -1 || e >= to) return -1; i = e + 1; continue;
+      }
+      if (stopRe.test(ch)) return i;
+      i++;
     }
-    return i;
+    return -1;
   }
 
   /**
@@ -786,8 +798,11 @@ export class PianoRoll {
    */
   _tokenForNote(note) {
     const src = this._data.source;
-    const i = this._trimTokenStart(src, note.startChar, note.endChar);
-    if (src[i] === '[' && !/^\[[A-Za-z]:/.test(src.slice(i, i + 3))) {
+    // Stop at a chord bracket or the first pitch/accidental char — the walker
+    // has already skipped inline fields, so a '[' here IS a chord.
+    const i = this._walkToken(src, note.startChar, note.endChar, /[[A-Ga-g_^=]/);
+    if (i === -1) return null;
+    if (src[i] === '[') {
       const close = src.indexOf(']', i + 1);
       if (close === -1) return null;
       const tokens = pitchTokensIn(src, i + 1, close);
@@ -917,7 +932,14 @@ export class PianoRoll {
         change = { from: tok.pitch.from, to: tok.pitch.to, insert: '' };
       }
     } else {
-      // Whole note/chord → a rest of the same written length.
+      // Whole note/chord → a rest of the same written length.  Belt-and-braces:
+      // a single note's span holds exactly one pitch token — if more follow,
+      // this is an undetected chord and writing `z` over one pitch would corrupt
+      // it (`[zd]2` = rest + halved note). Refuse rather than guess.
+      if (!tok.chord && pitchTokensIn(src, tok.pitch.to, note.endChar).length) {
+        this._flash('Can’t edit this note’s source');
+        return;
+      }
       const from = tok.chord ? tok.chord.from : tok.pitch.from;
       change = { from, to: tok.lenFrom, insert: 'z' };
     }
@@ -937,8 +959,8 @@ export class PianoRoll {
 
     // 1. Over a rest → split it: [rest-before] note [rest-after].
     for (const r of d.rests.filter(inVoice)) {
-      const i = this._trimTokenStart(src, r.startChar, r.endChar);
-      if (!/[zx]/i.test(src[i] ?? '')) continue;   // Z (multi-measure) etc. — skip
+      const i = this._walkToken(src, r.startChar, r.endChar, /[zx]/i);
+      if (i === -1) continue;                      // Z (multi-measure) etc. — skip
       const len = parseLenSuffix(src, i + 1);
       const restUnits = len.value;
       const restMs = restUnits * unitMs;
