@@ -164,6 +164,46 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
 
 ---
 
+## Piano roll (`src/ui/piano-roll.js` + `core/abc-pitch.js` + `core/voice-colors.js`)
+
+A DAW-style second input surface for ABC docs (v0.3 feature). **Desktop:** the transport bar's
+piano-roll button expands it bottom-up as an in-flow flex child (via `#uf-bottom`'s
+`display:contents`) and it REPLACES the transport while open (`#unifile-app[data-piano-roll]`
+hides `#uf-transport`; the roll carries its own play/pause + time + scrub ruler). **Landscape
+phones:** a `.ps-roll` dock button toggles it as a fixed bottom overlay. **Portrait phones:** unavailable.
+
+- **Data**: `abcjs.js _emitRollData()` publishes `state.abcRollData` (+ `'abc-roll-data'`) each
+  render: per-pitch `{ms,durMs,durWhole,midi,startChar,endChar,voiceId}` notes (chord pitches share a
+  startChar), rests (timing moments with no sounding pitch — the add-note targets), voices, meter,
+  msPerMeasure/msPerWhole, sectionOffset, source. Char offsets are section-relative (same space as
+  noteTimings).
+- **Canvas roll**: keyboard column + beat/measure ruler (click/drag scrubs via `abc-seek-preview`/`abc-seek`),
+  notes colored per voice, non-active voices ghosted, muted voices near-invisible, playhead with
+  auto-follow, wheel scroll / ctrl+wheel time-zoom. **Fit-to-tune runs ONCE per document**
+  (`_maybeFit`, reset on checkout/branch-switch) — never on edit re-renders, which must not move the
+  user's view; it's also deferred until the canvas has nonzero width (the pane can open in a hidden tab).
+- **Voice identity**: `--voice-0…7` CSS vars (Catppuccin accents, themed) assigned by score order
+  (`core/voice-colors.js`). Header chips = the DAW track list: click selects the edit-target voice
+  (`state.abcActiveVoice`/`setActiveVoice`), per-chip M/S buttons reuse `toggleVoiceMute/Solo`.
+  Clicking a ghost note switches to its voice.
+- **Editing = ABC text rewrites only** (no onset drags — in ABC, time is token position). Click →
+  select + `dsl-select` (source highlight + audition); vertical drag → transpose; right-edge drag →
+  length (quantized vs `L:`); dbl-click note → delete (token→rest, or chord-pitch removal);
+  dbl-click space → add over a rest (splitting it) / chord-stack at an onset / append at voice end;
+  Delete/arrows on the selected note. Edits go out as `'dsl-edit'` `{changes, selection}` (full-doc
+  coords) which editor.js dispatches through CM6 → undo history + normal content-change flow.
+- **Pitch spelling** (`core/abc-pitch.js`): key-sig-aware (`parseKeySig`, sharps in sharp keys, flats
+  in flat keys), omits the accidental when the key signature already sounds it, forces an explicit
+  one when an earlier in-measure accidental would interfere, and `accidentalRepairs()` pins later
+  same-letter notes in the measure whose inheritance the edit changes — ONLY when the old token had
+  or the new token gains an explicit accidental (unconditional repairs spray harmless-but-noisy `=`).
+- **Raw-pitch audition**: `'abc-audition-pitch'` in abcjs.js (drag/keyboard feedback; no source token
+  yet) — routed like all audition: external MIDI port else the bundled piano.
+- **Landmines**: `setPointerCapture` throws for stale/synthetic pointer ids — it's wrapped in
+  try/catch (do not remove). Rows scrolled under the ruler are intentionally not clickable
+  (`y < RULER_H` = scrub zone). In preview automation the tab must be FRONTED before dispatching
+  synthetic pointer events (unfronted tab → all rects 0×0 → clicks land in the "ruler" and scrub).
+
 ## Mobile / iOS (hard-won — read before touching layout)
 
 The app is a `100dvh`-ish flex column. On phones (`@media max-width:640px`) **the top bar is hidden entirely** (`#uf-topbar { display:none }`) — the **pane switcher (`#uf-pane-switch`) is the sole top chrome**, sitting directly below the site-nav (if present) under the safe-area inset (which lives on `#unifile-app` padding-top). Only the active one of three panes (**commit-log · editor · render**) is displayed; `App._setupMobilePanes()` tracks the pane into `#unifile-app[data-mobile-pane]`.

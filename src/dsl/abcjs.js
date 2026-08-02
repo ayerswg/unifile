@@ -360,6 +360,8 @@ async function render(content, el) {
   if (!content.trim()) {
     el.innerHTML = '<p class="preview-empty">Enter ABC notation to see sheet music.</p>';
     _setHasTune(false);
+    _noteEvents = [];
+    _emitRollData();
     return;
   }
 
@@ -516,6 +518,7 @@ async function render(content, el) {
     state.abcDurationMs = _totalMs;
     state.emit('abc-duration', { total: _totalMs });
     state.emit('abc-range', null);
+    _emitRollData();
     // Score-level overlay: the playback cursor bar + range band that span the
     // staves in the render pane.  Created against the freshly-rendered SVG.
     _setupScoreCursor(container);
@@ -531,6 +534,8 @@ async function render(content, el) {
   } catch (e) {
     el.innerHTML = `<pre class="error">ABC parse error:\n${e.message}</pre>`;
     _setHasTune(false);
+    _noteEvents = [];
+    _emitRollData();
   }
 }
 
@@ -753,6 +758,31 @@ function _auditionAt(adjChar, { force = false } = {}) {
     abcjs.synth.playEvent(pitches, undefined, msPerMeasure).catch(() => { /* no audio */ });
   } catch { /* audio unavailable — audition is best-effort */ }
 }
+
+// Raw MIDI-pitch audition — the piano roll's drag/keyboard feedback (there is
+// no source token yet to resolve, so this bypasses the timing table).  Routed
+// like every other audition: external MIDI port when selected, else the
+// bundled offline piano.  Pointer drags are user gestures, so the AudioContext
+// can be created/unlocked here.
+state.on('abc-audition-pitch', ({ midi, durMs = 300, volume = 95 } = {}) => {
+  if (state.abcPlaying || midi == null) return;
+  const pitch = Math.max(0, Math.min(127, Math.round(midi)));
+  const out = _resolveMidiOut();
+  if (out) {
+    try { out.send([0x90, pitch, Math.max(1, Math.min(127, volume))]); } catch { return; }
+    setTimeout(() => { try { out.send([0x80, pitch, 0]); } catch { /* port vanished */ } }, durMs);
+    return;
+  }
+  try {
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* unsupported */ }
+    _acquireAudioContext();
+    abcjs.synth.registerAudioContext(_audioContext);
+    abcjs.synth.playEvent(
+      [{ pitch, volume, duration: 0.25, instrument: 0, startChar: 0, endChar: 0 }],
+      undefined, 1000
+    ).catch(() => { /* no audio */ });
+  } catch { /* audio unavailable — audition is best-effort */ }
+});
 
 /** Called at the end of render(): play the note the user just typed, now that
  *  the fresh timing table can resolve its pitch (key signature, accidentals,
@@ -1745,6 +1775,7 @@ function _updateScoreRange() {
 
 let _totalMs       = 0;   // total tune duration (ms) — drives the scrubber
 let _meterSize     = 1;   // meter fraction (num/den) of the rendered tune — note duration→ms for audition
+let _meterFrac     = { num: 4, den: 4 };  // raw meter fraction — the piano-roll ruler's beat grid
 let _pausedAtMs    = 0;   // remembered position when paused / sought (ms)
 let _progressRaf   = 0;   // rAF id for progress emission
 let _progressJog   = 0;   // setTimeout id: jogger fallback when rAF is throttled
@@ -1804,8 +1835,68 @@ function _buildNoteEvents(tune) {
     _noteEvents = (tc.noteTimings ?? []).filter(e => e.type === 'event');
     const mf = tune.getMeterFraction?.() ?? { num: 4, den: 4 };
     _meterSize = (mf.num / mf.den) || 1;
+    _meterFrac = mf;
   } catch { _noteEvents = []; }
   _lastAuditionChar = -1;   // fresh table — cursor audition dedupe restarts
+}
+
+/**
+ * Publish the per-render note table the piano roll draws from.  One entry per
+ * sounding pitch (a chord yields several sharing a startChar); rests are the
+ * timing moments whose char span has no sounding pitch (the roll's add-note
+ * targets).  All char offsets are section-relative (same space as noteTimings);
+ * `sectionOffset` converts to full-doc positions.
+ */
+function _emitRollData() {
+  let data = null;
+  if (_noteEvents.length) {
+    const notes = [];
+    const rests = [];
+    let msPerMeasure = 1000;
+    for (const ev of _noteEvents) {
+      msPerMeasure = ev.millisecondsPerMeasure || msPerMeasure;
+      const msPerWhole = msPerMeasure / (_meterSize || 1);
+      const ss = ev.startCharArray ?? (ev.startChar !== undefined ? [ev.startChar] : []);
+      const ee = ev.endCharArray   ?? (ev.endChar   !== undefined ? [ev.endChar]   : []);
+      const sounding = new Set();
+      for (const p of ev.midiPitches ?? []) {
+        if (p?.pitch == null || p.startChar == null) continue;
+        sounding.add(p.startChar);
+        let endChar = p.startChar + 1;
+        for (let i = 0; i < ss.length; i++) {
+          if (ss[i] === p.startChar) { endChar = ee[i] ?? endChar; break; }
+        }
+        notes.push({
+          ms: ev.milliseconds,
+          durMs: Math.max(1, (p.duration ?? 0.25) * msPerWhole),
+          durWhole: p.duration ?? 0.25,
+          midi: Math.round(p.pitch),
+          startChar: p.startChar,
+          endChar,
+          voiceId: _voiceMap.at(p.startChar),
+        });
+      }
+      for (let i = 0; i < ss.length; i++) {
+        if (ss[i] == null || sounding.has(ss[i])) continue;
+        rests.push({
+          ms: ev.milliseconds, startChar: ss[i], endChar: ee[i] ?? ss[i] + 1,
+          voiceId: _voiceMap.at(ss[i]), msPerWhole,
+        });
+      }
+    }
+    data = {
+      notes, rests,
+      totalMs: _totalMs,
+      voices: _voiceMap.order.length ? _voiceMap.order.slice() : [],
+      meter: _meterFrac,
+      msPerMeasure,
+      msPerWhole: msPerMeasure / (_meterSize || 1),
+      sectionOffset: _sectionOffset,
+      source: _lastAbcSource,
+    };
+  }
+  state.abcRollData = data;
+  state.emit('abc-roll-data', data);
 }
 
 /** Total tune duration (ms) from the cached events, for the transport display. */

@@ -129,6 +129,15 @@ class AppState extends EventBus {
     /** @type {Set<string>} ABC voice ids soloed — when non-empty, only these play */
     this.abcSoloVoices = new Set();
 
+    /** @type {boolean} Whether the piano-roll pane is expanded (replaces the transport) */
+    this.pianoRollOpen = false;
+
+    /** @type {string|null} Voice id piano-roll edits target; null → first voice */
+    this.abcActiveVoice = null;
+
+    /** @type {object|null} Per-render note table for the piano roll (see abcjs.js _buildRollData) */
+    this.abcRollData = null;
+
     /** @type {string|null} DSL id at current cursor position; null → use data.dslType */
     this.activeDslId = null;
 
@@ -268,6 +277,20 @@ class AppState extends EventBus {
     this.abcSoloVoices.clear();
     if (!wasSolo) this.abcSoloVoices.add(id);
     this.emit('abc-voices-change', this);
+  }
+
+  /** Expand / collapse the piano-roll pane (it replaces the transport bar). */
+  togglePianoRoll(open = !this.pianoRollOpen) {
+    if (this.pianoRollOpen === open) return;
+    this.pianoRollOpen = open;
+    this.emit('piano-roll-change', { open });
+  }
+
+  /** Select the voice that piano-roll edits target. */
+  setActiveVoice(id) {
+    if (this.abcActiveVoice === id) return;
+    this.abcActiveVoice = id;
+    this.emit('abc-active-voice', { id });
   }
 
   /** Clear all mute/solo selections (e.g. when loading a different document). */

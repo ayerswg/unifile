@@ -32,6 +32,7 @@ import { TopBar } from './topbar.js';
 import { Editor } from './editor.js';
 import { Preview } from './preview.js';
 import { DslFooter } from './dsl-footer.js';
+import { PianoRoll } from './piano-roll.js';
 import { mountSiteNav } from './site-nav.js';
 import { checkForUpdate } from './update-check.js';
 import { PaneSwitch } from './pane-switch.js';
@@ -197,6 +198,7 @@ export class App {
         <div id="uf-diff-right" aria-label="Diff — right (source)"></div>
       </div>
       <div id="uf-bottom">
+        <div id="uf-piano-roll"></div>
         <div id="uf-transport"></div>
         <div id="uf-diff-bar"></div>
       </div>
@@ -290,6 +292,9 @@ export class App {
     // The DSL transport is a global bottom bar (sticks to the screen bottom and
     // is visible in both the editor and preview panes), not a per-pane footer.
     this._components.dslFooter = new DslFooter(document.getElementById('uf-transport'));
+    // Piano roll — the transport's expandable DAW-style edit surface (it
+    // replaces the transport bar while open; see piano-roll.js).
+    this._components.pianoRoll = new PianoRoll(document.getElementById('uf-piano-roll'));
     // Mobile pane switcher — the whole top chrome on phones (segments = tabs +
     // context + dropdown menus). Owns branch switching, the DSL/tools menu and
     // exports; replaces the mobile top bar, hamburger and commit-pane bottom bar.

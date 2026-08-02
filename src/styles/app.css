@@ -1135,9 +1135,9 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     background: var(--bg-alt);
     box-shadow: 0 1px 0 var(--border);
   }
-  /* Dock-only chrome (collapse grip + play/align) — landscape shows these; the
-     portrait top bar must not, or they'd steal flex space from the three tabs. */
-  .ps-handle, .ps-play, .ps-align { display: none; }
+  /* Dock-only chrome (collapse grip + play/align/roll) — landscape shows these;
+     the portrait top bar must not, or they'd steal flex space from the tabs. */
+  .ps-handle, .ps-play, .ps-align, .ps-roll { display: none; }
   /* The editor tab shows its title in the portrait bar; the dock shows an icon
      instead (title is too wide), so the icon is hidden here and shown below. */
   .ps-code-icon { display: none; }
@@ -1375,8 +1375,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   .ps-code-icon svg { width: 19px; height: 19px; display: block; }
   .ps-caret { display: none; }
 
-  /* Play + align live at the bottom of the dock (ABC only). */
-  .ps-play, .ps-align {
+  /* Play + align + piano roll live at the bottom of the dock (ABC only). */
+  .ps-play, .ps-align, .ps-roll {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1391,9 +1391,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
-  .ps-play:active, .ps-align:active { background: var(--bg-surface); }
-  .ps-play svg, .ps-align svg { width: 18px; height: 18px; display: block; }
+  .ps-play:active, .ps-align:active, .ps-roll:active { background: var(--bg-surface); }
+  .ps-play svg, .ps-align svg, .ps-roll svg { width: 18px; height: 18px; display: block; }
   .ps-play.playing { color: var(--accent); }
+  .ps-roll.on { color: var(--accent); }
 
   /* Dropdown menus open to the LEFT of the dock (it hugs the right edge). */
   .ps-menu { right: calc(100% + 8px); left: auto; top: 0; }
@@ -1416,6 +1417,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #uf-pane-switch.ps-dock-collapsed .ps-btn,
   #uf-pane-switch.ps-dock-collapsed .ps-play,
   #uf-pane-switch.ps-dock-collapsed .ps-align,
+  #uf-pane-switch.ps-dock-collapsed .ps-roll,
   #uf-pane-switch.ps-dock-collapsed .ps-menu { display: none; }
 }
 
@@ -4352,4 +4354,205 @@ noscript .noscript-wrap {
     border-left-color: transparent;
     border-bottom-color: transparent;
   }
+}
+
+/* ==============================================================
+   PIANO ROLL (#uf-piano-roll) — DAW-style second input surface
+   Desktop: expands bottom-up and REPLACES the transport bar.
+   Landscape phones: full-width bottom overlay via the pane dock.
+   Portrait phones: unavailable (no vertical room).
+   ============================================================== */
+
+/* Per-voice track colors (piano roll notes + voice chips; the DAW track-color
+   convention). Assigned by score order — see core/voice-colors.js. */
+:root, [data-theme="dark"] {
+  --voice-0: #89b4fa;  /* blue  */
+  --voice-1: #fab387;  /* peach */
+  --voice-2: #a6e3a1;  /* green */
+  --voice-3: #cba6f7;  /* mauve */
+  --voice-4: #94e2d5;  /* teal  */
+  --voice-5: #f9e2af;  /* yellow*/
+  --voice-6: #f38ba8;  /* red   */
+  --voice-7: #89dceb;  /* sky   */
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --voice-0: #1e66f5; --voice-1: #fe640b; --voice-2: #40a02b; --voice-3: #8839ef;
+    --voice-4: #179299; --voice-5: #df8e1d; --voice-6: #d20f39; --voice-7: #04a5e5;
+  }
+}
+[data-theme="light"] {
+  --voice-0: #1e66f5; --voice-1: #fe640b; --voice-2: #40a02b; --voice-3: #8839ef;
+  --voice-4: #179299; --voice-5: #df8e1d; --voice-6: #d20f39; --voice-7: #04a5e5;
+}
+
+#uf-piano-roll { display: none; }
+
+/* Open: an in-flow flex child of the #unifile-app column (via #uf-bottom's
+   display:contents), so #uf-main shrinks above it — the "expands out at the
+   bottom" behaviour without overlaying the editor. */
+#unifile-app[data-piano-roll] #uf-piano-roll {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: clamp(180px, 34vh, 340px);
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  z-index: 90;
+}
+/* The roll replaces the transport while open (it carries play/scrub itself). */
+#unifile-app[data-piano-roll] #uf-transport { display: none; }
+/* Diff mode owns the bottom bar. */
+#unifile-app[data-diff] #uf-piano-roll { display: none !important; }
+
+/* Transport toggle button */
+.pf-btn.pf-roll {
+  opacity: 1;
+  color: var(--text-muted);
+  padding: 3px 7px;
+  margin-left: -4px;
+}
+.pf-btn.pf-roll:hover { color: var(--accent); background: var(--bg-surface); }
+.pf-btn.pf-roll svg { width: 14px; height: 14px; display: block; }
+
+/* ── Header ─────────────────────────────────────────────────── */
+.pr-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 3px 10px;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.pr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 9px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-sub);
+  cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.pr-btn:hover { color: var(--text); background: var(--bg-surface); }
+.pr-play { color: var(--accent); border-color: var(--accent); }
+.pr-play.playing { background: var(--accent); color: var(--bg); border-color: transparent; }
+.pr-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-sub);
+  white-space: nowrap;
+}
+
+/* Voice chips — one per voice, in its track color. The active chip (the voice
+   piano-roll edits target) is filled; M/S mirror the gutter's mute/solo. */
+.pr-voices {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pr-voices::-webkit-scrollbar { display: none; }
+.pr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 1px 4px 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  white-space: nowrap;
+}
+.pr-chip.active {
+  border-color: var(--vc);
+  background: color-mix(in srgb, var(--vc) 16%, transparent);
+}
+.pr-chip.faded { opacity: .45; }
+.pr-chip-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--vc);
+  flex-shrink: 0;
+}
+.pr-chip-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 1px 3px 1px 0;
+  color: var(--text-sub);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  cursor: pointer;
+}
+.pr-chip.active .pr-chip-name { color: var(--text); font-weight: 600; }
+.pr-chip-m, .pr-chip-s {
+  background: none;
+  border: none;
+  padding: 1px 3px;
+  border-radius: 3px;
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  opacity: .6;
+  cursor: pointer;
+}
+.pr-chip-m:hover, .pr-chip-s:hover { opacity: 1; background: var(--bg-surface); }
+.pr-chip-m.on { color: var(--error);   opacity: 1; }
+.pr-chip-s.on { color: var(--success); opacity: 1; }
+
+.pr-flash {
+  margin-left: auto;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--warning);
+  opacity: 0;
+  transition: opacity .2s;
+  white-space: nowrap;
+}
+.pr-flash.show { opacity: 1; }
+.pr-hint {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+@media (max-width: 900px) { .pr-hint { display: none; } }
+
+/* ── Grid ───────────────────────────────────────────────────── */
+.pr-body { flex: 1; min-height: 0; position: relative; }
+.pr-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+  touch-action: none;      /* pointer-drag gestures own the surface */
+}
+
+/* ── Phones ─────────────────────────────────────────────────── */
+/* Portrait: unavailable (the toggle only exists on desktop + landscape dock). */
+@media (max-width: 640px) and (orientation: portrait) {
+  #uf-piano-roll { display: none !important; }
+}
+/* Landscape: a bottom overlay above the panes, toggled from the pane dock. */
+@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+  #unifile-app[data-piano-roll] #uf-piano-roll {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    height: 64vh;
+    z-index: 120;
+    box-shadow: 0 -6px 24px rgba(0, 0, 0, .45);
+  }
+  #unifile-app[data-piano-roll] #uf-piano-roll .pr-hint { display: none; }
+  #unifile-app[data-piano-roll] #uf-piano-roll .pr-head { min-height: 30px; }
 }

@@ -773,6 +773,27 @@ export class Editor {
       if (!mobile) this._view.focus();
     }));
 
+    // A DSL surface (the piano roll) edited the source directly → dispatch the
+    // text changes through CM so they land in the undo history and flow out via
+    // the normal updateListener → state.setContent path.  Changes are given in
+    // original-document coordinates (CM composes them).  Tagged DSL_SELECT_EVENT
+    // so 'editor-select' isn't re-emitted (the roll manages its own audition).
+    this._unsub.push(state.on('dsl-edit', ({ changes, selection }) => {
+      if (!this._view || !changes?.length) return;
+      const docLen = this._view.state.doc.length;
+      if (changes.some(c => c.from > docLen || (c.to ?? c.from) > docLen)) return; // stale
+      this._view.dispatch({
+        changes,
+        ...(selection ? {
+          selection: {
+            anchor: Math.min(selection.anchor, docLen),
+            head: Math.min(selection.head ?? selection.anchor, docLen),
+          },
+        } : {}),
+        annotations: Transaction.userEvent.of(DSL_SELECT_EVENT),
+      });
+    }));
+
     // ABC playback cursor → colour the currently sounding notes green.
     // ranges is Array<{from,to}> (one entry per voice) while playing, or null.
     this._unsub.push(state.on('abc-play-cursor', (ranges) => {

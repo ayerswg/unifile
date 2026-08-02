@@ -27,6 +27,7 @@ import {
   showNewDocumentModal, showDslHelpModal, showExtensionsModal,
 } from './topbar.js';
 import { showArchivedCommentsModal } from './comments.js';
+import { pianoRollIcon } from './piano-roll.js';
 
 const PANES = ['commit', 'editor', 'render'];
 const WORKING = 'WORKING';
@@ -50,6 +51,8 @@ export class PaneSwitch {
     state.on('active-section-change', () => this.render());
     // Reflect play/pause on the dock's play button (landscape).
     state.on('abc-play-state', () => this.render());
+    // Reflect the piano-roll open state on the dock's roll button (landscape).
+    state.on('piano-roll-change', () => this.render());
     // Entering/leaving diff mode (or changing a side) swaps the segments between
     // the normal tabs and the diff pickers; drop any stale menu.
     state.on('diff-change', () => { this._openMenu = null; this.render(); });
@@ -125,6 +128,8 @@ export class PaneSwitch {
           aria-label="Play or pause">${playing ? _iconPause() : _iconPlay()}</button>
         <button type="button" class="ps-align" data-act="align"
           aria-label="Align voices">${_iconAlign()}</button>
+        <button type="button" class="ps-roll${state.pianoRollOpen ? ' on' : ''}" data-act="roll"
+          aria-label="Piano roll" aria-pressed="${!!state.pianoRollOpen}">${pianoRollIcon()}</button>
       ` : ''}
       <div class="ps-menu ps-menu-${this._openMenu ?? 'none'}${this._openMenu ? ' open' : ''}" role="menu">
         ${this._openMenu ? this._renderMenu(this._openMenu) : ''}
@@ -312,6 +317,14 @@ export class PaneSwitch {
     // Dock play / align (landscape only; not .ps-btn so the portrait bar ignores them).
     this.el.querySelector('.ps-play')?.addEventListener('click', (e) => { e.stopPropagation(); state.emit('abc-play'); });
     this.el.querySelector('.ps-align')?.addEventListener('click', (e) => { e.stopPropagation(); state.emit('mobile-align'); });
+    // Landscape only (portrait has no room): toggle the piano-roll overlay and
+    // tuck the dock away so it doesn't cover the roll.
+    this.el.querySelector('.ps-roll')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.togglePianoRoll();
+      this._dockCollapsed = true;
+      this.render();
+    });
     this.el.querySelectorAll('.ps-menu-item').forEach(item => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();

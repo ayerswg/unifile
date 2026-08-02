@@ -12,6 +12,7 @@
  */
 
 import { state } from './state.js';
+import { pianoRollIcon } from './piano-roll.js';
 
 export class DslFooter {
   /** @param {HTMLElement} container  The #uf-preview-footer element */
@@ -70,10 +71,15 @@ export class DslFooter {
             value="${Math.min(pos, total)}" step="50" aria-label="Seek">
         </div>
         <span class="pf-time pf-time-total" id="pf-total">${_fmt(total)}</span>
+        <button class="pf-btn pf-roll" id="pf-roll" title="Piano roll" aria-label="Open piano roll">
+          <span class="pf-icon">${pianoRollIcon()}</span>
+        </button>
       </div>`;
 
     this.el.querySelector('#pf-play')
       ?.addEventListener('click', () => state.emit('abc-play'));
+    this.el.querySelector('#pf-roll')
+      ?.addEventListener('click', () => state.togglePianoRoll(true));
 
     const scrub = this.el.querySelector('#pf-scrub');
     if (scrub) {
