@@ -199,10 +199,19 @@ phones:** a `.ps-roll` dock button toggles it as a fixed bottom overlay. **Portr
   or the new token gains an explicit accidental (unconditional repairs spray harmless-but-noisy `=`).
 - **Raw-pitch audition**: `'abc-audition-pitch'` in abcjs.js (drag/keyboard feedback; no source token
   yet) — routed like all audition: external MIDI port else the bundled piano.
+- **Landscape phone**: the overlay lives inside `#uf-bottom`, which the phone CSS blanks
+  (`display:none`) — a fixed child of a hidden parent doesn't render, so
+  `#unifile-app[data-piano-roll] #uf-bottom` reopens it as a zero-height shell (real bug). Height
+  tracks `--app-height` (not bare vh). Touch: double-tap is SYNTHESIZED from pointerups in
+  `_onPointerUp` (native dblclick on touch is flaky; `_suppressDblUntil` swallows the native one
+  that may follow), the resize grab zone widens to 10px on `pointer: coarse`, and the canvas sets
+  `touch-action:none` + user-select/callout none + contextmenu-preventDefault.
 - **Landmines**: `setPointerCapture` throws for stale/synthetic pointer ids — it's wrapped in
   try/catch (do not remove). Rows scrolled under the ruler are intentionally not clickable
   (`y < RULER_H` = scrub zone). In preview automation the tab must be FRONTED before dispatching
-  synthetic pointer events (unfronted tab → all rects 0×0 → clicks land in the "ruler" and scrub).
+  synthetic pointer events (unfronted tab → all rects 0×0 → clicks land in the "ruler" and scrub),
+  and setTimeout is throttled to ~1 s ticks — dispatch double-taps synchronously or the 350 ms
+  pair window can't be hit.
 
 ## Mobile / iOS (hard-won — read before touching layout)
 

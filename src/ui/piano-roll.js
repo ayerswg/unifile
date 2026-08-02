@@ -60,6 +60,12 @@ export class PianoRoll {
     this._drawRaf = 0;
     this._emittingSelect = false;
     this._flashTimer = 0;
+    // Touch: fingers need a bigger resize grab zone, and double-tap is
+    // synthesized from pointerups (native dblclick on touch is unreliable
+    // across mobile browsers even with the non-zoomable viewport).
+    this._edgePx = window.matchMedia?.('(pointer: coarse)').matches ? 10 : EDGE_PX;
+    this._lastTap = null;          // { t, x, y } of the previous touch pointerup
+    this._suppressDblUntil = 0;    // swallow a native dblclick after a synthesized one
 
     this._build();
     this._bind();
@@ -144,6 +150,7 @@ export class PianoRoll {
     c.addEventListener('pointerup',   (e) => this._onPointerUp(e));
     c.addEventListener('pointercancel', () => { this._drag = null; this._scheduleDraw(); });
     c.addEventListener('dblclick', (e) => this._onDblClick(e));
+    c.addEventListener('contextmenu', (e) => e.preventDefault());   // long-press menu (touch)
     c.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
     c.addEventListener('keydown', (e) => this._onKeyDown(e));
     // Hover cursor: resize near note edges, pointer over notes/ruler.
@@ -574,7 +581,7 @@ export class PianoRoll {
       const nw = Math.max(3, n.durMs * this._pxPerMs - 1);
       const ny = this._y(n.midi);
       return x >= nx - 1 && x <= nx + nw + 1 && y >= ny && y < ny + ROW_H
-        ? { note: n, edge: x >= nx + nw - EDGE_PX && nw > EDGE_PX * 2 } : null;
+        ? { note: n, edge: x >= nx + nw - this._edgePx && nw > this._edgePx * 2 } : null;
     };
     for (let i = d.notes.length - 1; i >= 0; i--) {
       const n = d.notes[i];
@@ -683,21 +690,47 @@ export class PianoRoll {
   _onPointerUp(e) {
     const drag = this._drag;
     this._drag = null;
-    if (!drag) return;
-    if (drag.mode === 'scrub') {
-      const ms = Math.max(0, Math.min(this._msAt(this._pos(e).x), this._data?.totalMs ?? 0));
-      state.emit('abc-seek', { ms });
-    } else if (drag.mode === 'move' && drag.moved && drag.previewMidi !== drag.note.midi) {
-      this._commitTranspose(drag.note, drag.previewMidi);
-    } else if (drag.mode === 'resize' && drag.moved && drag.previewDurMs !== drag.note.durMs) {
-      this._commitResize(drag.note, drag.previewDurMs);
+    if (drag) {
+      if (drag.mode === 'scrub') {
+        const ms = Math.max(0, Math.min(this._msAt(this._pos(e).x), this._data?.totalMs ?? 0));
+        state.emit('abc-seek', { ms });
+      } else if (drag.mode === 'move' && drag.moved && drag.previewMidi !== drag.note.midi) {
+        this._commitTranspose(drag.note, drag.previewMidi);
+      } else if (drag.mode === 'resize' && drag.moved && drag.previewDurMs !== drag.note.durMs) {
+        this._commitResize(drag.note, drag.previewDurMs);
+      }
+      this._scheduleDraw();
     }
-    this._scheduleDraw();
+
+    // Touch double-tap → the dblclick actions (add/delete). Synthesized here
+    // because native dblclick on touch is flaky; a drag between taps (moved)
+    // cancels the pair, and a real dblclick arriving right after is swallowed.
+    if (e.pointerType === 'touch' && this._data) {
+      const { x, y } = this._pos(e);
+      const now = performance.now();
+      const prev = this._lastTap;
+      const dragged = drag && drag.moved;
+      if (!dragged && prev && now - prev.t < 350 &&
+          Math.abs(x - prev.x) < 24 && Math.abs(y - prev.y) < 24) {
+        this._lastTap = null;
+        this._suppressDblUntil = now + 500;
+        this._dblAt(x, y);
+      } else {
+        this._lastTap = dragged ? null : { t: now, x, y };
+      }
+    }
   }
 
   _onDblClick(e) {
-    if (!this._data) return;
+    if (performance.now() < this._suppressDblUntil) return;   // touch pair handled it
     const { x, y } = this._pos(e);
+    this._dblAt(x, y);
+  }
+
+  /** Double-click / double-tap action at canvas coords: delete a note of the
+   *  active voice, or add one on empty grid. */
+  _dblAt(x, y) {
+    if (!this._data) return;
     if (y < RULER_H || x < KEY_W) return;
     const hit = this._hitNote(x, y);
     if (hit && !hit.ghost) this._deleteNote(hit.note);
