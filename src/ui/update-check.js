@@ -76,6 +76,9 @@ export async function checkForUpdate({ force } = {}) {
       _showBanner(VERSION, remote);
       return { status: 'update', current: VERSION, remote };
     }
+    // Up to date — a previously requested update (if any) has landed, so the
+    // auto-reload flag must not survive to fire on some future background swap.
+    try { sessionStorage.removeItem(PENDING_KEY); } catch { /* private mode */ }
     return { status: 'current', current: VERSION, remote };
   } catch {
     return { status: 'error', current: VERSION };
@@ -100,36 +103,107 @@ function _showBanner(local, remote) {
   state.emit?.('update-available', { local, remote });
 }
 
+// ---------------------------------------------------------------------------
+// Applying an update (PWA)
+//
+// The precache is big (the abc build's app.js is ~5 MB — the offline piano), so
+// installing a new service worker takes SECONDS on a normal connection.  The
+// old flow reloaded on a blind 2 s timer, which reliably lost that race: the
+// page came back through the OLD worker (old version, banner again) and the
+// new worker's eventual activation went unnoticed.  Rules now:
+//
+//   • NEVER reload on a timer while an install is in flight — reload only when
+//     the new worker actually takes control (controllerchange / activated).
+//   • Show progress on the banner ("Updating…") instead of pretending the
+//     2-second reload did something.
+//   • Arm a GLOBAL controllerchange listener (below, module init) with a
+//     sessionStorage flag, so even if the install outlives this page — user
+//     reloads manually, install finishes minutes later — the moment the new
+//     worker claims the page we reload once onto the new version.  The flag is
+//     cleared when a version check comes back current, and guards against
+//     surprise reloads from background updates the user never asked for.
+// ---------------------------------------------------------------------------
+
+const PENDING_KEY = 'uf_update_pending';
+
+// Global safety net: when a NEW worker takes over this page and an update was
+// requested, reload once so the user is actually on the new version.  Guarded
+// against the very first install (no previous controller — the page already
+// came fresh from the network).
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  let hadController = !!navigator.serviceWorker.controller;
+  let reloadedGlobal = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
+    let pending = null;
+    try { pending = sessionStorage.getItem(PENDING_KEY); } catch { /* private mode */ }
+    if (pending && !reloadedGlobal) { reloadedGlobal = true; location.reload(); }
+  });
+}
+
 /** Apply the update: for a PWA, swap the service worker then reload; else reload. */
 async function _applyUpdate() {
   if (!IS_QUINE && 'serviceWorker' in navigator) {
     try {
       const reg = await navigator.serviceWorker.getRegistration();
-      if (reg) {
-        let reloaded = false;
-        const reloadOnce = () => { if (!reloaded) { reloaded = true; location.reload(); } };
-        // Reload as soon as the new worker takes control (it self-skips waiting).
-        navigator.serviceWorker.addEventListener('controllerchange', reloadOnce);
-
-        await reg.update();                        // fetch the new sw.js if any
-        // A worker may already be installed/waiting, or land during update() —
-        // nudge whichever it is to activate now.
-        (reg.waiting ?? reg.installing)?.postMessage?.('skipWaiting');
-        reg.addEventListener?.('updatefound', () => {
-          reg.installing?.addEventListener?.('statechange', function () {
-            if (this.state === 'installed') this.postMessage?.('skipWaiting');
-          });
-        });
-        // Fallback: if there was no new worker to swap, reload anyway so a fresh
-        // shell (should the cache have updated) is picked up.
-        setTimeout(reloadOnce, 2000);
-        return;
-      }
+      if (reg) return _applySwUpdate(reg);
     } catch { /* fall through to plain reload */ }
   }
   location.reload();
 }
 
+async function _applySwUpdate(reg) {
+  const btn = document.querySelector('#uf-update-banner .update-apply');
+  const msg = document.querySelector('#uf-update-banner .draft-banner-msg');
+  if (btn) { btn.disabled = true; btn.textContent = 'Updating…'; }
+  try { sessionStorage.setItem(PENDING_KEY, '1'); } catch { /* private mode */ }
+
+  let reloaded = false;
+  const reloadOnce = () => { if (!reloaded) { reloaded = true; location.reload(); } };
+  navigator.serviceWorker.addEventListener('controllerchange', reloadOnce);
+
+  // Drive whichever worker exists (now or after update()) to activation, and
+  // reload the moment it gets there.  'activated' is a belt-and-braces
+  // companion to controllerchange (claim timing varies across browsers).
+  const nudge = (w) => { try { w?.postMessage?.('skipWaiting'); } catch { /* gone */ } };
+  const track = (w) => {
+    if (!w) return;
+    if (w.state === 'installed') nudge(w);
+    w.addEventListener?.('statechange', () => {
+      if (w.state === 'installed') nudge(w);
+      if (w.state === 'activated') reloadOnce();
+      if (w.state === 'redundant') fail('Update failed to install — will retry on next launch.');
+    });
+  };
+  const fail = (text) => {
+    if (reloaded) return;
+    if (btn) { btn.disabled = false; btn.textContent = 'Update'; }
+    if (msg && text) msg.textContent = text;
+  };
+
+  track(reg.waiting);
+  track(reg.installing);
+  reg.addEventListener?.('updatefound', () => track(reg.installing));
+
+  try { await reg.update(); } catch { /* offline — any already-fetched worker still applies */ }
+  track(reg.installing);
+  track(reg.waiting);
+
+  // No new worker anywhere → either a previous install already activated in the
+  // background (this page just predates it) or there is nothing to fetch.  One
+  // reload picks up whatever the active worker serves — never on a race timer.
+  if (!reg.installing && !reg.waiting) { setTimeout(reloadOnce, 300); return; }
+
+  // Big download on a slow line: after 45 s stop pretending and level with the
+  // user — the global controllerchange net still applies it whenever it lands.
+  setTimeout(() => {
+    if (!reloaded && (reg.installing || reg.waiting)) {
+      fail('Still downloading the update — it will apply automatically when ready.');
+    }
+  }, 45000);
+}
+
 function _esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
