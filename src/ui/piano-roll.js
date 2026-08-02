@@ -852,6 +852,22 @@ export class PianoRoll {
     return live.slice(d.sectionOffset, d.sectionOffset + d.source.length) === d.source;
   }
 
+  /**
+   * Repairs for an edit at [from, to) that adds or removes an explicit
+   * accidental on `spell`'s letter+octave: later accidental-less notes of the
+   * same pitch in the measure would inherit the change (ABC measure
+   * propagation), so pin them to their original sounding pitch.  A piano-roll
+   * edit must never audibly change OTHER notes — that's typing semantics, not
+   * DAW semantics.
+   */
+  _repairsFor(src, from, to, spell, keysig) {
+    return accidentalRepairs(
+      src, from, to,
+      [{ letter: spell.letter, caseTok: spell.caseTok ?? spell.letter, octMarks: spell.octMarks ?? '' }],
+      keysig, (t) => this._soundingMidiAt(t)
+    ).filter(r => r.from >= to);
+  }
+
   _emitEdit(changes, selection) {
     if (!this._isFresh()) { this._flash('Score updating — try that again'); return; }
     const off = this._data.sectionOffset;
@@ -943,9 +959,17 @@ export class PianoRoll {
       const from = tok.chord ? tok.chord.from : tok.pitch.from;
       change = { from, to: tok.lenFrom, insert: 'z' };
     }
+    const changes = [change];
+    // Deleting a note WITH an explicit accidental un-inherits it from later
+    // same-pitch notes in the measure — pin them so deleting one note never
+    // re-tunes the others.
+    if (tok.pitch.acc) {
+      const keysig = parseKeySig(src);
+      changes.push(...this._repairsFor(src, change.from, change.to, tok.pitch, keysig));
+    }
     this._sel = null;
     this._selPending = null;
-    this._emitEdit([change]);
+    this._emitEdit(changes);
   }
 
   _addNote(msRaw, midi) {
@@ -981,12 +1005,14 @@ export class PianoRoll {
       if (postU > 0) parts.push('z' + lenSuffix(postU));
       const insert = parts.join(' ');
 
+      const changes = [{ from: i, to: len.to, insert }];
+      // The new note may carry an explicit accidental — pin later same-pitch
+      // notes in the measure so adding a note never re-tunes its neighbours.
+      if (/^[_^=]/.test(spell.text)) changes.push(...this._repairsFor(src, i, len.to, spell, keysig));
+
       const selStart = i + (preU > 0 ? ('z' + lenSuffix(preU) + ' ').length : 0);
       this._selPending = { char: selStart, midi };
-      this._emitEdit(
-        [{ from: i, to: len.to, insert }],
-        { anchor: selStart, head: selStart + spell.text.length }
-      );
+      this._emitEdit(changes, { anchor: selStart, head: selStart + spell.text.length });
       return;
     }
 
@@ -999,16 +1025,24 @@ export class PianoRoll {
       if (!tok) { this._flash('Can’t edit this note’s source'); return; }
       const spell = this._spellAt(src, tok.pitch.from, midi, keysig);
       this._selPending = { char: onset.startChar, midi };
+      const changes = [];
       if (tok.chord) {
-        this._emitEdit([{ from: tok.chord.to - 1, to: tok.chord.to - 1, insert: spell.text }]);
+        changes.push({ from: tok.chord.to - 1, to: tok.chord.to - 1, insert: spell.text });
+        if (/^[_^=]/.test(spell.text)) {
+          changes.push(...this._repairsFor(src, tok.chord.from, tok.chord.lenTo, spell, keysig));
+        }
       } else {
         const lenText = src.slice(tok.lenFrom, tok.lenTo);
         const pitchText = src.slice(tok.pitch.from, tok.pitch.to);
-        this._emitEdit([{
+        changes.push({
           from: tok.pitch.from, to: tok.lenTo,
           insert: '[' + pitchText + spell.text + ']' + lenText,
-        }]);
+        });
+        if (/^[_^=]/.test(spell.text)) {
+          changes.push(...this._repairsFor(src, tok.pitch.from, tok.lenTo, spell, keysig));
+        }
       }
+      this._emitEdit(changes);
       return;
     }
 
@@ -1021,11 +1055,10 @@ export class PianoRoll {
       if (msRaw >= lastEndMs - 1) {
         const pos = last.endChar;
         const spell = this._spellAt(src, pos, midi, keysig);
+        const changes = [{ from: pos, to: pos, insert: ' ' + spell.text }];
+        if (/^[_^=]/.test(spell.text)) changes.push(...this._repairsFor(src, pos, pos, spell, keysig));
         this._selPending = { char: pos + 1, midi };
-        this._emitEdit(
-          [{ from: pos, to: pos, insert: ' ' + spell.text }],
-          { anchor: pos + 1, head: pos + 1 + spell.text.length }
-        );
+        this._emitEdit(changes, { anchor: pos + 1, head: pos + 1 + spell.text.length });
         return;
       }
     }
