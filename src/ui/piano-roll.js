@@ -33,7 +33,7 @@ import { state } from './state.js';
 import { resolveVoiceColor, voiceColorVar } from '../core/voice-colors.js';
 import {
   parseKeySig, parseUnitLen, midiToAbcPitch, naturalMidi,
-  hasEarlierAccidental, accidentalRepairs, pitchTokensIn,
+  hasEarlierAccidental, accidentalRepairs, accidentalCleanups, pitchTokensIn,
   parseLenSuffix, lenSuffix,
 } from '../core/abc-pitch.js';
 
@@ -868,6 +868,21 @@ export class PianoRoll {
     ).filter(r => r.from >= to);
   }
 
+  /**
+   * The inverse pass: strip later explicit accidentals the edit makes
+   * redundant (e.g. deleting a `=B` leaves a repair-pinned `_B` restating the
+   * key signature).  `insertedMidi` is the pitch the edit leaves at the span
+   * (null for deletions).  Targets are disjoint from _repairsFor's (these have
+   * accidentals, those don't), so both compose in one dispatch.
+   */
+  _cleanupsFor(src, from, to, spell, insertedMidi, keysig) {
+    const inserted = spell && insertedMidi != null ? {
+      key: naturalMidi(spell.caseTok ?? spell.letter, spell.octMarks ?? ''),
+      alter: insertedMidi - naturalMidi(spell.caseTok ?? spell.letter, spell.octMarks ?? ''),
+    } : null;
+    return accidentalCleanups(src, from, to, inserted, keysig, (t) => this._soundingMidiAt(t));
+  }
+
   _emitEdit(changes, selection) {
     if (!this._isFresh()) { this._flash('Score updating — try that again'); return; }
     const off = this._data.sectionOffset;
@@ -913,6 +928,8 @@ export class PianoRoll {
         (t) => this._soundingMidiAt(t)
       ).filter(r => r.from > tok.pitch.to));
     }
+    changes.push(...this._cleanupsFor(src, tok.pitch.from, tok.pitch.to, spell, newMidi, keysig)
+      .filter(c => changes.every(o => c.from !== o.from)));
 
     this._selPending = { char: note.startChar, midi: newMidi };
     this._emitEdit(changes, { anchor: tok.pitch.from, head: tok.pitch.from + spell.text.length });
@@ -961,11 +978,13 @@ export class PianoRoll {
     }
     const changes = [change];
     // Deleting a note WITH an explicit accidental un-inherits it from later
-    // same-pitch notes in the measure — pin them so deleting one note never
-    // re-tunes the others.
+    // same-pitch notes in the measure — pin the ones whose pitch would drift,
+    // and strip the explicit accidentals that now merely restate the context
+    // (a leftover repair pin shouldn't outlive the note that required it).
     if (tok.pitch.acc) {
       const keysig = parseKeySig(src);
       changes.push(...this._repairsFor(src, change.from, change.to, tok.pitch, keysig));
+      changes.push(...this._cleanupsFor(src, change.from, change.to, null, null, keysig));
     }
     this._sel = null;
     this._selPending = null;
@@ -1007,8 +1026,13 @@ export class PianoRoll {
 
       const changes = [{ from: i, to: len.to, insert }];
       // The new note may carry an explicit accidental — pin later same-pitch
-      // notes in the measure so adding a note never re-tunes its neighbours.
-      if (/^[_^=]/.test(spell.text)) changes.push(...this._repairsFor(src, i, len.to, spell, keysig));
+      // notes in the measure so adding a note never re-tunes its neighbours,
+      // and strip any later accidentals it makes redundant.
+      if (/^[_^=]/.test(spell.text)) {
+        changes.push(...this._repairsFor(src, i, len.to, spell, keysig));
+        changes.push(...this._cleanupsFor(src, i, len.to, spell, midi, keysig)
+          .filter(c => changes.every(o => c.from !== o.from)));
+      }
 
       const selStart = i + (preU > 0 ? ('z' + lenSuffix(preU) + ' ').length : 0);
       this._selPending = { char: selStart, midi };
@@ -1030,6 +1054,8 @@ export class PianoRoll {
         changes.push({ from: tok.chord.to - 1, to: tok.chord.to - 1, insert: spell.text });
         if (/^[_^=]/.test(spell.text)) {
           changes.push(...this._repairsFor(src, tok.chord.from, tok.chord.lenTo, spell, keysig));
+          changes.push(...this._cleanupsFor(src, tok.chord.from, tok.chord.lenTo, spell, midi, keysig)
+            .filter(c => changes.every(o => c.from !== o.from)));
         }
       } else {
         const lenText = src.slice(tok.lenFrom, tok.lenTo);
@@ -1040,6 +1066,8 @@ export class PianoRoll {
         });
         if (/^[_^=]/.test(spell.text)) {
           changes.push(...this._repairsFor(src, tok.pitch.from, tok.lenTo, spell, keysig));
+          changes.push(...this._cleanupsFor(src, tok.pitch.from, tok.lenTo, spell, midi, keysig)
+            .filter(c => changes.every(o => c.from !== o.from)));
         }
       }
       this._emitEdit(changes);
@@ -1056,7 +1084,11 @@ export class PianoRoll {
         const pos = last.endChar;
         const spell = this._spellAt(src, pos, midi, keysig);
         const changes = [{ from: pos, to: pos, insert: ' ' + spell.text }];
-        if (/^[_^=]/.test(spell.text)) changes.push(...this._repairsFor(src, pos, pos, spell, keysig));
+        if (/^[_^=]/.test(spell.text)) {
+          changes.push(...this._repairsFor(src, pos, pos, spell, keysig));
+          changes.push(...this._cleanupsFor(src, pos, pos, spell, midi, keysig)
+            .filter(c => changes.every(o => c.from !== o.from)));
+        }
         this._selPending = { char: pos + 1, midi };
         this._emitEdit(changes, { anchor: pos + 1, head: pos + 1 + spell.text.length });
         return;

@@ -234,6 +234,61 @@ export function accidentalRepairs(source, editFrom, editTo, spellings, keysig, s
   return edits;
 }
 
+/**
+ * The inverse of accidentalRepairs: after an edit removes or changes a pitch
+ * token, later explicit accidentals in the measure may become REDUNDANT (they
+ * now just restate the key signature / context) — e.g. add `=B` in K:F, the
+ * repair pins a later B as `_B`, then deleting the `=B` leaves `_B` saying
+ * nothing the key signature doesn't.  Strip those.
+ *
+ * The safety argument: every roll edit preserves each untouched note's
+ * sounding pitch, and in ABC the accidental state a note leaves behind always
+ * equals its own sounding alteration (explicit or inherited).  So the
+ * post-edit context can be modelled purely from SOUNDING pitches (the timing
+ * table), sidestepping the repair/cleanup interaction: walk the measure, track
+ * each pitch-key's last sounding alteration, and strip an explicit accidental
+ * only when (a) the sounding is known, (b) it matches the accidental, and
+ * (c) the modelled context already produces it.
+ *
+ * @param inserted  {key: naturalMidi, alter: semitones}|null — the pitch the
+ *   edit itself leaves at [editFrom, editTo) (null for a deletion).
+ * @returns {Array<{from:number,to:number,insert:string}>} in original coords
+ */
+export function accidentalCleanups(source, editFrom, editTo, inserted, keysig, soundingMidiAt) {
+  const { from: mFrom, to: mTo } = measureSpan(source, editFrom);
+  const state = new Map();   // naturalMidi pitch key → last sounding alteration
+  const keyAlter = (letter) => keysig?.alter?.[letter.toUpperCase()] ?? 0;
+
+  const soundingAlter = (t, key) => {
+    const snd = soundingMidiAt(t);
+    return snd != null ? snd - key : null;
+  };
+  const walk = (t, key, sndAlter, effective) => {
+    // The state a token leaves = its sounding; fall back to its explicit
+    // accidental, else the unchanged context.
+    state.set(key, sndAlter ?? (t.acc ? accValue(t.acc) : effective));
+  };
+
+  for (const t of pitchTokensIn(source, mFrom, Math.max(mFrom, Math.min(editFrom, mTo)))) {
+    const key = naturalMidi(t.letter, t.octMarks);
+    const effective = state.has(key) ? state.get(key) : keyAlter(t.letter);
+    walk(t, key, soundingAlter(t, key), effective);
+  }
+  if (inserted && inserted.alter != null) state.set(inserted.key, inserted.alter);
+
+  const changes = [];
+  for (const t of pitchTokensIn(source, Math.max(editTo, mFrom), mTo)) {
+    const key = naturalMidi(t.letter, t.octMarks);
+    const effective = state.has(key) ? state.get(key) : keyAlter(t.letter);
+    const sndAlter = soundingAlter(t, key);
+    if (t.acc && sndAlter != null && accValue(t.acc) === sndAlter && sndAlter === effective) {
+      changes.push({ from: t.from, to: t.from + t.acc.length, insert: '' });
+    }
+    walk(t, key, sndAlter, effective);
+  }
+  return changes;
+}
+
 // ---------------------------------------------------------------------------
 // Duration suffixes
 // ---------------------------------------------------------------------------
