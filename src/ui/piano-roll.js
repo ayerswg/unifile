@@ -824,7 +824,21 @@ export class PianoRoll {
     return { ...s, text };
   }
 
+  /** True when the roll's source snapshot still matches the live document.
+   *  After any edit there is a window (until the debounced re-render emits
+   *  fresh abc-roll-data) where the snapshot is stale — an edit computed
+   *  against it would splice the wrong characters (e.g. a quick chord-add
+   *  then chord-delete turned `[GB]2` into `zGB]2`). All edits funnel through
+   *  _emitEdit, so this one guard covers add/delete/transpose/resize. */
+  _isFresh() {
+    const d = this._data;
+    if (!d) return false;
+    const live = state.currentContent ?? '';
+    return live.slice(d.sectionOffset, d.sectionOffset + d.source.length) === d.source;
+  }
+
   _emitEdit(changes, selection) {
+    if (!this._isFresh()) { this._flash('Score updating — try that again'); return; }
     const off = this._data.sectionOffset;
     state.emit('dsl-edit', {
       changes: changes.map(c => ({ from: c.from + off, to: c.to + off, insert: c.insert })),
