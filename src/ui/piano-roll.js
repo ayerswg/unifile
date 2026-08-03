@@ -66,6 +66,7 @@ export class PianoRoll {
     this._edgePx = window.matchMedia?.('(pointer: coarse)').matches ? 10 : EDGE_PX;
     this._lastTap = null;          // { t, x, y } of the previous touch pointerup
     this._suppressDblUntil = 0;    // swallow a native dblclick after a synthesized one
+    this._pencil = false;          // draw tool: single tap adds / deletes
 
     this._build();
     this._bind();
@@ -109,6 +110,7 @@ export class PianoRoll {
 
   _build() {
     this.el.innerHTML = `
+      <div class="pr-grip" aria-hidden="true"></div>
       <div class="pr-head">
         <button type="button" class="pr-btn pr-play" title="Play (Space)" aria-label="Play/Pause">
           ${_iconPlay()}
@@ -117,6 +119,8 @@ export class PianoRoll {
         <div class="pr-voices" role="tablist" aria-label="Voices"></div>
         <span class="pr-flash" aria-live="polite"></span>
         <span class="pr-hint">2×click add · drag pitch · edge length · ⌫ delete</span>
+        <button type="button" class="pr-btn pr-pencil" title="Draw tool — tap adds, tap a note deletes"
+          aria-label="Draw tool" aria-pressed="false">${_iconPencil()}</button>
         <button type="button" class="pr-btn pr-close" title="Close piano roll" aria-label="Close piano roll">
           ${_iconChevronDown()}
         </button>
@@ -127,11 +131,52 @@ export class PianoRoll {
     this._canvas = this.el.querySelector('.pr-canvas');
     this._ctx = this._canvas.getContext('2d');
     this._body = this.el.querySelector('.pr-body');
+
+    // Restore the user's desktop pane height (the landscape overlay ignores it).
+    try {
+      const h = parseInt(localStorage.getItem('uf_roll_h'), 10);
+      if (h > 0) this.el.style.setProperty('--uf-roll-h', h + 'px');
+    } catch { /* private mode */ }
   }
 
   _bind() {
     this.el.querySelector('.pr-play').addEventListener('click', () => state.emit('abc-play'));
     this.el.querySelector('.pr-close').addEventListener('click', () => state.togglePianoRoll(false));
+
+    // Pencil (draw) tool — the touch-first editing mode: tap empty = add,
+    // tap a note = delete. No double-anything needed on phones.
+    const pencil = this.el.querySelector('.pr-pencil');
+    pencil.addEventListener('click', () => {
+      this._pencil = !this._pencil;
+      pencil.classList.toggle('on', this._pencil);
+      pencil.setAttribute('aria-pressed', String(this._pencil));
+    });
+
+    // Vertical resize via the top grip (desktop bottom-pane mode).
+    const grip = this.el.querySelector('.pr-grip');
+    grip.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      try { grip.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+      grip.classList.add('dragging');
+      const startY = e.clientY;
+      const startH = this.el.getBoundingClientRect().height;
+      const onMove = (ev) => {
+        const h = Math.round(startH + (startY - ev.clientY));
+        this.el.style.setProperty('--uf-roll-h', h + 'px');  // CSS min/max clamp it
+      };
+      const onUp = () => {
+        grip.classList.remove('dragging');
+        grip.removeEventListener('pointermove', onMove);
+        grip.removeEventListener('pointerup', onUp);
+        grip.removeEventListener('pointercancel', onUp);
+        try {
+          localStorage.setItem('uf_roll_h', String(Math.round(this.el.getBoundingClientRect().height)));
+        } catch { /* private mode */ }
+      };
+      grip.addEventListener('pointermove', onMove);
+      grip.addEventListener('pointerup', onUp);
+      grip.addEventListener('pointercancel', onUp);
+    });
 
     try {
       new ResizeObserver(() => {
@@ -618,6 +663,17 @@ export class PianoRoll {
     }
 
     const hit = this._hitNote(x, y);
+
+    // Pencil mode: single tap/click edits directly — add on empty, delete on a
+    // note of the active voice. Ghost taps still switch voices below.
+    if (this._pencil && (!hit || !hit.ghost)) {
+      if (hit) this._deleteNote(hit.note);
+      else this._addNote(Math.max(0, this._msAt(x)), this._midiAt(y));
+      this._lastTap = null;                            // don't chain into a double-tap
+      this._suppressDblUntil = performance.now() + 500;
+      return;
+    }
+
     if (!hit) { this._sel = null; this._scheduleDraw(); return; }
 
     const n = hit.note;
@@ -1171,6 +1227,10 @@ function _iconPlay() {
 function _iconPause() {
   return `<svg width="10" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
     <rect x="2" y="2" width="4" height="12" rx="1"/><rect x="10" y="2" width="4" height="12" rx="1"/></svg>`;
+}
+function _iconPencil() {
+  return `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M11.3 1.7l3 3L5 14l-3.7.7L2 11z"/><path d="M9.5 3.5l3 3"/></svg>`;
 }
 function _iconChevronDown() {
   return `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

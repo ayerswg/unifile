@@ -4395,11 +4395,39 @@ noscript .noscript-wrap {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  height: clamp(180px, 34vh, 340px);
+  /* User-resizable via the top grip (JS sets --uf-roll-h, persisted);
+     min/max keep it usable and leave room for the editor above. */
+  height: var(--uf-roll-h, clamp(180px, 34vh, 340px));
+  min-height: 160px;
+  max-height: calc(100% - 120px);
   background: var(--bg);
   border-top: 1px solid var(--border);
   z-index: 90;
 }
+
+/* Vertical resize grip along the pane's top edge (desktop). */
+.pr-grip {
+  flex-shrink: 0;
+  height: 7px;
+  margin-bottom: -3px;          /* visually part of the header's top border */
+  cursor: ns-resize;
+  touch-action: none;
+  position: relative;
+  z-index: 1;
+}
+.pr-grip::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 36px;
+  height: 3px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: var(--border);
+  transition: background .15s;
+}
+.pr-grip:hover::after, .pr-grip.dragging::after { background: var(--text-muted); }
 /* The roll replaces the transport while open (it carries play/scrub itself). */
 #unifile-app[data-piano-roll] #uf-transport { display: none; }
 /* Diff mode owns the bottom bar. */
@@ -4442,6 +4470,13 @@ noscript .noscript-wrap {
 .pr-btn:hover { color: var(--text); background: var(--bg-surface); }
 .pr-play { color: var(--accent); border-color: var(--accent); }
 .pr-play.playing { background: var(--accent); color: var(--bg); border-color: transparent; }
+/* Pencil (draw) tool: tap empty = add, tap a note = delete. The touch-first
+   editing mode (no double-anything), also handy with a mouse. */
+.pr-pencil.on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .pr-time {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -4561,14 +4596,21 @@ noscript .noscript-wrap {
   #unifile-app[data-piano-roll] #uf-piano-roll {
     position: fixed;
     left: 0; right: 0; bottom: 0;
-    /* Track the JS-measured visual viewport (the shell's own height source),
-       not bare vh — landscape URL bars and the soft keyboard lie in vh. */
-    height: calc(var(--app-height, 100vh) * 0.64);
+    /* FULL SCREEN in landscape — the roll IS the app while open. Track the
+       JS-measured visual viewport (the shell's own height source), not bare
+       vh — landscape URL bars and the soft keyboard lie in vh. */
+    height: var(--app-height, 100vh);
+    min-height: 0;
+    max-height: none;
     z-index: 120;
-    box-shadow: 0 -6px 24px rgba(0, 0, 0, .45);
+    border-top: none;
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
   }
   #unifile-app[data-piano-roll] #uf-piano-roll .pr-hint { display: none; }
-  #unifile-app[data-piano-roll] #uf-piano-roll .pr-head { min-height: 30px; }
+  #unifile-app[data-piano-roll] #uf-piano-roll .pr-grip { display: none; }
+  #unifile-app[data-piano-roll] #uf-piano-roll .pr-head {
+    min-height: 34px;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
 }

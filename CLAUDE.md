@@ -169,8 +169,13 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
 A DAW-style second input surface for ABC docs (v0.3 feature). **Desktop:** the transport bar's
 piano-roll button expands it bottom-up as an in-flow flex child (via `#uf-bottom`'s
 `display:contents`) and it REPLACES the transport while open (`#unifile-app[data-piano-roll]`
-hides `#uf-transport`; the roll carries its own play/pause + time + scrub ruler). **Landscape
-phones:** a `.ps-roll` dock button toggles it as a fixed bottom overlay. **Portrait phones:** unavailable.
+hides `#uf-transport`; the roll carries its own play/pause + time + scrub ruler). The pane is
+**vertically resizable** via the `.pr-grip` top edge (sets `--uf-roll-h`, CSS min/max clamps,
+persisted in `localStorage.uf_roll_h`). **Landscape phones:** a `.ps-roll` dock button toggles it
+**FULL SCREEN** (`height: var(--app-height)`, grip hidden — the roll is the app while open).
+**Portrait phones:** unavailable. The header's **pencil (draw) tool** (`.pr-pencil`) is the
+touch-first editing mode: single tap on empty = add, single tap on an active-voice note = delete
+(no double-anything); pencil off = tap selects, drag transposes, edge-drag resizes.
 
 - **Data**: `abcjs.js _emitRollData()` publishes `state.abcRollData` (+ `'abc-roll-data'`) each
   render: per-pitch `{ms,durMs,durWhole,midi,startChar,endChar,voiceId}` notes (chord pitches share a
