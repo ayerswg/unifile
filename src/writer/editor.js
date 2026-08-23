@@ -48,6 +48,7 @@ export class WriterEditor {
   constructor(host, opts = {}) {
     this.host = host;
     this.onChange = opts.onChange || (() => {});
+    this.onSlash = opts.onSlash || null;   // ctx|null → app's insertion menu
     this.lines = [''];
     this.infos = classifyDoc(this.lines);
     this._cache = [];            // rendered inner HTML per line (dirty check)
@@ -86,6 +87,7 @@ export class WriterEditor {
     if (resetUndo) { this._undo = []; this._redo = []; }
     this._render(true);
     this.onChange();
+    this.onSlash?.(null);
   }
 
   focus() { this.root.focus(); }
@@ -160,7 +162,10 @@ export class WriterEditor {
     const a = this._lineAt(sel.start).lineIdx;
     const b = this._lineAt(sel.end).lineIdx;
     const src = this.lines.slice(a, b + 1);
-    const all = src.every(l => this._hasPrefix(l, kind) || !l.trim());
+    // Blank lines don't vote — and a lone blank line must GAIN the prefix,
+    // not count as "already prefixed" and strip to nothing.
+    const nonBlank = src.filter(l => l.trim());
+    const all = nonBlank.length > 0 && nonBlank.every(l => this._hasPrefix(l, kind));
     const out = src.map((l, i) => {
       if (!l.trim() && src.length > 1) return l;
       return all ? this._stripPrefix(l, kind) : this._addPrefix(this._stripAnyPrefix(l), kind, i);
@@ -250,15 +255,18 @@ export class WriterEditor {
   // Model editing core
   // -------------------------------------------------------------------------
 
-  /** Replace [start,end) of the document with `insert`; set selection; render. */
+  /** Replace [start,end) of the document with `insert`; set selection; render.
+   *  undoKind 'none' skips the undo snapshot (the slash menu's query-removal —
+   *  recording it would make the menu's own Undo action restore the query). */
   _applyEdit(start, end, insert, selStart, selEnd, undoKind) {
-    this._pushUndo(undoKind);
+    if (undoKind !== 'none') this._pushUndo(undoKind);
     const text = this.getValue();
     const next = text.slice(0, start) + insert + text.slice(end);
     this.lines = next.split('\n');
     this._render();
     this._setSelOffsets(selStart, selEnd ?? selStart);
     this.onChange();
+    this._notifySlash();
   }
 
   _pushUndo(kind) {
@@ -285,6 +293,81 @@ export class WriterEditor {
     this._render();
     this._setSelOffsets(snap.sel.start, snap.sel.end);
     this.onChange();
+    this._notifySlash();
+  }
+
+  // -------------------------------------------------------------------------
+  // Slash-command context
+  //
+  // The app's insertion menu opens when the caret sits right after a `/` that
+  // was typed "correctly": at the start of a line or after whitespace (so
+  // `and/or`, URLs and file paths never trigger), never on code / fence /
+  // front-matter lines, never mid-composition, and only with a collapsed
+  // caret.  Whatever [\w-]* follows the slash is the live filter query.
+  // Recomputed after every edit AND caret move, so typing filters, and
+  // backspacing the `/` (or tapping elsewhere) closes the menu naturally.
+  // -------------------------------------------------------------------------
+
+  /**
+   * @returns {null | { start: number, caret: number, query: string, atLineStart: boolean }}
+   *   start = offset of the `/`; [start, caret) is what the menu removes on pick.
+   */
+  slashContext() {
+    if (this._composing) return null;
+    const sel = this._selOffsets();
+    if (!sel || sel.start !== sel.end) return null;
+    const { lineIdx, col } = this._lineAt(sel.start);
+    const type = this.infos[lineIdx]?.type;
+    if (type === 'code' || type === 'fence' || type === 'fm' || type === 'fm-fence') return null;
+    const before = this.lines[lineIdx].slice(0, col);
+    const m = /(^|\s)\/([\w-]{0,24})$/.exec(before);
+    if (!m) return null;
+    const start = sel.start - m[2].length - 1;
+    return {
+      start,
+      caret: sel.start,
+      query: m[2],
+      atLineStart: /^\s*$/.test(before.slice(0, before.length - m[2].length - 1)),
+    };
+  }
+
+  _notifySlash() {
+    this.onSlash?.(this.slashContext());
+  }
+
+  /** Viewport rect of the caret (falls back to its line's rect on empty lines). */
+  caretRect() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0).cloneRange();
+    r.collapse(true);
+    let rect = r.getClientRects()[0] || r.getBoundingClientRect();
+    if (!rect || (!rect.width && !rect.height)) {
+      const div = this._lineDivOf(r.startContainer) ||
+        (r.startContainer === this.root ? this.root.children[Math.min(r.startOffset, this.root.children.length - 1)] : null);
+      rect = div?.getBoundingClientRect() || null;
+    }
+    return rect;
+  }
+
+  /** Replace the caret's whole line with `text`; caret lands at `caretRel` within it. */
+  replaceCurrentLine(text, caretRel = text.length) {
+    const sel = this._selOffsets(); if (!sel) return;
+    const { lineIdx, lineStart } = this._lineAt(sel.start);
+    const line = this.lines[lineIdx];
+    this._applyEdit(lineStart, lineStart + line.length, text,
+      lineStart + caretRel, lineStart + caretRel, 'format');
+  }
+
+  /** Set the caret line's heading level exactly (0 removes the heading). */
+  setHeading(level) {
+    const sel = this._selOffsets(); if (!sel) return;
+    const { lineIdx, lineStart } = this._lineAt(sel.start);
+    const line = this.lines[lineIdx];
+    const rest = line.replace(/^#{1,6}\s+/, '');
+    const repl = level > 0 ? '#'.repeat(level) + ' ' + rest : rest;
+    this._applyEdit(lineStart, lineStart + line.length, repl,
+      lineStart + repl.length, lineStart + repl.length, 'format');
   }
 
   // -------------------------------------------------------------------------
@@ -460,6 +543,7 @@ export class WriterEditor {
     this._render();
     if (sel) this._setSelOffsets(sel.start, sel.end);
     this.onChange();
+    this._notifySlash();
   }
 
   /** Selection offsets measured against the freshly-extracted DOM lines. */
@@ -510,8 +594,12 @@ export class WriterEditor {
     });
     this.root.addEventListener('drop', (e) => e.preventDefault());
     document.addEventListener('selectionchange', () => {
-      if (this.focusMode && document.activeElement === this.root) this._updateFocusPara();
+      if (document.activeElement !== this.root) return;
+      if (this.focusMode) this._updateFocusPara();
+      // Caret moves without an edit must also open/close the slash menu.
+      this._notifySlash();
     });
+    this.root.addEventListener('blur', () => this.onSlash?.(null));
   }
 
   _onBeforeInput(e) {

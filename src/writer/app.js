@@ -26,6 +26,7 @@ import {
 import { VCS } from '../core/vcs.js';
 import { shortHash } from '../core/hash.js';
 import { WriterEditor } from './editor.js';
+import { SlashMenu } from './slash-menu.js';
 import { renderDocument, renderMarkdown } from './preview.js';
 import { buildEpub, slugify } from './epub.js';
 import { GUIDE_MD } from './guide-content.js';
@@ -53,9 +54,6 @@ Select this text and start typing to begin.
 const ICONS = {
   eye: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
   dots: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
-  undo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 5 3 10l5 5"/><path d="M3 10h11a6 6 0 0 1 0 12h-3"/></svg>',
-  redo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m16 5 5 5-5 5"/><path d="M21 10H10a6 6 0 0 0 0 12h3"/></svg>',
-  link: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7L12.5 19"/></svg>',
   kbdown: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="10" rx="2"/><path d="M7 8h.01M11 8h.01M15 8h.01M8 11h8"/><path d="m9 18 3 3 3-3"/></svg>',
 };
 
@@ -100,10 +98,12 @@ export class WriterApp {
 
     this.editor = new WriterEditor(document.getElementById('wr-sheet'), {
       onChange: () => this._onEdit(),
+      onSlash: (ctx) => this._onSlashCtx(ctx),
     });
     this.editor.setValue(this.content);
     this._refreshDirty();
     this._refreshCount();
+    this._bindSlashMenu();
     this._bindEditingChrome();
 
     if (!IS_QUINE && 'serviceWorker' in navigator) {
@@ -125,6 +125,7 @@ export class WriterApp {
                autocomplete="off" autocorrect="on" spellcheck="false" enterkeyhint="done">
         <span id="wr-dirty" title="Uncommitted changes" hidden></span>
         <div id="wr-top-actions">
+          <button id="wr-count" title="Word count" aria-label="Word count"></button>
           <button id="wr-btn-preview" class="wr-icon-btn" title="Preview" aria-label="Toggle preview">${ICONS.eye}</button>
           <button id="wr-btn-menu" class="wr-icon-btn" title="Menu" aria-label="Menu">${ICONS.dots}</button>
         </div>
@@ -133,29 +134,7 @@ export class WriterApp {
         <div id="wr-scroll"><div id="wr-sheet"></div></div>
         <div id="wr-preview" hidden><div id="wr-preview-body" class="wr-prose"></div></div>
       </main>
-      <footer id="wr-bar">
-        <div id="wr-tools">
-          <button data-cmd="undo" title="Undo" aria-label="Undo">${ICONS.undo}</button>
-          <button data-cmd="redo" title="Redo" aria-label="Redo">${ICONS.redo}</button>
-          <span class="wr-sep"></span>
-          <button data-cmd="heading" title="Heading" aria-label="Heading">H</button>
-          <button data-cmd="bold" title="Bold" aria-label="Bold"><b>B</b></button>
-          <button data-cmd="italic" title="Italic" aria-label="Italic"><i>I</i></button>
-          <button data-cmd="strike" title="Strikethrough" aria-label="Strikethrough"><s>S</s></button>
-          <button data-cmd="code" title="Code" aria-label="Code">\`\`</button>
-          <span class="wr-sep"></span>
-          <button data-cmd="bullet" title="Bullet list" aria-label="Bullet list">•–</button>
-          <button data-cmd="ordered" title="Numbered list" aria-label="Numbered list">1.</button>
-          <button data-cmd="task" title="Task list" aria-label="Task list">☑</button>
-          <button data-cmd="quote" title="Quote" aria-label="Quote">❝</button>
-          <span class="wr-sep"></span>
-          <button data-cmd="outdent" title="Outdent" aria-label="Outdent">⇤</button>
-          <button data-cmd="indent" title="Indent" aria-label="Indent">⇥</button>
-          <button data-cmd="link" title="Link" aria-label="Insert link">${ICONS.link}</button>
-        </div>
-        <button id="wr-count" title="Word count" aria-label="Word count"></button>
-        <button id="wr-kbd-down" title="Dismiss keyboard" aria-label="Dismiss keyboard">${ICONS.kbdown}</button>
-      </footer>
+      <button id="wr-kbd-down" title="Dismiss keyboard" aria-label="Dismiss keyboard">${ICONS.kbdown}</button>
       <div id="wr-overlay" hidden>
         <div id="wr-modal" role="dialog" aria-modal="true"></div>
       </div>`;
@@ -171,19 +150,6 @@ export class WriterApp {
       if (e.key === 'Enter') { titleEl.blur(); this.editor.focus(); }
     });
     document.title = this.title;
-
-    // Toolbar — mousedown prevention keeps the editor focused (and the iOS
-    // keyboard up) while tapping format buttons.
-    const tools = document.getElementById('wr-tools');
-    tools.addEventListener('mousedown', (e) => e.preventDefault());
-    tools.addEventListener('touchstart', (e) => {
-      const btn = e.target.closest('button[data-cmd]');
-      if (btn) { e.preventDefault(); this._exec(btn.dataset.cmd); }
-    }, { passive: false });
-    tools.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-cmd]');
-      if (btn) this._exec(btn.dataset.cmd);
-    });
 
     document.getElementById('wr-count').addEventListener('click', () => {
       this._countMode = ((this._countMode || 0) + 1) % 3;
@@ -206,6 +172,10 @@ export class WriterApp {
       undo: () => ed.undo(),
       redo: () => ed.redo(),
       heading: () => ed.cycleHeading(),
+      h1: () => ed.setHeading(1),
+      h2: () => ed.setHeading(2),
+      h3: () => ed.setHeading(3),
+      text: () => ed.setHeading(0),
       bold: () => ed.wrapSelection('**'),
       italic: () => ed.wrapSelection('*'),
       strike: () => ed.wrapSelection('~~'),
@@ -217,8 +187,74 @@ export class WriterApp {
       indent: () => ed.shiftIndent(1),
       outdent: () => ed.shiftIndent(-1),
       link: () => ed.insertLink(),
+      codeblock: () => ed.replaceCurrentLine('```\n\n```', 4),
+      divider: () => ed.replaceCurrentLine('---\n', 4),
+      table: () => ed.replaceCurrentLine('| Column | Column |\n| ------ | ------ |\n|  |  |', 2),
     };
     map[cmd]?.();
+  }
+
+  // -------------------------------------------------------------------------
+  // Slash insertion menu (replaces the old bottom toolbar)
+  // -------------------------------------------------------------------------
+
+  static SLASH_ITEMS = [
+    { id: 'h1',       label: 'Heading 1',      hint: '#',        block: true, keywords: 'h1 title chapter' },
+    { id: 'h2',       label: 'Heading 2',      hint: '##',       block: true, keywords: 'h2 section' },
+    { id: 'h3',       label: 'Heading 3',      hint: '###',      block: true, keywords: 'h3 subsection' },
+    { id: 'text',     label: 'Text',           hint: 'no heading', block: true, keywords: 'paragraph plain body' },
+    { id: 'bullet',   label: 'Bullet list',    hint: '-',        block: true, keywords: 'list ul unordered' },
+    { id: 'ordered',  label: 'Numbered list',  hint: '1.',       block: true, keywords: 'list ol ordered' },
+    { id: 'task',     label: 'Task list',      hint: '- [ ]',    block: true, keywords: 'todo checkbox check' },
+    { id: 'quote',    label: 'Quote',          hint: '>',        block: true, keywords: 'blockquote' },
+    { id: 'codeblock', label: 'Code block',    hint: '```',      block: true, keywords: 'fence pre snippet' },
+    { id: 'divider',  label: 'Divider',        hint: '---',      block: true, keywords: 'rule hr line break scene' },
+    { id: 'table',    label: 'Table',          hint: '| |',      block: true, keywords: 'grid columns' },
+    { id: 'bold',     label: 'Bold',           hint: '**b**',    keywords: 'strong' },
+    { id: 'italic',   label: 'Italic',         hint: '*i*',      keywords: 'emphasis em' },
+    { id: 'strike',   label: 'Strikethrough',  hint: '~~s~~',    keywords: 'delete strikeout' },
+    { id: 'code',     label: 'Code',           hint: '`code`',   keywords: 'inline mono' },
+    { id: 'link',     label: 'Link',           hint: '[…](url)', keywords: 'url href' },
+    { id: 'undo',     label: 'Undo',           keywords: 'revert back' },
+    { id: 'redo',     label: 'Redo',           keywords: 'again forward' },
+  ];
+
+  _bindSlashMenu() {
+    this.slash = new SlashMenu(document.getElementById('wr-main'), {
+      items: WriterApp.SLASH_ITEMS,
+      onPick: (item, ctx) => {
+        // Delete the typed `/query` (unrecorded — see _applyEdit 'none': one
+        // undo step per pick, and the Undo action can't resurrect the query),
+        // then run the action at the caret.
+        this.editor._applyEdit(ctx.start, ctx.caret, '', ctx.start, ctx.start, 'none');
+        this._exec(item.id);
+      },
+    });
+    // Menu keyboard nav runs in the capture phase so it beats the editor's own
+    // keydown handling; preventing Enter here also stops insertParagraph.
+    this.editor.root.addEventListener('keydown', (e) => {
+      if (!this.slash.isOpen) return;
+      const ctxStart = this.slash.ctx?.start;
+      if (this.slash.handleKey(e)) {
+        // Esc dismissal must stick: Chrome queues selectionchange events, and
+        // one landing right after close() would re-open for the same `/` —
+        // remember the dismissed context until the caret leaves it.
+        if (e.key === 'Escape') this._slashDismissed = ctxStart ?? null;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+  }
+
+  _onSlashCtx(ctx) {
+    if (!this.slash) return;
+    if (!ctx) {
+      this._slashDismissed = null;
+      this.slash.close();
+      return;
+    }
+    if (this._slashDismissed === ctx.start) { this.slash.close(); return; }
+    this.slash.open(ctx, this.editor.caretRect());
   }
 
   // -------------------------------------------------------------------------
@@ -663,26 +699,24 @@ export class WriterApp {
   // -------------------------------------------------------------------------
 
   _bindEditingChrome() {
-    this._editorFocused = false;
-    this.editor.root.addEventListener('focus', () => {
-      this._editorFocused = true;
-      this._updateEditingChrome();
-    });
-    this.editor.root.addEventListener('blur', () => {
-      this._editorFocused = false;
-      this._updateEditingChrome();
-    });
-    // Dismiss-keyboard button: blur → keyboard drops → header returns.
-    // mousedown default is prevented globally for the bar in _buildShell only
-    // for #wr-tools, so this button blurs naturally on tap.
+    // focusin/focusout on document (they bubble — contenteditable focus/blur
+    // has historically been flaky on iOS) + a live activeElement check in
+    // _updateEditingChrome, so a missed event can't wedge the state.
+    document.addEventListener('focusin', () => this._updateEditingChrome());
+    document.addEventListener('focusout', () => setTimeout(() => this._updateEditingChrome(), 50));
+    // Dismiss-keyboard button (floating, only visible while editing):
+    // blur → keyboard drops → header returns.
     document.getElementById('wr-kbd-down').addEventListener('click', () => {
       this.editor.root.blur();
     });
+    this._updateEditingChrome();
   }
 
   _updateEditingChrome() {
-    const editing = !!(this._editorFocused && this._kbOpen &&
-      window.matchMedia('(pointer: coarse)').matches);
+    const focused = document.activeElement === this.editor?.root;
+    // No visualViewport (no keyboard signal at all) → fall back to focus alone.
+    const kb = window.visualViewport ? !!this._kbOpen : true;
+    const editing = !!(focused && kb && window.matchMedia('(pointer: coarse)').matches);
     document.getElementById('unifile-app').toggleAttribute('data-editing', editing);
   }
 
@@ -701,7 +735,7 @@ export class WriterApp {
       root.setProperty('--app-vv-top', `${top}px`);
       const key = window.innerWidth;
       if (!this._vvBase[key] || h > this._vvBase[key]) this._vvBase[key] = h;
-      this._kbOpen = this._vvBase[key] - h > 100;
+      this._kbOpen = this._vvBase[key] - h > 60;
       this._updateEditingChrome();
     };
     set();

@@ -26,16 +26,27 @@ The caret line's paragraph can be isolated with **Focus mode** (in the ⋯
 menu): everything except the paragraph you are writing is dimmed.
 
 While you write on a phone, the title bar slides away so its space goes to
-your text — a keyboard-dismiss button appears at the right end of the
-toolbar, and dismissing the keyboard brings the title bar (and its menu)
-back.
+your text — a small floating button appears at the bottom right; tapping it
+dismisses the keyboard and brings the title bar (and its menu) back.
 
-The toolbar above the keyboard (or at the bottom of the window) has, in
-order: undo · redo · heading · bold · italic · strikethrough · code ·
-bullet list · numbered list · task list · quote · outdent · indent · link.
-Every button works on the current selection or caret line. On a hardware
-keyboard: **⌘B** bold, **⌘I** italic, **⌘K** link, **⌘Z / ⇧⌘Z** undo/redo,
-**Tab / ⇧Tab** indent/outdent in lists.
+## The / menu
+
+There is no toolbar. Type **\`/\`** to open the insertion menu — at the
+start of a line, or anywhere after a space. Keep typing to filter
+(\`/h2\`, \`/task\`, \`/div\` …), then tap an entry, or use **↑/↓** and
+**Return** on a hardware keyboard. **Esc**, deleting the \`/\`, or moving
+the caret away closes it. The \`/word\` you typed is removed when the
+action runs, so it never lands in your text.
+
+At the start of a line the menu offers block inserts — Heading 1–3, Text,
+bullet / numbered / task lists, quote, code block, divider, table. After a
+space mid-sentence it offers inline actions — bold, italic,
+strikethrough, code, link — plus undo and redo. A \`/\` inside a word
+(\`and/or\`), a URL, or a code block never opens the menu.
+
+On a hardware keyboard: **⌘B** bold, **⌘I** italic, **⌘K** link,
+**⌘Z / ⇧⌘Z** undo/redo, **Tab / ⇧Tab** indent/outdent in lists. On iOS,
+undo is also the system three-finger swipe (or shake).
 
 Pressing **Return** inside a list continues it (numbered lists renumber,
 task lists add a fresh \`[ ]\`). Pressing Return on an *empty* list item
