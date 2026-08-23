@@ -15,7 +15,7 @@
  * scroll is pinned to (0,0), and only #wr-scroll scrolls.
  */
 
-/* global UNIFILE_VERSION */
+/* global UNIFILE_VERSION, UNIFILE_BUILT */
 
 import {
   IS_QUINE, captureTemplate, loadEmbeddedData, generateQuine,
@@ -32,6 +32,7 @@ import { buildEpub, slugify } from './epub.js';
 import { GUIDE_MD } from './guide-content.js';
 
 const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
+const BUILT = (typeof UNIFILE_BUILT !== 'undefined') ? UNIFILE_BUILT : 'dev';
 const DOC_ID = 'writer';
 
 const SEED = `---
@@ -64,6 +65,8 @@ function esc(s) {
 
 export class WriterApp {
   async init() {
+    this.version = VERSION;
+    this.build = BUILT;
     if (IS_QUINE) captureTemplate();
 
     // ── Load document ──────────────────────────────────────────────────────
@@ -107,9 +110,100 @@ export class WriterApp {
     this._bindEditingChrome();
 
     if (!IS_QUINE && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(console.warn);
+      this._bindServiceWorker();
       requestPersistentStorage();
     }
+    this._autoUpdateCheck();
+  }
+
+  // -------------------------------------------------------------------------
+  // Self-updating PWA — "never fight a cached build"
+  //
+  // The service worker self-skipWaiting()s and claims clients, so once a new
+  // sw.js is SEEN it takes over immediately.  The pieces here make sure it IS
+  // seen, and that the page follows it:
+  //   • register with updateViaCache:'none' (the HTTP cache must never pin an
+  //     old sw.js) and explicitly reg.update() at launch and whenever the app
+  //     returns to the foreground — installed PWAs can otherwise go a long
+  //     time between the browser's own update checks.
+  //   • when a NEW worker takes control of an already-controlled page
+  //     (controllerchange), flush the document to IndexedDB and reload once —
+  //     the running page is by definition the stale build at that point.
+  //     The very first install (page was uncontrolled) does NOT reload.
+  // -------------------------------------------------------------------------
+
+  _bindServiceWorker() {
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(console.warn);
+
+    // First-install claim (page was uncontrolled) must not reload — but the
+    // flag flips there, so the NEXT controllerchange (a real update) does.
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', async () => {
+      if (!hadController) { hadController = true; return; }
+      if (this._reloading) return;
+      this._reloading = true;
+      try { await this._persistNow(); } catch { /* best effort */ }
+      location.reload();
+    });
+
+    const poke = () => navigator.serviceWorker.getRegistration()
+      .then(reg => reg?.update()).catch(() => {});
+    poke();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') poke();
+    });
+  }
+
+  /**
+   * Launch-time version check against the site's version.json (cache-busted).
+   * A newer published version → a tappable toast.  Quiet on failure/offline.
+   */
+  _autoUpdateCheck() {
+    if (IS_QUINE || location.protocol === 'file:') return;
+    setTimeout(async () => {
+      try {
+        const remote = await this._fetchRemoteVersion();
+        if (this._isNewer(remote)) {
+          this._toast(`v${remote} is available — tap to update`, {
+            duration: 10000,
+            onTap: () => this._applyUpdate(),
+          });
+        }
+      } catch { /* offline — the SW check above still applies updates */ }
+    }, 2500);
+  }
+
+  async _fetchRemoteVersion() {
+    const res = await fetch(`../version.json?_=${Date.now()}`, { cache: 'no-store' });
+    const info = await res.json();
+    return info.latest ?? info.stable ?? info.version;
+  }
+
+  _isNewer(remote) {
+    return String(remote).localeCompare(String(VERSION), undefined,
+      { numeric: true, sensitivity: 'base' }) > 0;
+  }
+
+  /**
+   * Drive a new service worker to activation.  NO blind timed reload while an
+   * install is in flight (see CLAUDE.md — a precache can take seconds, and
+   * reloading early lands back on the OLD worker); the controllerchange
+   * listener in _bindServiceWorker performs the single reload.
+   */
+  async _applyUpdate() {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (!reg) { location.reload(); return; }
+    await reg.update();
+    const drive = (sw) => {
+      if (!sw) return;
+      if (sw.state === 'installed') sw.postMessage('skipWaiting');
+      else sw.addEventListener('statechange', () => {
+        if (sw.state === 'installed') sw.postMessage('skipWaiting');
+      });
+    };
+    if (reg.waiting) drive(reg.waiting);
+    else if (reg.installing) drive(reg.installing);
+    else reg.addEventListener('updatefound', () => drive(reg.installing));
   }
 
   // -------------------------------------------------------------------------
@@ -369,14 +463,21 @@ export class WriterApp {
     document.getElementById('wr-modal').innerHTML = '';
   }
 
-  _toast(msg) {
+  /** Transient toast; pass onTap (+ optional duration) to make it actionable. */
+  _toast(msg, { onTap, duration = 2600 } = {}) {
     document.querySelector('.wr-toast')?.remove();
     const el = document.createElement('div');
-    el.className = 'wr-toast';
+    el.className = 'wr-toast' + (onTap ? ' wr-toast-action' : '');
     el.textContent = msg;
+    if (onTap) {
+      el.addEventListener('click', () => {
+        el.textContent = 'Updating…';
+        onTap();
+      });
+    }
     document.getElementById('unifile-app').appendChild(el);
     setTimeout(() => el.classList.add('show'), 10);
-    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 400); }, 2600);
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 400); }, duration);
   }
 
   // ── Menu ──────────────────────────────────────────────────────────────────
@@ -626,7 +727,8 @@ export class WriterApp {
     const modal = this._openSheet(`
       <div class="wr-sheet-head">About</div>
       <div class="wr-sheet-body">
-        <p><b>Unifile Writer</b> v${esc(VERSION)}</p>
+        <p><b>Unifile Writer</b> v${esc(VERSION)}
+          <span class="wr-mut">· build ${esc(BUILT)}</span></p>
         <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'
           : 'App mode — your document is stored on this device (IndexedDB).'}</p>
         <p class="wr-mut">Fully offline. Nothing leaves your device. <br>unifile.app</p>
@@ -635,45 +737,20 @@ export class WriterApp {
     modal.querySelector('#wr-update-btn')?.addEventListener('click', () => this._checkUpdate(modal));
   }
 
-  /**
-   * PWA update: compare against the site's version.json, then drive the new
-   * service worker to activation.  NO blind timed reload while an install is
-   * in flight (see CLAUDE.md — the precache can take seconds; reloading early
-   * lands back on the OLD worker).
-   */
+  /** About's manual check: report status, then hand off to _applyUpdate. */
   async _checkUpdate(modal) {
     const status = modal.querySelector('#wr-update-status');
     const btn = modal.querySelector('#wr-update-btn');
     status.textContent = 'Checking…';
     try {
-      const res = await fetch(`../version.json?_=${Date.now()}`, { cache: 'no-store' });
-      const info = await res.json();
-      const remote = info.latest ?? info.stable ?? info.version;
-      const newer = String(remote).localeCompare(String(VERSION), undefined,
-        { numeric: true, sensitivity: 'base' }) > 0;
-      if (!newer) { status.textContent = `Up to date (v${VERSION}).`; return; }
+      const remote = await this._fetchRemoteVersion();
+      if (!this._isNewer(remote)) { status.textContent = `Up to date (v${VERSION}).`; return; }
       status.textContent = `v${remote} available.`;
       btn.textContent = 'Update & reload';
-      btn.onclick = async () => {
+      btn.onclick = () => {
         btn.textContent = 'Updating…';
         btn.disabled = true;
-        let reloaded = false;
-        navigator.serviceWorker?.addEventListener('controllerchange', () => {
-          if (!reloaded) { reloaded = true; location.reload(); }
-        });
-        const reg = await navigator.serviceWorker?.getRegistration();
-        if (!reg) { location.reload(); return; }
-        await reg.update();
-        const drive = (sw) => {
-          if (!sw) return;
-          if (sw.state === 'installed') sw.postMessage('skipWaiting');
-          else sw.addEventListener('statechange', () => {
-            if (sw.state === 'installed') sw.postMessage('skipWaiting');
-          });
-        };
-        if (reg.waiting) drive(reg.waiting);
-        else if (reg.installing) drive(reg.installing);
-        else reg.addEventListener('updatefound', () => drive(reg.installing));
+        this._applyUpdate();
       };
     } catch {
       status.textContent = 'Could not reach unifile.app (offline?).';

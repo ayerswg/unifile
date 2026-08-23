@@ -73,6 +73,13 @@ function detectChannels() {
     tags = execSync('git tag', { cwd: ROOT }).toString().split('\n')
       .map(t => t.trim().replace(/^v/, '')).filter(Boolean);
   } catch { /* no tags */ }
+  // package.json's version competes too: after the release-flow bump (npm
+  // version --no-git-tag-version) but before the tag is cut, the bumped
+  // version must publish — otherwise version.json stays on the old release.
+  try {
+    const pkg = JSON.parse(execSync('cat package.json', { cwd: ROOT }).toString()).version;
+    if (pkg) tags.push(pkg);
+  } catch { /* ignore */ }
   if (!tags.length) { const v = detectVersion(); return { stable: v, latest: v }; }
   const sorted = tags.slice().sort((a, b) => _cmp(b, a)); // desc
   const latest = sorted[0];

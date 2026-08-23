@@ -200,6 +200,15 @@ then launches full-screen, works completely offline, and keeps your
 documents on the device. The share sheet is used for all exports, so you
 can save straight to Files, Books, or any app.
 
+## Updates
+
+The installed app keeps itself current: every time it opens (or returns
+to the foreground) it looks for a new build, and when one is found the
+app saves your document and refreshes itself once onto the new version —
+no cache-clearing, no reinstalling. A tappable notice also appears when a
+newer version is published. The running version and build time are shown
+in **⋯ menu → About**, with a manual "Check for updates" button.
+
 ## Privacy
 
 There is no server. The only network request the app ever makes is a

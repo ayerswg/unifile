@@ -577,6 +577,7 @@ body {
   text-align: center;
 }
 .wr-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.wr-toast-action { background: var(--accent); color: #fff; cursor: pointer; }
 
 /* ── Quine no-JS fallback ─────────────────────────────────────────────────── */
 
