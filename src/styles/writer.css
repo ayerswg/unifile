@@ -99,6 +99,16 @@ body {
   padding: 0 8px 0 14px;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
+  transition: margin-top 0.22s ease, opacity 0.16s ease;
+}
+
+/* While editing on a touch device (soft keyboard up — app.js sets
+   `data-editing`), the header slides away and its space goes to the text.
+   -47px = 46px height + 1px border. */
+#unifile-app[data-editing] #wr-top {
+  margin-top: -47px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 #wr-title {
@@ -343,6 +353,25 @@ body {
   white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Dismiss-keyboard button — only exists while the header is hidden, so the
+   chrome (and the menu) is always one tap away. */
+#wr-kbd-down {
+  appearance: none;
+  display: none;
+  flex: none;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-mut);
+  min-width: 46px;
+  height: 44px;
+  cursor: pointer;
+  place-items: center;
+  -webkit-tap-highlight-color: transparent;
+}
+#unifile-app[data-editing] #wr-kbd-down { display: grid; }
+#unifile-app[data-editing] #wr-count { padding: 0 8px; }
 
 /* ── Overlay + bottom sheets ──────────────────────────────────────────────── */
 

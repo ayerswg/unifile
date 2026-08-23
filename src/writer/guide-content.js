@@ -26,6 +26,11 @@ wrapped text lines up under the item's text, not under the bullet.
 The caret line's paragraph can be isolated with **Focus mode** (in the ⋯
 menu): everything except the paragraph you are writing is dimmed.
 
+While you write on a phone, the title bar slides away so its space goes to
+your text — a keyboard-dismiss button appears at the right end of the
+toolbar, and dismissing the keyboard brings the title bar (and its menu)
+back.
+
 The toolbar above the keyboard (or at the bottom of the window) has, in
 order: undo · redo · heading · bold · italic · strikethrough · code ·
 bullet list · numbered list · task list · quote · outdent · indent · link.

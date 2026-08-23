@@ -56,6 +56,7 @@ const ICONS = {
   undo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 5 3 10l5 5"/><path d="M3 10h11a6 6 0 0 1 0 12h-3"/></svg>',
   redo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m16 5 5 5-5 5"/><path d="M21 10H10a6 6 0 0 0 0 12h3"/></svg>',
   link: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7L12.5 19"/></svg>',
+  kbdown: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="10" rx="2"/><path d="M7 8h.01M11 8h.01M15 8h.01M8 11h8"/><path d="m9 18 3 3 3-3"/></svg>',
 };
 
 function esc(s) {
@@ -103,6 +104,7 @@ export class WriterApp {
     this.editor.setValue(this.content);
     this._refreshDirty();
     this._refreshCount();
+    this._bindEditingChrome();
 
     if (!IS_QUINE && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js').catch(console.warn);
@@ -152,6 +154,7 @@ export class WriterApp {
           <button data-cmd="link" title="Link" aria-label="Insert link">${ICONS.link}</button>
         </div>
         <button id="wr-count" title="Word count" aria-label="Word count"></button>
+        <button id="wr-kbd-down" title="Dismiss keyboard" aria-label="Dismiss keyboard">${ICONS.kbdown}</button>
       </footer>
       <div id="wr-overlay" hidden>
         <div id="wr-modal" role="dialog" aria-modal="true"></div>
@@ -642,10 +645,53 @@ export class WriterApp {
   }
 
   // -------------------------------------------------------------------------
+  // Editing chrome — the title bar gets out of the way while you write.
+  //
+  // On a touch device with the soft keyboard up, the header's 46px matter, so
+  // it slides away (`data-editing` on the app root → CSS) and its space goes
+  // to the text.  It comes back the moment the keyboard is dismissed — the
+  // toolbar gains a dismiss-keyboard button while editing so the header (and
+  // its menu) is always one tap away.
+  //
+  // "Keyboard is up" is detected from the visual viewport, not from focus
+  // alone: `_trackViewportHeight` records the tallest viewport seen per
+  // window width (the no-keyboard baseline; keyed by width so rotation gets
+  // its own baseline) and a viewport >100px shorter than the baseline means
+  // the keyboard is genuinely eating space.  An iPad with a hardware keyboard
+  // focuses the editor without shrinking the viewport → the header stays.
+  // Coarse-pointer gate keeps desktop (always-focused editor) unaffected.
+  // -------------------------------------------------------------------------
+
+  _bindEditingChrome() {
+    this._editorFocused = false;
+    this.editor.root.addEventListener('focus', () => {
+      this._editorFocused = true;
+      this._updateEditingChrome();
+    });
+    this.editor.root.addEventListener('blur', () => {
+      this._editorFocused = false;
+      this._updateEditingChrome();
+    });
+    // Dismiss-keyboard button: blur → keyboard drops → header returns.
+    // mousedown default is prevented globally for the bar in _buildShell only
+    // for #wr-tools, so this button blurs naturally on tap.
+    document.getElementById('wr-kbd-down').addEventListener('click', () => {
+      this.editor.root.blur();
+    });
+  }
+
+  _updateEditingChrome() {
+    const editing = !!(this._editorFocused && this._kbOpen &&
+      window.matchMedia('(pointer: coarse)').matches);
+    document.getElementById('unifile-app').toggleAttribute('data-editing', editing);
+  }
+
+  // -------------------------------------------------------------------------
   // iOS viewport (see CLAUDE.md "Mobile / iOS" — these are load-bearing)
   // -------------------------------------------------------------------------
 
   _trackViewportHeight() {
+    this._vvBase = {};   // tallest viewport seen per window width (no-keyboard baseline)
     const set = () => {
       const vv = window.visualViewport;
       const h = Math.round(vv?.height ?? window.innerHeight);
@@ -653,6 +699,10 @@ export class WriterApp {
       const root = document.documentElement.style;
       root.setProperty('--app-height', `${h}px`);
       root.setProperty('--app-vv-top', `${top}px`);
+      const key = window.innerWidth;
+      if (!this._vvBase[key] || h > this._vvBase[key]) this._vvBase[key] = h;
+      this._kbOpen = this._vvBase[key] - h > 100;
+      this._updateEditingChrome();
     };
     set();
     window.addEventListener('resize', set);
