@@ -16,7 +16,7 @@
  *   dist/unifile.<abbrev>.html   standalone quine for each DSL
  *   dist/pwa-<abbrev>/            installable PWA for each DSL
  *
- *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs)
+ *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | writer)
  *     e.g. `node build/build.mjs --dsl=abcjs` → dist/unifile.abc.html (offline piano)
  *
  * npm scripts
@@ -152,10 +152,17 @@ const DEFAULT_DSL_TYPE = 'markdown';
 // single DSL bundled directly in (no runtime plugins).  `plugins` is the set of
 // DSL modules bundled into the output; `defaultDslType` seeds new documents;
 // `abbrev` names the output files (unifile.<abbrev>.html / pwa-<abbrev>/).
+//
+// A variant may instead ship its OWN shell: `entry` (relative to src/) replaces
+// the generated ui/app.js entry module, and `css` (relative to src/) replaces
+// styles/app.css.  The `writer` variant uses this — it has no CodeMirror and no
+// DSL registry (see src/writer/).
 const DSL_META = {
   markdown:  { abbrev: 'md',  plugins: ['markdown'],            defaultDslType: 'markdown', label: 'Unifile Markdown' },
   mermaid:   { abbrev: 'mer', plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid',  label: 'Unifile Mermaid'  },
   abcjs:     { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs',    label: 'Unifile ABC'      },
+  writer:    { abbrev: 'wr',  plugins: [],                      defaultDslType: 'writer',   label: 'Unifile Writer',
+               entry: 'writer/main.js', css: 'styles/writer.css' },
 };
 
 if (dslArg && !DSL_META[dslArg]) {
@@ -248,9 +255,9 @@ function buildOptions(entryPoint, unifileMode, plugins) {
   };
 }
 
-async function bundleCSS() {
+async function bundleCSS(cssRel = 'styles/app.css') {
   const result = await esbuild.build({
-    entryPoints: [join(SRC, 'styles', 'app.css')],
+    entryPoints: [join(SRC, cssRel)],
     bundle: true, minify: !DEV, write: false
   });
   return result.outputFiles[0].text;
@@ -261,21 +268,23 @@ async function bundleCSS() {
 // ---------------------------------------------------------------------------
 
 /**
- * @param {string[]} plugins         DSL modules bundled in.
- * @param {string}   defaultDslType  Seeds new documents.
+ * @param {object}   meta            DSL_META entry ({ plugins, defaultDslType, entry?, css?, … }).
  * @param {string}   outName         Output filename (e.g. 'unifile.html' or 'unifile.abc.html').
  * @param {string}   tag             Unique tag for the temp entry file.
  */
-async function buildQuine(plugins, defaultDslType, outName, tag) {
+async function buildQuine(meta, outName, tag) {
+  const { plugins, defaultDslType } = meta;
   console.log(`\nBuilding quine [${outName}, dev=${DEV}]…`);
 
-  const entryPath = await generateEntry(plugins, 'quine', tag);
+  // Variants with their own shell (meta.entry) bundle that module directly;
+  // standard variants get a generated entry importing their DSL plugins.
+  const entryPath = meta.entry ? join(SRC, meta.entry) : await generateEntry(plugins, 'quine', tag);
 
   const [jsResult, css] = await Promise.all([
     esbuild.build({ ...buildOptions(entryPath, 'quine', plugins), write: false }),
-    bundleCSS()
+    bundleCSS(meta.css)
   ]);
-  await unlink(entryPath).catch(() => {});
+  if (!meta.entry) await unlink(entryPath).catch(() => {});
 
   const template = await readFile(join(TEMPLATES, 'quine.html'), 'utf8');
 
@@ -325,13 +334,13 @@ async function buildPWA(plugins, meta, tag) {
   const pwaDir = join(DIST, dirName);
   await mkdir(pwaDir, { recursive: true });
 
-  const entryPath = await generateEntry(plugins, 'pwa', tag);
+  const entryPath = meta.entry ? join(SRC, meta.entry) : await generateEntry(plugins, 'pwa', tag);
 
   const [jsResult, css] = await Promise.all([
     esbuild.build({ ...buildOptions(entryPath, 'pwa', plugins), write: false }),
-    bundleCSS()
+    bundleCSS(meta.css)
   ]);
-  await unlink(entryPath).catch(() => {});
+  if (!meta.entry) await unlink(entryPath).catch(() => {});
 
   const [pwaHtmlRaw, sw, manifestRaw] = await Promise.all([
     readFile(join(TEMPLATES, 'pwa.html'),      'utf8'),
@@ -385,7 +394,7 @@ async function buildPWA(plugins, meta, tag) {
 /** Build one dedicated variant: its quine + (optionally) its PWA. */
 async function buildVariant(id) {
   const meta = DSL_META[id];
-  await buildQuine(meta.plugins, meta.defaultDslType, `unifile.${meta.abbrev}.html`, id);
+  await buildQuine(meta, `unifile.${meta.abbrev}.html`, id);
   if (BUILD_PWA) await buildPWA(meta.plugins, meta, id);
 }
 

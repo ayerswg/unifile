@@ -84,11 +84,13 @@ const FILES = [
   ['unifile.md.html',  'dl/unifile.md.html'],
   ['unifile.mer.html', 'dl/unifile.mer.html'],
   ['unifile.abc.html', 'dl/unifile.abc.html'],
+  ['unifile.wr.html',  'dl/unifile.wr.html'],
 ];
 const DIRS = [
   ['pwa-md',  'pwa-md'],
   ['pwa-mer', 'pwa-mer'],
   ['pwa-abc', 'pwa-abc'],
+  ['pwa-wr',  'pwa-wr'],
 ];
 
 // Stale universal artifacts to delete from docs/ (the universal build is gone).
