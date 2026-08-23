@@ -16,6 +16,7 @@ import { readFile, writeFile, mkdir, readdir, rm, cp, access } from 'fs/promises
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { marked } from 'marked';
+import { GUIDE_MD } from '../src/writer/guide-content.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -200,6 +201,10 @@ async function main() {
     pages.push({ ...meta, url, body, isHome, file: f });
   }
 
+  // Synthetic page: the Writer guide is authored ONCE in src/writer/guide-content.js
+  // (the app renders the same Markdown in its Guide sheet) and published here.
+  pages.push({ title: 'Writer Guide', url: '/writer/guide/', body: GUIDE_MD, isHome: false, file: '(generated)' });
+
   // Render pages.
   for (const p of pages) {
     if (p.isHome) { await write('index.html', layoutHome()); continue; }
@@ -230,7 +235,7 @@ async function main() {
 
   // Static passthrough: assets + downloads + PWAs + CNAME.
   await cp(join(DOCS, 'assets'), join(OUT, 'assets'), { recursive: true });
-  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc']) {
+  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-wr']) {
     if (await exists(join(DOCS, d))) await cp(join(DOCS, d), join(OUT, d), { recursive: true });
   }
   if (await exists(join(DOCS, 'CNAME'))) await cp(join(DOCS, 'CNAME'), join(OUT, 'CNAME'));

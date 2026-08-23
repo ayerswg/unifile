@@ -49,6 +49,8 @@ src/
     markdown.js, abcjs.js, mermaid.js, marp.js, fountain.js
     registry.js      registerDSL / getDSL / listDSLs
     abcjs-piano-loader.js  CommonJS drop-in for abcjs's ./load-note (offline soundfont)
+  writer/            The Writer variant's own shell (no CodeMirror — see "Unifile Writer")
+    main.js, app.js, editor.js, syntax.js, epub.js, zip.js, preview.js, guide-content.js
   model/registry.js  Document "models" (flow | grid | spatial | timeline | graph) — chosen via front-matter `model:`
   layout/            Renderers for models + flow layouts (webpage/document/slides)
   ui/                App shell + everything DOM
@@ -83,7 +85,8 @@ dist/                Build output (gitignored)
 esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 - **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
-- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `writer`(wr). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `writer` variant uses this (see "Unifile Writer" below) — no CodeMirror, no DSL registry, its own CSS.
 - `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
 - Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model.
@@ -217,6 +220,15 @@ touch-first editing mode: single tap on empty = add, single tap on an active-voi
   synthetic pointer events (unfronted tab → all rects 0×0 → clicks land in the "ruler" and scrub),
   and setTimeout is throttled to ~1 s ticks — dispatch double-taps synchronously or the 350 ms
   pair window can't be hit.
+
+## Unifile Writer (`src/writer/` + `src/styles/writer.css`)
+
+A dedicated **writing** variant (abbrev `wr`) in the spirit of iA Writer — mobile/iOS-first, EPUB export. It deliberately does **NOT** use CodeMirror or the standard `ui/` shell: `DSL_META.writer` points the build at `src/writer/main.js` + `styles/writer.css` (see Build system). It reuses `core/` (storage, vcs, diff, hash, front-matter) so its data object round-trips as a normal `.unifile.json`. PWA docId is `'writer'` (the shared per-origin IDB).
+
+- **Editor (`writer/editor.js` + `writer/syntax.js`)** — a custom contenteditable, one `<div class="wr-line">` per source line. The reason it exists: **hanging indent on wrapped list/quote lines** (`--hang: Nch` + `padding-left/text-indent`), exact because the editor font is monospaced. `syntax.js` classifies lines (stateful: fences + leading front matter) and renders inline spans; its hard invariant is **textContent(rendered line) === source line** — rendering may only wrap text, never change it. Editing model: character-level input runs **natively** (intercepting breaks iOS autocorrect/dictation) and is *reconciled* afterwards (extract DOM text → diff → re-render changed lines → restore caret by absolute offset); structural input (Enter, paste, Cmd+B/I, undo) is intercepted in `beforeinput`. **Never touch the DOM during composition** (`isComposing`) — reconcile on `compositionend`. Undo is a custom snapshot stack (`historyUndo`/`historyRedo` intercepted — that's also iOS shake-to-undo). NBSPs from contenteditable are normalised back to spaces on extraction.
+- **EPUB (`writer/epub.js` + `writer/zip.js`)** — EPUB 3 + NCX fallback, built in-browser: chapters split on `#` h1s (outside fences), marked(GFM) → DOMPurify → DOM transforms (task-checkbox inputs → glyph spans; `data:` images extracted into archive files) → XMLSerializer for well-formed XHTML. `zip.js` is a hand-rolled stored-only ZIP (the `mimetype` entry must be FIRST and uncompressed). Metadata from the leading front matter (`title/author/language/description/identifier`).
+- **Shell (`writer/app.js`)** — title bar + editor + keyboard toolbar + bottom sheets (menu/history/export/settings/guide/about). History UI is linear (commit + restore on `main`); branching/merge stays in the full apps. Copies the load-bearing iOS viewport handling from `ui/app.js` (`--app-height` via visualViewport, window-scroll lock — see Mobile section). Exports go through the share sheet on iOS (`shareOrDownloadFile`, plus a binary Blob variant in app.js for `.epub`).
+- **Docs** — the full user guide lives ONCE in `writer/guide-content.js` (plain-string ESM): the app renders it in the Guide sheet, and `build/render-site.mjs` imports it and emits `/writer/guide/`. Keep it current when changing writer behaviour. Site front door: `docs/writer.md` (+ `types.yml`/`apps.yml` entries).
 
 ## Mobile / iOS (hard-won — read before touching layout)
 

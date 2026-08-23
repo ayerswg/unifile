@@ -1,0 +1,554 @@
+/**
+ * Unifile Writer — the writer variant's complete stylesheet.
+ * (The writer build does NOT use app.css — this file is its whole design.)
+ *
+ * Aesthetic: iA-Writer-like.  Monospaced writing surface (the `ch`-exact font
+ * is what makes the hanging list indent work — see editor.js), near-blank
+ * chrome, one accent colour, generous measure.
+ *
+ * Mobile/iOS is the primary target: the shell is a fixed column sized by
+ * --app-height (JS-measured visual viewport, so the toolbar sits above the
+ * soft keyboard), only #wr-scroll scrolls, and every touch target is ≥40px.
+ */
+
+/* ── Theme tokens ─────────────────────────────────────────────────────────── */
+
+:root {
+  --bg: #ffffff;
+  --bg-alt: #f7f7f5;
+  --bg-elev: #ffffff;
+  --fg: #1a1a1a;
+  --fg-mut: #63635f;
+  --dim: #b3b3ae;
+  --line: #e7e7e3;
+  --accent: #1aa3ff;
+  --code-bg: #f4f4f1;
+  --pending: #e08f1e;
+  --danger: #d64545;
+  --scrim: rgba(0, 0, 0, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-wr-theme="light"]) {
+    --bg: #101012;
+    --bg-alt: #161619;
+    --bg-elev: #1d1d22;
+    --fg: #d9d9d6;
+    --fg-mut: #97978f;
+    --dim: #4f4f55;
+    --line: #26262c;
+    --code-bg: #1a1a1f;
+    --pending: #e0a23e;
+    --scrim: rgba(0, 0, 0, 0.55);
+  }
+}
+:root[data-wr-theme="dark"] {
+  --bg: #101012;
+  --bg-alt: #161619;
+  --bg-elev: #1d1d22;
+  --fg: #d9d9d6;
+  --fg-mut: #97978f;
+  --dim: #4f4f55;
+  --line: #26262c;
+  --code-bg: #1a1a1f;
+  --pending: #e0a23e;
+  --scrim: rgba(0, 0, 0, 0.55);
+}
+
+/* ── Base / shell ─────────────────────────────────────────────────────────── */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--bg);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color: var(--fg);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* The app column: fixed + JS-measured height (see CLAUDE.md Mobile/iOS). */
+#unifile-app.wr-app {
+  position: fixed;
+  top: var(--app-vv-top, 0px);
+  left: 0;
+  width: 100%;
+  height: var(--app-height, 100vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding-top: env(safe-area-inset-top);
+  overflow: hidden;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────────────── */
+
+#wr-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 46px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+#wr-title {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: 600 16px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  padding: 8px 4px;
+  text-overflow: ellipsis;
+}
+#wr-title::placeholder { color: var(--dim); }
+
+#wr-dirty {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pending);
+  margin-right: 2px;
+}
+
+#wr-top-actions { flex: none; display: flex; }
+
+.wr-icon-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-mut);
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.wr-icon-btn:active { background: var(--bg-alt); }
+.wr-icon-btn.active { color: var(--accent); }
+
+/* ── Main / scroller ──────────────────────────────────────────────────────── */
+
+#wr-main { flex: 1; position: relative; min-height: 0; }
+
+#wr-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+#wr-sheet {
+  max-width: 70ch;
+  margin: 0 auto;
+  padding: 26px 18px 45vh;   /* the bottom padding keeps the caret clear of the keyboard */
+}
+
+/* ── The editor ───────────────────────────────────────────────────────────── */
+
+.wr-editor {
+  outline: none;
+  font-family: "iA Writer Mono", "iA Writer Duospace", ui-monospace, "SF Mono",
+               SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--fg);
+  caret-color: var(--accent);
+  -webkit-tap-highlight-color: transparent;
+  word-wrap: break-word;
+}
+@media (min-width: 700px) { .wr-editor { font-size: 15px; } }
+
+.wr-editor ::selection { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+
+/* One block per source line.  --hang (set by editor.js from the parsed list /
+   quote prefix width) is THE feature: wrapped text aligns after the marker. */
+.wr-line {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  padding-left: var(--hang, 0ch);
+  text-indent: calc(-1 * var(--hang, 0ch));
+}
+
+/* Syntax markers — visible but receded (the iA look). */
+.wr-line .md { color: var(--dim); }
+.wr-line .bullet { color: var(--fg-mut); }
+
+/* Headings: same family, weight + a touch of size for hierarchy. */
+.t-h1 { font-weight: 700; font-size: 1.3em; line-height: 1.45; }
+.t-h2 { font-weight: 700; font-size: 1.12em; line-height: 1.5; }
+.t-h3, .t-h4, .t-h5, .t-h6 { font-weight: 700; }
+
+.t-quote { color: var(--fg-mut); font-style: italic; }
+.t-quote .md { font-style: normal; }
+
+.t-fence, .t-code {
+  background: var(--code-bg);
+  font-size: 0.92em;
+  line-height: 1.75;
+}
+
+.t-hr { color: var(--dim); letter-spacing: 0.2em; }
+
+.t-fm-fence, .t-fm { color: var(--fg-mut); font-size: 0.88em; line-height: 1.8; }
+.t-fm .fm-key { color: var(--accent); }
+
+.wr-line code { background: var(--code-bg); border-radius: 3px; padding: 0 1px; }
+.wr-line .lnk { color: var(--accent); }
+.wr-line .url { color: var(--dim); }
+.wr-line s, .wr-line s .md { color: var(--dim); }
+
+.task-box { color: var(--fg-mut); }
+.task-box.task-done { color: var(--accent); }
+.task-done ~ .task-text, .task-text { color: var(--fg-mut); }
+.t-task .task-text { text-decoration: line-through; text-decoration-color: var(--dim); }
+
+/* Focus mode — everything but the caret's paragraph recedes. */
+.wr-focus .wr-line { transition: opacity 0.25s ease; }
+.wr-focus .wr-away { opacity: 0.22; }
+
+/* ── Preview pane ─────────────────────────────────────────────────────────── */
+
+#wr-preview {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: var(--bg);
+}
+#unifile-app[data-preview] #wr-bar #wr-tools { visibility: hidden; }
+
+.wr-prose {
+  max-width: 65ch;
+  margin: 0 auto;
+  padding: 28px 20px 20vh;
+  font-family: "Iowan Old Style", "Charter", Georgia, "Times New Roman", serif;
+  font-size: 17px;
+  line-height: 1.65;
+  color: var(--fg);
+}
+.wr-prose h1, .wr-prose h2, .wr-prose h3, .wr-prose h4 {
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  line-height: 1.25;
+  margin: 1.5em 0 0.5em;
+}
+.wr-prose h1 { font-size: 1.65em; }
+.wr-prose h2 { font-size: 1.3em; }
+.wr-prose h3 { font-size: 1.1em; }
+.wr-prose p { margin: 0 0 0.9em; }
+.wr-prose blockquote {
+  margin: 1em 0;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--dim);
+  color: var(--fg-mut);
+}
+.wr-prose code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.88em;
+  background: var(--code-bg);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.wr-prose pre {
+  background: var(--code-bg);
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.wr-prose pre code { background: none; padding: 0; }
+.wr-prose ul, .wr-prose ol { padding-left: 1.5em; margin: 0 0 0.9em; }
+.wr-prose img { max-width: 100%; border-radius: 4px; }
+.wr-prose hr { border: 0; border-top: 1px solid var(--line); margin: 2em auto; width: 50%; }
+.wr-prose table { border-collapse: collapse; margin: 1em 0; display: block; overflow-x: auto; }
+.wr-prose th, .wr-prose td { border: 1px solid var(--line); padding: 5px 10px; }
+.wr-prose a { color: var(--accent); }
+.wr-prose input[type="checkbox"] { accent-color: var(--accent); }
+
+/* ── Bottom toolbar ───────────────────────────────────────────────────────── */
+
+#wr-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  background: var(--bg-alt);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+#wr-tools {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 4px;
+}
+#wr-tools::-webkit-scrollbar { display: none; }
+
+#wr-tools button {
+  appearance: none;
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-mut);
+  min-width: 40px;
+  height: 44px;
+  padding: 0 6px;
+  font: 500 15px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  display: grid;
+  place-items: center;
+}
+#wr-tools button b, #wr-tools button i, #wr-tools button s { font-size: 15px; }
+#wr-tools button:active { background: var(--bg); color: var(--accent); }
+
+.wr-sep {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  margin: 0 4px;
+}
+
+#wr-count {
+  appearance: none;
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font: 500 12px/1 -apple-system, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  padding: 0 14px;
+  height: 44px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Overlay + bottom sheets ──────────────────────────────────────────────── */
+
+#wr-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: var(--scrim);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+#wr-overlay.open { opacity: 1; }
+#wr-overlay[hidden] { display: none; }
+
+#wr-modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: 78%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: var(--bg-elev);
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -6px 40px rgba(0, 0, 0, 0.2);
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  transform: translateY(12px);
+  transition: transform 0.18s ease;
+}
+#wr-overlay.open #wr-modal { transform: translateY(0); }
+#wr-modal.tall { height: 78%; }
+
+@media (min-width: 700px) {
+  #wr-overlay { align-items: center; }
+  #wr-modal { border-radius: 14px; max-height: 84%; }
+  #wr-modal.tall { height: auto; min-height: 60%; }
+}
+
+.wr-sheet-head {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  font: 600 15px/1 -apple-system, system-ui, sans-serif;
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+
+.wr-sheet-body { padding: 14px 20px 20px; font-size: 15px; }
+.wr-sheet-body.wr-prose { font-size: 16px; padding-bottom: 40px; }
+
+.wr-menu { padding: 8px 0 4px; }
+.wr-menu button {
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: 400 16px/1.3 -apple-system, system-ui, sans-serif;
+  padding: 13px 22px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.wr-menu button:active { background: var(--bg-alt); }
+.wr-menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
+.wr-menu-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pending);
+  margin-left: 6px;
+  vertical-align: 2px;
+}
+
+.wr-mut { color: var(--fg-mut); font-size: 13px; }
+
+.wr-field { display: block; margin: 0 0 16px; font-size: 13px; color: var(--fg-mut); }
+.wr-field input, .wr-field select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  font-size: 16px;   /* ≥16px stops iOS focus-zoom */
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  outline: none;
+}
+.wr-field input:focus, .wr-field select:focus { border-color: var(--accent); }
+
+.wr-primary {
+  appearance: none;
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  font: 600 15px/1 -apple-system, system-ui, sans-serif;
+  padding: 11px 18px;
+  border-radius: 9px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.wr-primary:active { filter: brightness(0.92); }
+
+/* ── History sheet ────────────────────────────────────────────────────────── */
+
+.wr-pending {
+  border: 1.5px dashed var(--pending);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.wr-pending-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+.wr-node {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px dashed var(--pending);
+}
+.wr-pending-row { display: flex; gap: 8px; }
+.wr-pending-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  outline: none;
+}
+
+.wr-clean { color: var(--fg-mut); font-size: 14px; padding: 6px 2px 14px; }
+
+.wr-commit {
+  position: relative;
+  padding: 10px 84px 10px 2px;
+  border-bottom: 1px solid var(--line);
+}
+.wr-commit:last-child { border-bottom: 0; }
+.wr-commit-msg { font-weight: 500; }
+.wr-commit-meta {
+  color: var(--fg-mut);
+  font: 400 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 2px;
+}
+.wr-tag {
+  display: inline-block;
+  font: 600 11px/1 ui-monospace, monospace;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.wr-tag.wr-exported { color: var(--fg-mut); border-color: var(--fg-mut); }
+.wr-restore {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-mut);
+  font: 500 13px/1 -apple-system, system-ui, sans-serif;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.wr-restore:active { border-color: var(--accent); color: var(--accent); }
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+
+.wr-toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(64px + env(safe-area-inset-bottom));
+  transform: translateX(-50%) translateY(8px);
+  background: var(--fg);
+  color: var(--bg);
+  font: 500 14px/1 -apple-system, system-ui, sans-serif;
+  padding: 11px 18px;
+  border-radius: 999px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 60;
+  max-width: 86%;
+  text-align: center;
+}
+.wr-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── Quine no-JS fallback ─────────────────────────────────────────────────── */
+
+.noscript-wrap { max-width: 65ch; margin: 0 auto; padding: 30px 20px; }

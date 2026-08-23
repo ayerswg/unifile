@@ -31,6 +31,20 @@
   pwa: /pwa-mer/
   download: /dl/unifile.mer.html
 
+- id: writer
+  title: Unifile Writer
+  tagline: A quiet Markdown writing app that exports real e-books — fully offline.
+  overview: >
+    A distraction-free, iA-Writer-style editor built for phones. Plain Markdown
+    with dimmed syntax and true hanging list indents, git-style version history
+    inside the document, and one-tap EPUB export for Apple Books, Kindle & Kobo.
+  features:
+    - Works 100% offline — no server, no account, no sync
+    - EPUB 3 export — every "#" heading becomes a chapter
+    - Built-in git-style commits, history and restore
+  pwa: /pwa-wr/
+  download: /dl/unifile.wr.html
+
 - id: abc
   title: ABC Notation
   tagline: Write music, hear it, route it — offline.
