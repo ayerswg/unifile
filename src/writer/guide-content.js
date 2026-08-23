@@ -10,10 +10,9 @@
 export const GUIDE_TITLE = 'Unifile Writer — Guide';
 
 export const GUIDE_MD = `
-Unifile Writer is a distraction-free Markdown writing app in the spirit of
-iA Writer, with two things most writing apps don't have: **built-in
-git-style version history** and **EPUB export** — and it runs **fully
-offline**. Nothing ever leaves your device: no server, no account, no sync,
+Unifile Writer is a distraction-free Markdown writing app with two things
+most writing apps don't have: **built-in git-style version history** and
+**EPUB export** — and it runs **fully offline**. Nothing ever leaves your device: no server, no account, no sync,
 no telemetry.
 
 ## The editor

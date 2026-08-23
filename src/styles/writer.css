@@ -2,7 +2,7 @@
  * Unifile Writer — the writer variant's complete stylesheet.
  * (The writer build does NOT use app.css — this file is its whole design.)
  *
- * Aesthetic: iA-Writer-like.  Monospaced writing surface (the `ch`-exact font
+ * Aesthetic: quiet and book-like.  Monospaced writing surface (the `ch`-exact font
  * is what makes the hanging list indent work — see editor.js), near-blank
  * chrome, one accent colour, generous measure.
  *
@@ -173,8 +173,8 @@ body {
 
 .wr-editor {
   outline: none;
-  font-family: "iA Writer Mono", "iA Writer Duospace", ui-monospace, "SF Mono",
-               SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+               "Liberation Mono", monospace;
   font-size: 16px;
   line-height: 1.7;
   color: var(--fg);
@@ -195,7 +195,7 @@ body {
   text-indent: calc(-1 * var(--hang, 0ch));
 }
 
-/* Syntax markers — visible but receded (the iA look). */
+/* Syntax markers — visible but receded (quieter than the words). */
 .wr-line .md { color: var(--dim); }
 .wr-line .bullet { color: var(--fg-mut); }
 
