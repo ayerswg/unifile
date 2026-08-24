@@ -51,17 +51,35 @@ const DIST      = join(ROOT, 'dist');
 // so a running copy knows its version and can offer an upgrade (see update-check.js).
 // ---------------------------------------------------------------------------
 
+/** Compare two "x.y.z" versions numerically (+1 / -1 / 0). */
+function _verCmp(a, b) {
+  const A = String(a).replace(/^v/, '').split(/[.-]/).map(x => parseInt(x, 10) || 0);
+  const B = String(b).replace(/^v/, '').split(/[.-]/).map(x => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((A[i] || 0) !== (B[i] || 0)) return (A[i] || 0) > (B[i] || 0) ? 1 : -1;
+  return 0;
+}
+
 function detectVersion() {
+  let tag = null;
   try {
-    const tag = execSync('git describe --tags --abbrev=0', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString().trim().replace(/^v/, '');
-    if (tag) return tag;
-  } catch { /* no tags yet */ }
+    tag = execSync('git describe --tags --abbrev=0', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString().trim().replace(/^v/, '') || null;
+  } catch { /* no tags (e.g. Cloudflare's checkout) */ }
+  let pkg = null;
   try {
-    return JSON.parse(execSync('cat package.json', { cwd: ROOT }).toString()).version || '0.0.0';
-  } catch { return '0.0.0'; }
+    pkg = JSON.parse(execSync('cat package.json', { cwd: ROOT }).toString()).version || null;
+  } catch { /* no package.json?! */ }
+  // The NEWER of the two wins: after `npm version X.Y.Z --no-git-tag-version`
+  // (the release-flow bump) builds stamp the bumped version even before the
+  // release tag exists; once the tag is cut they agree again.
+  if (tag && pkg) return _verCmp(pkg, tag) > 0 ? pkg : tag;
+  return tag || pkg || '0.0.0';
 }
 export const APP_VERSION = detectVersion();
+
+// Build timestamp — stamped alongside the version (shown in Writer's About) so
+// two builds of the SAME version are distinguishable when debugging caching.
+export const APP_BUILT = new Date().toISOString().slice(0, 19) + 'Z';
 
 // ---------------------------------------------------------------------------
 // esbuild plugins for bundle size / offline behaviour
@@ -248,7 +266,8 @@ function buildOptions(entryPoint, unifileMode, plugins) {
     define: {
       'process.env.NODE_ENV': DEV ? '"development"' : '"production"',
       'UNIFILE_MODE': `"${unifileMode}"`,
-      'UNIFILE_VERSION': JSON.stringify(APP_VERSION)
+      'UNIFILE_VERSION': JSON.stringify(APP_VERSION),
+      'UNIFILE_BUILT': JSON.stringify(APP_BUILT)
     },
     logOverride: { 'indirect-require': 'silent' },
     plugins: esPlugins,

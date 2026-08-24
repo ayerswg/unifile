@@ -15,7 +15,7 @@
  * scroll is pinned to (0,0), and only #wr-scroll scrolls.
  */
 
-/* global UNIFILE_VERSION */
+/* global UNIFILE_VERSION, UNIFILE_BUILT */
 
 import {
   IS_QUINE, captureTemplate, loadEmbeddedData, generateQuine,
@@ -26,11 +26,13 @@ import {
 import { VCS } from '../core/vcs.js';
 import { shortHash } from '../core/hash.js';
 import { WriterEditor } from './editor.js';
+import { SlashMenu } from './slash-menu.js';
 import { renderDocument, renderMarkdown } from './preview.js';
 import { buildEpub, slugify } from './epub.js';
 import { GUIDE_MD } from './guide-content.js';
 
 const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
+const BUILT = (typeof UNIFILE_BUILT !== 'undefined') ? UNIFILE_BUILT : 'dev';
 const DOC_ID = 'writer';
 
 const SEED = `---
@@ -53,9 +55,7 @@ Select this text and start typing to begin.
 const ICONS = {
   eye: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
   dots: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
-  undo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 5 3 10l5 5"/><path d="M3 10h11a6 6 0 0 1 0 12h-3"/></svg>',
-  redo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m16 5 5 5-5 5"/><path d="M21 10H10a6 6 0 0 0 0 12h3"/></svg>',
-  link: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7L12.5 19"/></svg>',
+  kbdown: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="10" rx="2"/><path d="M7 8h.01M11 8h.01M15 8h.01M8 11h8"/><path d="m9 18 3 3 3-3"/></svg>',
 };
 
 function esc(s) {
@@ -65,6 +65,8 @@ function esc(s) {
 
 export class WriterApp {
   async init() {
+    this.version = VERSION;
+    this.build = BUILT;
     if (IS_QUINE) captureTemplate();
 
     // ── Load document ──────────────────────────────────────────────────────
@@ -99,15 +101,109 @@ export class WriterApp {
 
     this.editor = new WriterEditor(document.getElementById('wr-sheet'), {
       onChange: () => this._onEdit(),
+      onSlash: (ctx) => this._onSlashCtx(ctx),
     });
     this.editor.setValue(this.content);
     this._refreshDirty();
     this._refreshCount();
+    this._bindSlashMenu();
+    this._bindEditingChrome();
 
     if (!IS_QUINE && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(console.warn);
+      this._bindServiceWorker();
       requestPersistentStorage();
     }
+    this._autoUpdateCheck();
+  }
+
+  // -------------------------------------------------------------------------
+  // Self-updating PWA — "never fight a cached build"
+  //
+  // The service worker self-skipWaiting()s and claims clients, so once a new
+  // sw.js is SEEN it takes over immediately.  The pieces here make sure it IS
+  // seen, and that the page follows it:
+  //   • register with updateViaCache:'none' (the HTTP cache must never pin an
+  //     old sw.js) and explicitly reg.update() at launch and whenever the app
+  //     returns to the foreground — installed PWAs can otherwise go a long
+  //     time between the browser's own update checks.
+  //   • when a NEW worker takes control of an already-controlled page
+  //     (controllerchange), flush the document to IndexedDB and reload once —
+  //     the running page is by definition the stale build at that point.
+  //     The very first install (page was uncontrolled) does NOT reload.
+  // -------------------------------------------------------------------------
+
+  _bindServiceWorker() {
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(console.warn);
+
+    // First-install claim (page was uncontrolled) must not reload — but the
+    // flag flips there, so the NEXT controllerchange (a real update) does.
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', async () => {
+      if (!hadController) { hadController = true; return; }
+      if (this._reloading) return;
+      this._reloading = true;
+      try { await this._persistNow(); } catch { /* best effort */ }
+      location.reload();
+    });
+
+    const poke = () => navigator.serviceWorker.getRegistration()
+      .then(reg => reg?.update()).catch(() => {});
+    poke();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') poke();
+    });
+  }
+
+  /**
+   * Launch-time version check against the site's version.json (cache-busted).
+   * A newer published version → a tappable toast.  Quiet on failure/offline.
+   */
+  _autoUpdateCheck() {
+    if (IS_QUINE || location.protocol === 'file:') return;
+    setTimeout(async () => {
+      try {
+        const remote = await this._fetchRemoteVersion();
+        if (this._isNewer(remote)) {
+          this._toast(`v${remote} is available — tap to update`, {
+            duration: 10000,
+            onTap: () => this._applyUpdate(),
+          });
+        }
+      } catch { /* offline — the SW check above still applies updates */ }
+    }, 2500);
+  }
+
+  async _fetchRemoteVersion() {
+    const res = await fetch(`../version.json?_=${Date.now()}`, { cache: 'no-store' });
+    const info = await res.json();
+    return info.latest ?? info.stable ?? info.version;
+  }
+
+  _isNewer(remote) {
+    return String(remote).localeCompare(String(VERSION), undefined,
+      { numeric: true, sensitivity: 'base' }) > 0;
+  }
+
+  /**
+   * Drive a new service worker to activation.  NO blind timed reload while an
+   * install is in flight (see CLAUDE.md — a precache can take seconds, and
+   * reloading early lands back on the OLD worker); the controllerchange
+   * listener in _bindServiceWorker performs the single reload.
+   */
+  async _applyUpdate() {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (!reg) { location.reload(); return; }
+    await reg.update();
+    const drive = (sw) => {
+      if (!sw) return;
+      if (sw.state === 'installed') sw.postMessage('skipWaiting');
+      else sw.addEventListener('statechange', () => {
+        if (sw.state === 'installed') sw.postMessage('skipWaiting');
+      });
+    };
+    if (reg.waiting) drive(reg.waiting);
+    else if (reg.installing) drive(reg.installing);
+    else reg.addEventListener('updatefound', () => drive(reg.installing));
   }
 
   // -------------------------------------------------------------------------
@@ -123,6 +219,7 @@ export class WriterApp {
                autocomplete="off" autocorrect="on" spellcheck="false" enterkeyhint="done">
         <span id="wr-dirty" title="Uncommitted changes" hidden></span>
         <div id="wr-top-actions">
+          <button id="wr-count" title="Word count" aria-label="Word count"></button>
           <button id="wr-btn-preview" class="wr-icon-btn" title="Preview" aria-label="Toggle preview">${ICONS.eye}</button>
           <button id="wr-btn-menu" class="wr-icon-btn" title="Menu" aria-label="Menu">${ICONS.dots}</button>
         </div>
@@ -131,28 +228,7 @@ export class WriterApp {
         <div id="wr-scroll"><div id="wr-sheet"></div></div>
         <div id="wr-preview" hidden><div id="wr-preview-body" class="wr-prose"></div></div>
       </main>
-      <footer id="wr-bar">
-        <div id="wr-tools">
-          <button data-cmd="undo" title="Undo" aria-label="Undo">${ICONS.undo}</button>
-          <button data-cmd="redo" title="Redo" aria-label="Redo">${ICONS.redo}</button>
-          <span class="wr-sep"></span>
-          <button data-cmd="heading" title="Heading" aria-label="Heading">H</button>
-          <button data-cmd="bold" title="Bold" aria-label="Bold"><b>B</b></button>
-          <button data-cmd="italic" title="Italic" aria-label="Italic"><i>I</i></button>
-          <button data-cmd="strike" title="Strikethrough" aria-label="Strikethrough"><s>S</s></button>
-          <button data-cmd="code" title="Code" aria-label="Code">\`\`</button>
-          <span class="wr-sep"></span>
-          <button data-cmd="bullet" title="Bullet list" aria-label="Bullet list">•–</button>
-          <button data-cmd="ordered" title="Numbered list" aria-label="Numbered list">1.</button>
-          <button data-cmd="task" title="Task list" aria-label="Task list">☑</button>
-          <button data-cmd="quote" title="Quote" aria-label="Quote">❝</button>
-          <span class="wr-sep"></span>
-          <button data-cmd="outdent" title="Outdent" aria-label="Outdent">⇤</button>
-          <button data-cmd="indent" title="Indent" aria-label="Indent">⇥</button>
-          <button data-cmd="link" title="Link" aria-label="Insert link">${ICONS.link}</button>
-        </div>
-        <button id="wr-count" title="Word count" aria-label="Word count"></button>
-      </footer>
+      <button id="wr-kbd-down" title="Dismiss keyboard" aria-label="Dismiss keyboard">${ICONS.kbdown}</button>
       <div id="wr-overlay" hidden>
         <div id="wr-modal" role="dialog" aria-modal="true"></div>
       </div>`;
@@ -168,19 +244,6 @@ export class WriterApp {
       if (e.key === 'Enter') { titleEl.blur(); this.editor.focus(); }
     });
     document.title = this.title;
-
-    // Toolbar — mousedown prevention keeps the editor focused (and the iOS
-    // keyboard up) while tapping format buttons.
-    const tools = document.getElementById('wr-tools');
-    tools.addEventListener('mousedown', (e) => e.preventDefault());
-    tools.addEventListener('touchstart', (e) => {
-      const btn = e.target.closest('button[data-cmd]');
-      if (btn) { e.preventDefault(); this._exec(btn.dataset.cmd); }
-    }, { passive: false });
-    tools.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-cmd]');
-      if (btn) this._exec(btn.dataset.cmd);
-    });
 
     document.getElementById('wr-count').addEventListener('click', () => {
       this._countMode = ((this._countMode || 0) + 1) % 3;
@@ -203,6 +266,10 @@ export class WriterApp {
       undo: () => ed.undo(),
       redo: () => ed.redo(),
       heading: () => ed.cycleHeading(),
+      h1: () => ed.setHeading(1),
+      h2: () => ed.setHeading(2),
+      h3: () => ed.setHeading(3),
+      text: () => ed.setHeading(0),
       bold: () => ed.wrapSelection('**'),
       italic: () => ed.wrapSelection('*'),
       strike: () => ed.wrapSelection('~~'),
@@ -214,8 +281,74 @@ export class WriterApp {
       indent: () => ed.shiftIndent(1),
       outdent: () => ed.shiftIndent(-1),
       link: () => ed.insertLink(),
+      codeblock: () => ed.replaceCurrentLine('```\n\n```', 4),
+      divider: () => ed.replaceCurrentLine('---\n', 4),
+      table: () => ed.replaceCurrentLine('| Column | Column |\n| ------ | ------ |\n|  |  |', 2),
     };
     map[cmd]?.();
+  }
+
+  // -------------------------------------------------------------------------
+  // Slash insertion menu (replaces the old bottom toolbar)
+  // -------------------------------------------------------------------------
+
+  static SLASH_ITEMS = [
+    { id: 'h1',       label: 'Heading 1',      hint: '#',        block: true, keywords: 'h1 title chapter' },
+    { id: 'h2',       label: 'Heading 2',      hint: '##',       block: true, keywords: 'h2 section' },
+    { id: 'h3',       label: 'Heading 3',      hint: '###',      block: true, keywords: 'h3 subsection' },
+    { id: 'text',     label: 'Text',           hint: 'no heading', block: true, keywords: 'paragraph plain body' },
+    { id: 'bullet',   label: 'Bullet list',    hint: '-',        block: true, keywords: 'list ul unordered' },
+    { id: 'ordered',  label: 'Numbered list',  hint: '1.',       block: true, keywords: 'list ol ordered' },
+    { id: 'task',     label: 'Task list',      hint: '- [ ]',    block: true, keywords: 'todo checkbox check' },
+    { id: 'quote',    label: 'Quote',          hint: '>',        block: true, keywords: 'blockquote' },
+    { id: 'codeblock', label: 'Code block',    hint: '```',      block: true, keywords: 'fence pre snippet' },
+    { id: 'divider',  label: 'Divider',        hint: '---',      block: true, keywords: 'rule hr line break scene' },
+    { id: 'table',    label: 'Table',          hint: '| |',      block: true, keywords: 'grid columns' },
+    { id: 'bold',     label: 'Bold',           hint: '**b**',    keywords: 'strong' },
+    { id: 'italic',   label: 'Italic',         hint: '*i*',      keywords: 'emphasis em' },
+    { id: 'strike',   label: 'Strikethrough',  hint: '~~s~~',    keywords: 'delete strikeout' },
+    { id: 'code',     label: 'Code',           hint: '`code`',   keywords: 'inline mono' },
+    { id: 'link',     label: 'Link',           hint: '[…](url)', keywords: 'url href' },
+    { id: 'undo',     label: 'Undo',           keywords: 'revert back' },
+    { id: 'redo',     label: 'Redo',           keywords: 'again forward' },
+  ];
+
+  _bindSlashMenu() {
+    this.slash = new SlashMenu(document.getElementById('wr-main'), {
+      items: WriterApp.SLASH_ITEMS,
+      onPick: (item, ctx) => {
+        // Delete the typed `/query` (unrecorded — see _applyEdit 'none': one
+        // undo step per pick, and the Undo action can't resurrect the query),
+        // then run the action at the caret.
+        this.editor._applyEdit(ctx.start, ctx.caret, '', ctx.start, ctx.start, 'none');
+        this._exec(item.id);
+      },
+    });
+    // Menu keyboard nav runs in the capture phase so it beats the editor's own
+    // keydown handling; preventing Enter here also stops insertParagraph.
+    this.editor.root.addEventListener('keydown', (e) => {
+      if (!this.slash.isOpen) return;
+      const ctxStart = this.slash.ctx?.start;
+      if (this.slash.handleKey(e)) {
+        // Esc dismissal must stick: Chrome queues selectionchange events, and
+        // one landing right after close() would re-open for the same `/` —
+        // remember the dismissed context until the caret leaves it.
+        if (e.key === 'Escape') this._slashDismissed = ctxStart ?? null;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+  }
+
+  _onSlashCtx(ctx) {
+    if (!this.slash) return;
+    if (!ctx) {
+      this._slashDismissed = null;
+      this.slash.close();
+      return;
+    }
+    if (this._slashDismissed === ctx.start) { this.slash.close(); return; }
+    this.slash.open(ctx, this.editor.caretRect());
   }
 
   // -------------------------------------------------------------------------
@@ -330,14 +463,21 @@ export class WriterApp {
     document.getElementById('wr-modal').innerHTML = '';
   }
 
-  _toast(msg) {
+  /** Transient toast; pass onTap (+ optional duration) to make it actionable. */
+  _toast(msg, { onTap, duration = 2600 } = {}) {
     document.querySelector('.wr-toast')?.remove();
     const el = document.createElement('div');
-    el.className = 'wr-toast';
+    el.className = 'wr-toast' + (onTap ? ' wr-toast-action' : '');
     el.textContent = msg;
+    if (onTap) {
+      el.addEventListener('click', () => {
+        el.textContent = 'Updating…';
+        onTap();
+      });
+    }
     document.getElementById('unifile-app').appendChild(el);
     setTimeout(() => el.classList.add('show'), 10);
-    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 400); }, 2600);
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 400); }, duration);
   }
 
   // ── Menu ──────────────────────────────────────────────────────────────────
@@ -587,7 +727,8 @@ export class WriterApp {
     const modal = this._openSheet(`
       <div class="wr-sheet-head">About</div>
       <div class="wr-sheet-body">
-        <p><b>Unifile Writer</b> v${esc(VERSION)}</p>
+        <p><b>Unifile Writer</b> v${esc(VERSION)}
+          <span class="wr-mut">· build ${esc(BUILT)}</span></p>
         <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'
           : 'App mode — your document is stored on this device (IndexedDB).'}</p>
         <p class="wr-mut">Fully offline. Nothing leaves your device. <br>unifile.app</p>
@@ -596,45 +737,20 @@ export class WriterApp {
     modal.querySelector('#wr-update-btn')?.addEventListener('click', () => this._checkUpdate(modal));
   }
 
-  /**
-   * PWA update: compare against the site's version.json, then drive the new
-   * service worker to activation.  NO blind timed reload while an install is
-   * in flight (see CLAUDE.md — the precache can take seconds; reloading early
-   * lands back on the OLD worker).
-   */
+  /** About's manual check: report status, then hand off to _applyUpdate. */
   async _checkUpdate(modal) {
     const status = modal.querySelector('#wr-update-status');
     const btn = modal.querySelector('#wr-update-btn');
     status.textContent = 'Checking…';
     try {
-      const res = await fetch(`../version.json?_=${Date.now()}`, { cache: 'no-store' });
-      const info = await res.json();
-      const remote = info.latest ?? info.stable ?? info.version;
-      const newer = String(remote).localeCompare(String(VERSION), undefined,
-        { numeric: true, sensitivity: 'base' }) > 0;
-      if (!newer) { status.textContent = `Up to date (v${VERSION}).`; return; }
+      const remote = await this._fetchRemoteVersion();
+      if (!this._isNewer(remote)) { status.textContent = `Up to date (v${VERSION}).`; return; }
       status.textContent = `v${remote} available.`;
       btn.textContent = 'Update & reload';
-      btn.onclick = async () => {
+      btn.onclick = () => {
         btn.textContent = 'Updating…';
         btn.disabled = true;
-        let reloaded = false;
-        navigator.serviceWorker?.addEventListener('controllerchange', () => {
-          if (!reloaded) { reloaded = true; location.reload(); }
-        });
-        const reg = await navigator.serviceWorker?.getRegistration();
-        if (!reg) { location.reload(); return; }
-        await reg.update();
-        const drive = (sw) => {
-          if (!sw) return;
-          if (sw.state === 'installed') sw.postMessage('skipWaiting');
-          else sw.addEventListener('statechange', () => {
-            if (sw.state === 'installed') sw.postMessage('skipWaiting');
-          });
-        };
-        if (reg.waiting) drive(reg.waiting);
-        else if (reg.installing) drive(reg.installing);
-        else reg.addEventListener('updatefound', () => drive(reg.installing));
+        this._applyUpdate();
       };
     } catch {
       status.textContent = 'Could not reach unifile.app (offline?).';
@@ -642,10 +758,51 @@ export class WriterApp {
   }
 
   // -------------------------------------------------------------------------
+  // Editing chrome — the title bar gets out of the way while you write.
+  //
+  // On a touch device with the soft keyboard up, the header's 46px matter, so
+  // it slides away (`data-editing` on the app root → CSS) and its space goes
+  // to the text.  It comes back the moment the keyboard is dismissed — the
+  // toolbar gains a dismiss-keyboard button while editing so the header (and
+  // its menu) is always one tap away.
+  //
+  // "Keyboard is up" is detected from the visual viewport, not from focus
+  // alone: `_trackViewportHeight` records the tallest viewport seen per
+  // window width (the no-keyboard baseline; keyed by width so rotation gets
+  // its own baseline) and a viewport >100px shorter than the baseline means
+  // the keyboard is genuinely eating space.  An iPad with a hardware keyboard
+  // focuses the editor without shrinking the viewport → the header stays.
+  // Coarse-pointer gate keeps desktop (always-focused editor) unaffected.
+  // -------------------------------------------------------------------------
+
+  _bindEditingChrome() {
+    // focusin/focusout on document (they bubble — contenteditable focus/blur
+    // has historically been flaky on iOS) + a live activeElement check in
+    // _updateEditingChrome, so a missed event can't wedge the state.
+    document.addEventListener('focusin', () => this._updateEditingChrome());
+    document.addEventListener('focusout', () => setTimeout(() => this._updateEditingChrome(), 50));
+    // Dismiss-keyboard button (floating, only visible while editing):
+    // blur → keyboard drops → header returns.
+    document.getElementById('wr-kbd-down').addEventListener('click', () => {
+      this.editor.root.blur();
+    });
+    this._updateEditingChrome();
+  }
+
+  _updateEditingChrome() {
+    const focused = document.activeElement === this.editor?.root;
+    // No visualViewport (no keyboard signal at all) → fall back to focus alone.
+    const kb = window.visualViewport ? !!this._kbOpen : true;
+    const editing = !!(focused && kb && window.matchMedia('(pointer: coarse)').matches);
+    document.getElementById('unifile-app').toggleAttribute('data-editing', editing);
+  }
+
+  // -------------------------------------------------------------------------
   // iOS viewport (see CLAUDE.md "Mobile / iOS" — these are load-bearing)
   // -------------------------------------------------------------------------
 
   _trackViewportHeight() {
+    this._vvBase = {};   // tallest viewport seen per window width (no-keyboard baseline)
     const set = () => {
       const vv = window.visualViewport;
       const h = Math.round(vv?.height ?? window.innerHeight);
@@ -653,6 +810,10 @@ export class WriterApp {
       const root = document.documentElement.style;
       root.setProperty('--app-height', `${h}px`);
       root.setProperty('--app-vv-top', `${top}px`);
+      const key = window.innerWidth;
+      if (!this._vvBase[key] || h > this._vvBase[key]) this._vvBase[key] = h;
+      this._kbOpen = this._vvBase[key] - h > 60;
+      this._updateEditingChrome();
     };
     set();
     window.addEventListener('resize', set);

@@ -2,7 +2,7 @@
  * Unifile Writer — the writer variant's complete stylesheet.
  * (The writer build does NOT use app.css — this file is its whole design.)
  *
- * Aesthetic: iA-Writer-like.  Monospaced writing surface (the `ch`-exact font
+ * Aesthetic: quiet and book-like.  Monospaced writing surface (the `ch`-exact font
  * is what makes the hanging list indent work — see editor.js), near-blank
  * chrome, one accent colour, generous measure.
  *
@@ -99,6 +99,16 @@ body {
   padding: 0 8px 0 14px;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
+  transition: margin-top 0.22s ease, opacity 0.16s ease;
+}
+
+/* While editing on a touch device (soft keyboard up — app.js sets
+   `data-editing`), the header slides away and its space goes to the text.
+   -47px = 46px height + 1px border. */
+#unifile-app[data-editing] #wr-top {
+  margin-top: -47px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 #wr-title {
@@ -163,8 +173,8 @@ body {
 
 .wr-editor {
   outline: none;
-  font-family: "iA Writer Mono", "iA Writer Duospace", ui-monospace, "SF Mono",
-               SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+               "Liberation Mono", monospace;
   font-size: 16px;
   line-height: 1.7;
   color: var(--fg);
@@ -185,7 +195,7 @@ body {
   text-indent: calc(-1 * var(--hang, 0ch));
 }
 
-/* Syntax markers — visible but receded (the iA look). */
+/* Syntax markers — visible but receded (quieter than the words). */
 .wr-line .md { color: var(--dim); }
 .wr-line .bullet { color: var(--fg-mut); }
 
@@ -232,7 +242,6 @@ body {
   overscroll-behavior: contain;
   background: var(--bg);
 }
-#unifile-app[data-preview] #wr-bar #wr-tools { visibility: hidden; }
 
 .wr-prose {
   max-width: 65ch;
@@ -280,54 +289,7 @@ body {
 .wr-prose a { color: var(--accent); }
 .wr-prose input[type="checkbox"] { accent-color: var(--accent); }
 
-/* ── Bottom toolbar ───────────────────────────────────────────────────────── */
-
-#wr-bar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  border-top: 1px solid var(--line);
-  background: var(--bg-alt);
-  padding-bottom: env(safe-area-inset-bottom);
-}
-
-#wr-tools {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  overflow-x: auto;
-  scrollbar-width: none;
-  padding: 0 4px;
-}
-#wr-tools::-webkit-scrollbar { display: none; }
-
-#wr-tools button {
-  appearance: none;
-  flex: none;
-  border: 0;
-  background: transparent;
-  color: var(--fg-mut);
-  min-width: 40px;
-  height: 44px;
-  padding: 0 6px;
-  font: 500 15px/1 ui-monospace, "SF Mono", Menlo, monospace;
-  border-radius: 8px;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  display: grid;
-  place-items: center;
-}
-#wr-tools button b, #wr-tools button i, #wr-tools button s { font-size: 15px; }
-#wr-tools button:active { background: var(--bg); color: var(--accent); }
-
-.wr-sep {
-  flex: none;
-  width: 1px;
-  height: 20px;
-  background: var(--line);
-  margin: 0 4px;
-}
+/* ── Word count (in the header, cycles words/chars/minutes) ──────────────── */
 
 #wr-count {
   appearance: none;
@@ -337,12 +299,79 @@ body {
   color: var(--dim);
   font: 500 12px/1 -apple-system, system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
-  padding: 0 14px;
-  height: 44px;
+  padding: 0 8px;
+  height: 42px;
   cursor: pointer;
   white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* ── Slash insertion menu (replaces the old bottom toolbar) ──────────────── */
+
+#wr-slash {
+  position: absolute;
+  z-index: 40;
+  min-width: 210px;
+  max-width: min(300px, calc(100% - 16px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  padding: 5px;
+}
+#wr-slash[hidden] { display: none; }
+
+#wr-slash button {
+  appearance: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: 400 15px/1.2 -apple-system, system-ui, sans-serif;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#wr-slash button.active,
+#wr-slash button:hover { background: var(--bg-alt); }
+#wr-slash .sl-label { flex: 1; }
+#wr-slash .sl-hint {
+  flex: none;
+  color: var(--dim);
+  font: 500 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* ── Floating dismiss-keyboard button ─────────────────────────────────────
+   Only while editing (header hidden): one tap drops the keyboard, which
+   brings the header (and its menu) back. Sits just above the keyboard
+   because the app column is sized to the visual viewport. */
+#wr-kbd-down {
+  position: absolute;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 30;
+  display: none;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg-elev);
+  color: var(--fg-mut);
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  place-items: center;
+  -webkit-tap-highlight-color: transparent;
+}
+#unifile-app[data-editing] #wr-kbd-down { display: grid; }
+#unifile-app[data-preview] #wr-kbd-down { display: none; }
 
 /* ── Overlay + bottom sheets ──────────────────────────────────────────────── */
 
@@ -533,7 +562,7 @@ body {
 .wr-toast {
   position: absolute;
   left: 50%;
-  bottom: calc(64px + env(safe-area-inset-bottom));
+  bottom: calc(24px + env(safe-area-inset-bottom));
   transform: translateX(-50%) translateY(8px);
   background: var(--fg);
   color: var(--bg);
@@ -548,6 +577,7 @@ body {
   text-align: center;
 }
 .wr-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.wr-toast-action { background: var(--accent); color: #fff; cursor: pointer; }
 
 /* ── Quine no-JS fallback ─────────────────────────────────────────────────── */
 

@@ -10,10 +10,9 @@
 export const GUIDE_TITLE = 'Unifile Writer — Guide';
 
 export const GUIDE_MD = `
-Unifile Writer is a distraction-free Markdown writing app in the spirit of
-iA Writer, with two things most writing apps don't have: **built-in
-git-style version history** and **EPUB export** — and it runs **fully
-offline**. Nothing ever leaves your device: no server, no account, no sync,
+Unifile Writer is a distraction-free Markdown writing app with two things
+most writing apps don't have: **built-in git-style version history** and
+**EPUB export** — and it runs **fully offline**. Nothing ever leaves your device: no server, no account, no sync,
 no telemetry.
 
 ## The editor
@@ -26,12 +25,28 @@ wrapped text lines up under the item's text, not under the bullet.
 The caret line's paragraph can be isolated with **Focus mode** (in the ⋯
 menu): everything except the paragraph you are writing is dimmed.
 
-The toolbar above the keyboard (or at the bottom of the window) has, in
-order: undo · redo · heading · bold · italic · strikethrough · code ·
-bullet list · numbered list · task list · quote · outdent · indent · link.
-Every button works on the current selection or caret line. On a hardware
-keyboard: **⌘B** bold, **⌘I** italic, **⌘K** link, **⌘Z / ⇧⌘Z** undo/redo,
-**Tab / ⇧Tab** indent/outdent in lists.
+While you write on a phone, the title bar slides away so its space goes to
+your text — a small floating button appears at the bottom right; tapping it
+dismisses the keyboard and brings the title bar (and its menu) back.
+
+## The / menu
+
+There is no toolbar. Type **\`/\`** to open the insertion menu — at the
+start of a line, or anywhere after a space. Keep typing to filter
+(\`/h2\`, \`/task\`, \`/div\` …), then tap an entry, or use **↑/↓** and
+**Return** on a hardware keyboard. **Esc**, deleting the \`/\`, or moving
+the caret away closes it. The \`/word\` you typed is removed when the
+action runs, so it never lands in your text.
+
+At the start of a line the menu offers block inserts — Heading 1–3, Text,
+bullet / numbered / task lists, quote, code block, divider, table. After a
+space mid-sentence it offers inline actions — bold, italic,
+strikethrough, code, link — plus undo and redo. A \`/\` inside a word
+(\`and/or\`), a URL, or a code block never opens the menu.
+
+On a hardware keyboard: **⌘B** bold, **⌘I** italic, **⌘K** link,
+**⌘Z / ⇧⌘Z** undo/redo, **Tab / ⇧Tab** indent/outdent in lists. On iOS,
+undo is also the system three-finger swipe (or shake).
 
 Pressing **Return** inside a list continues it (numbered lists renumber,
 task lists add a fresh \`[ ]\`). Pressing Return on an *empty* list item
@@ -184,6 +199,15 @@ Open the Writer page in Safari → Share → **Add to Home Screen**. The app
 then launches full-screen, works completely offline, and keeps your
 documents on the device. The share sheet is used for all exports, so you
 can save straight to Files, Books, or any app.
+
+## Updates
+
+The installed app keeps itself current: every time it opens (or returns
+to the foreground) it looks for a new build, and when one is found the
+app saves your document and refreshes itself once onto the new version —
+no cache-clearing, no reinstalling. A tappable notice also appears when a
+newer version is published. The running version and build time are shown
+in **⋯ menu → About**, with a manual "Check for updates" button.
 
 ## Privacy
 
