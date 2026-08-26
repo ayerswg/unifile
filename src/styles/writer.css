@@ -193,6 +193,9 @@ body {
   overflow-wrap: break-word;
   padding-left: var(--hang, 0ch);
   text-indent: calc(-1 * var(--hang, 0ch));
+  /* Swipe-indent snap-back (editor.js _bindSwipe sets transition:none while
+     the finger is down, so this only animates the release). */
+  transition: transform 0.16s ease;
 }
 
 /* Syntax markers — visible but receded (quieter than the words). */

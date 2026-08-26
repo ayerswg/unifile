@@ -227,6 +227,52 @@ export class WriterEditor {
     this._applyEdit(start, end, repl, start, start + repl.length, 'format');
   }
 
+  /**
+   * Indent (+1) / outdent (-1) lines [a,b] directly — no DOM selection needed.
+   * The swipe gesture calls this: unlike shiftIndent it must work while the
+   * editor is unfocused WITHOUT restoring a selection afterwards (programmatic
+   * selection focuses the contenteditable, which would pop the iOS keyboard
+   * mid-swipe).  When focused, the caret rides along with the shifted text.
+   * `coalesce` skips the undo snapshot so a multi-level swipe is one undo step
+   * (the caller sets it after its first committed level).
+   * Returns true if any line actually changed.
+   */
+  indentLines(a, b, dir, { coalesce = false } = {}) {
+    a = Math.max(0, Math.min(a, this.lines.length - 1));
+    b = Math.max(a, Math.min(b, this.lines.length - 1));
+    const next = [];
+    const deltas = [];
+    let changed = false;
+    for (let i = a; i <= b; i++) {
+      const l = this.lines[i];
+      const nl = dir > 0 ? '  ' + l : l.replace(/^ {1,2}|^\t/, '');
+      next.push(nl);
+      deltas.push(nl.length - l.length);
+      if (nl !== l) changed = true;
+    }
+    if (!changed) return false;
+    const focused = document.activeElement === this.root;
+    const sel = focused ? this._selOffsets() : null;
+    // Shift caret offsets by the per-line prefix deltas (an outdent never pulls
+    // an offset past the start of its own line).
+    const adj = (off) => {
+      const { lineIdx, col } = this._lineAt(off);
+      let n = off;
+      for (let i = a; i <= Math.min(b, lineIdx - 1); i++) n += deltas[i - a];
+      if (lineIdx >= a && lineIdx <= b) n += Math.max(deltas[lineIdx - a], -col);
+      return n;
+    };
+    const selAfter = sel && { start: adj(sel.start), end: adj(sel.end) };
+    if (!coalesce) this._pushUndo('format');
+    this._lastUndoKind = 'format';
+    for (let i = a; i <= b; i++) this.lines[i] = next[i - a];
+    this._render();
+    if (selAfter) this._setSelOffsets(selAfter.start, selAfter.end);
+    this.onChange();
+    this._notifySlash();
+    return true;
+  }
+
   /** Toggle the [ ]/[x] state of the task item on the caret line. */
   toggleTask() {
     const sel = this._selOffsets(); if (!sel) return;
@@ -600,6 +646,98 @@ export class WriterEditor {
       this._notifySlash();
     });
     this.root.addEventListener('blur', () => this.onSlash?.(null));
+    this._bindSwipe();
+  }
+
+  // -------------------------------------------------------------------------
+  // Swipe indent — the iOS-Notes gesture, for touch devices
+  //
+  // One-finger horizontal drag on a list/quote line: right = indent, left =
+  // outdent.  Vertical-first movement is a scroll and cancels the gesture; a
+  // plain tap has no movement, so caret placement is untouched (touchstart
+  // stays passive).  Once latched the line tracks the finger and every STEP px
+  // commits one level, so a long drag walks multiple levels (all coalesced
+  // into a single undo step).  A multi-line selection that includes the
+  // touched line swipes as a block.  Uses `infos[].type` as the gate, so a
+  // `- item` inside a code fence or front matter never triggers.
+  // -------------------------------------------------------------------------
+
+  _bindSwipe() {
+    const LATCH = 14;   // px of horizontal travel before the gesture claims the touch
+    const STEP = 48;    // px per committed indent level
+    const MAXX = 72;    // visual clamp for the drag transform
+    const SWIPABLE = new Set(['bullet', 'ordered', 'task', 'quote']);
+    let sw = null;
+
+    const clearTransforms = () => {
+      if (!sw) return;
+      for (const d of sw.divs) { d.style.transition = ''; d.style.transform = ''; }
+    };
+
+    this.root.addEventListener('touchstart', (e) => {
+      sw = null;
+      if (e.touches.length !== 1 || this._composing) return;
+      const t = e.touches[0];
+      let div = this._lineDivOf(e.target);
+      if (!div) {
+        const el = document.elementFromPoint(t.clientX, t.clientY);
+        div = el && this._lineDivOf(el);
+      }
+      if (!div) return;
+      const idx = Array.prototype.indexOf.call(this.root.children, div);
+      if (idx < 0 || idx >= this.lines.length) return;
+      // A selection spanning the touched line swipes as one block.
+      let a = idx, b = idx;
+      const sel = this._selOffsets();
+      if (sel && sel.start !== sel.end) {
+        const la = this._lineAt(sel.start).lineIdx;
+        const lb = this._lineAt(sel.end).lineIdx;
+        if (idx >= la && idx <= lb) { a = la; b = lb; }
+      }
+      let anySwipable = false;
+      for (let i = a; i <= b; i++) if (SWIPABLE.has(this.infos[i]?.type)) anySwipable = true;
+      if (!anySwipable) return;
+      sw = {
+        id: t.identifier, x0: t.clientX, y0: t.clientY, a, b,
+        divs: Array.prototype.slice.call(this.root.children, a, b + 1),
+        latched: false, committed: false,
+      };
+    }, { passive: true });
+
+    this.root.addEventListener('touchmove', (e) => {
+      if (!sw) return;
+      let t = null;
+      for (const x of e.touches) if (x.identifier === sw.id) t = x;
+      if (!t) { clearTransforms(); sw = null; return; }
+      const dx = t.clientX - sw.x0;
+      const dy = t.clientY - sw.y0;
+      if (!sw.latched) {
+        if (Math.abs(dy) > LATCH && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }  // it's a scroll
+        if (Math.abs(dx) < LATCH || Math.abs(dx) < 1.5 * Math.abs(dy)) return;
+        sw.latched = true;
+        for (const d of sw.divs) d.style.transition = 'none';   // 1:1 finger tracking
+      }
+      e.preventDefault();
+      if (Math.abs(dx) >= STEP) {
+        if (this.indentLines(sw.a, sw.b, dx > 0 ? 1 : -1, { coalesce: sw.committed })) {
+          sw.committed = true;
+        }
+        // Content shifted (or refused to) — re-measure the next level from here.
+        sw.x0 = t.clientX;
+        for (const d of sw.divs) d.style.transform = '';
+      } else {
+        const clamped = Math.max(-MAXX, Math.min(MAXX, dx));
+        for (const d of sw.divs) d.style.transform = `translateX(${clamped}px)`;
+      }
+    }, { passive: false });
+
+    const end = () => {
+      if (!sw) return;
+      clearTransforms();   // transition back on → CSS snaps the line home
+      sw = null;
+    };
+    this.root.addEventListener('touchend', end);
+    this.root.addEventListener('touchcancel', end);
   }
 
   _onBeforeInput(e) {

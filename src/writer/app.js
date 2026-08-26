@@ -306,6 +306,8 @@ export class WriterApp {
     { id: 'strike',   label: 'Strikethrough',  hint: '~~s~~',    keywords: 'delete strikeout' },
     { id: 'code',     label: 'Code',           hint: '`code`',   keywords: 'inline mono' },
     { id: 'link',     label: 'Link',           hint: '[…](url)', keywords: 'url href' },
+    { id: 'indent',   label: 'Indent',         hint: '⇥',        keywords: 'tab nest right shift' },
+    { id: 'outdent',  label: 'Outdent',        hint: '⇤',        keywords: 'tab unnest left shift' },
     { id: 'undo',     label: 'Undo',           keywords: 'revert back' },
     { id: 'redo',     label: 'Redo',           keywords: 'again forward' },
   ];
