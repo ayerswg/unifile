@@ -7,7 +7,7 @@
  * chrome, one accent colour, generous measure.
  *
  * Mobile/iOS is the primary target: the shell is a fixed column sized by
- * --app-height (JS-measured visual viewport, so the toolbar sits above the
+ * --app-height (JS-measured visual viewport, so the UI sits above the
  * soft keyboard), only #wr-scroll scrolls, and every touch target is ≥40px.
  */
 
@@ -348,38 +348,6 @@ body {
   color: var(--dim);
   font: 500 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
 }
-
-/* ── Keyboard accessory toolbar ───────────────────────────────────────────
-   Only while editing (header hidden, soft keyboard up). An in-flow flex
-   child at the bottom of the app column — the column is sized to the visual
-   viewport, so the bar sits flush above the keyboard (never position:fixed,
-   see CLAUDE.md Mobile/iOS). Outdent / indent / undo / redo on the left,
-   dismiss-keyboard on the far right. */
-#wr-kbar {
-  flex: none;
-  display: none;
-  align-items: stretch;
-  gap: 2px;
-  height: 44px;
-  padding: 3px 6px;
-  border-top: 1px solid var(--line);
-  background: var(--bg-alt);
-}
-#wr-kbar button {
-  min-width: 46px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--fg-mut);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-#wr-kbar button:active { background: var(--bg); color: var(--fg); }
-#wr-kbar .kbar-spacer { flex: 1; }
-#unifile-app[data-editing] #wr-kbar { display: flex; }
-#unifile-app[data-preview] #wr-kbar { display: none; }
 
 /* ── Overlay + bottom sheets ──────────────────────────────────────────────── */
 
