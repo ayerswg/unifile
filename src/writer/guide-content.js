@@ -26,12 +26,14 @@ The caret line's paragraph can be isolated with **Focus mode** (in the ⋯
 menu): everything except the paragraph you are writing is dimmed.
 
 While you write on a phone, the title bar slides away so its space goes to
-your text — a small floating button appears at the bottom right; tapping it
-dismisses the keyboard and brings the title bar (and its menu) back.
+your text, and a slim toolbar appears above the keyboard: **outdent**,
+**indent**, **undo** and **redo** on the left, and a dismiss-keyboard
+button on the far right — tapping it drops the keyboard and brings the
+title bar (and its menu) back.
 
 ## The / menu
 
-There is no toolbar. Type **\`/\`** to open the insertion menu — at the
+There is no format toolbar. Type **\`/\`** to open the insertion menu — at the
 start of a line, or anywhere after a space. Keep typing to filter
 (\`/h2\`, \`/task\`, \`/div\` …), then tap an entry, or use **↑/↓** and
 **Return** on a hardware keyboard. **Esc**, deleting the \`/\`, or moving

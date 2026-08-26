@@ -349,29 +349,37 @@ body {
   font: 500 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-/* ── Floating dismiss-keyboard button ─────────────────────────────────────
-   Only while editing (header hidden): one tap drops the keyboard, which
-   brings the header (and its menu) back. Sits just above the keyboard
-   because the app column is sized to the visual viewport. */
-#wr-kbd-down {
-  position: absolute;
-  right: 12px;
-  bottom: calc(12px + env(safe-area-inset-bottom));
-  z-index: 30;
+/* ── Keyboard accessory toolbar ───────────────────────────────────────────
+   Only while editing (header hidden, soft keyboard up). An in-flow flex
+   child at the bottom of the app column — the column is sized to the visual
+   viewport, so the bar sits flush above the keyboard (never position:fixed,
+   see CLAUDE.md Mobile/iOS). Outdent / indent / undo / redo on the left,
+   dismiss-keyboard on the far right. */
+#wr-kbar {
+  flex: none;
   display: none;
-  width: 42px;
-  height: 42px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--bg-elev);
+  align-items: stretch;
+  gap: 2px;
+  height: 44px;
+  padding: 3px 6px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-alt);
+}
+#wr-kbar button {
+  min-width: 46px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--fg-mut);
-  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.15);
-  cursor: pointer;
+  display: grid;
   place-items: center;
+  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-#unifile-app[data-editing] #wr-kbd-down { display: grid; }
-#unifile-app[data-preview] #wr-kbd-down { display: none; }
+#wr-kbar button:active { background: var(--bg); color: var(--fg); }
+#wr-kbar .kbar-spacer { flex: 1; }
+#unifile-app[data-editing] #wr-kbar { display: flex; }
+#unifile-app[data-preview] #wr-kbar { display: none; }
 
 /* ── Overlay + bottom sheets ──────────────────────────────────────────────── */
 

@@ -2,9 +2,10 @@
  * Unifile Writer — app shell.
  *
  * A deliberately minimal, mobile-first shell around WriterEditor (editor.js):
- * one editing surface, a thin title bar, a format toolbar that sits above the
- * iOS keyboard, and bottom sheets for everything else (menu, history, export,
- * settings, guide, about).  Reuses unifile's core: VCS history (core/vcs.js)
+ * one editing surface, a thin title bar, a keyboard accessory toolbar
+ * (indent/outdent, undo/redo, dismiss) that sits above the iOS keyboard, and
+ * bottom sheets for everything else (menu, history, export, settings, guide,
+ * about).  Reuses unifile's core: VCS history (core/vcs.js)
  * and storage (core/storage.js — IndexedDB in PWA mode, quine regeneration in
  * single-file mode).  Data shape is the standard unifile document object, so a
  * Writer .unifile.json round-trips like any other unifile document.
@@ -55,7 +56,11 @@ Select this text and start typing to begin.
 const ICONS = {
   eye: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
   dots: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
-  kbdown: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="10" rx="2"/><path d="M7 8h.01M11 8h.01M15 8h.01M8 11h8"/><path d="m9 18 3 3 3-3"/></svg>',
+  kbdown: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="10" rx="2"/><path d="M7 8h.01M11 8h.01M15 8h.01M8 11h8"/><path d="m9 18 3 3 3-3"/></svg>',
+  outdent: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5h17M11.5 9.7h9M11.5 14.3h9M3.5 19h17"/><path d="m7.5 9.7-2.7 2.3 2.7 2.3"/></svg>',
+  indent: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5h17M11.5 9.7h9M11.5 14.3h9M3.5 19h17"/><path d="m4.8 9.7 2.7 2.3-2.7 2.3"/></svg>',
+  undo: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5 4.5 8.5 8 12"/><path d="M4.5 8.5H14a5.25 5.25 0 0 1 0 10.5H9.5"/></svg>',
+  redo: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m16 5 3.5 3.5L16 12"/><path d="M19.5 8.5H10a5.25 5.25 0 0 0 0 10.5h4.5"/></svg>',
 };
 
 function esc(s) {
@@ -228,7 +233,14 @@ export class WriterApp {
         <div id="wr-scroll"><div id="wr-sheet"></div></div>
         <div id="wr-preview" hidden><div id="wr-preview-body" class="wr-prose"></div></div>
       </main>
-      <button id="wr-kbd-down" title="Dismiss keyboard" aria-label="Dismiss keyboard">${ICONS.kbdown}</button>
+      <div id="wr-kbar" role="toolbar" aria-label="Keyboard toolbar">
+        <button data-cmd="outdent" title="Outdent" aria-label="Outdent">${ICONS.outdent}</button>
+        <button data-cmd="indent" title="Indent" aria-label="Indent">${ICONS.indent}</button>
+        <button data-cmd="undo" title="Undo" aria-label="Undo">${ICONS.undo}</button>
+        <button data-cmd="redo" title="Redo" aria-label="Redo">${ICONS.redo}</button>
+        <span class="kbar-spacer"></span>
+        <button id="wr-kbd-down" title="Dismiss keyboard" aria-label="Dismiss keyboard">${ICONS.kbdown}</button>
+      </div>
       <div id="wr-overlay" hidden>
         <div id="wr-modal" role="dialog" aria-modal="true"></div>
       </div>`;
@@ -762,9 +774,10 @@ export class WriterApp {
   //
   // On a touch device with the soft keyboard up, the header's 46px matter, so
   // it slides away (`data-editing` on the app root → CSS) and its space goes
-  // to the text.  It comes back the moment the keyboard is dismissed — the
-  // toolbar gains a dismiss-keyboard button while editing so the header (and
-  // its menu) is always one tap away.
+  // to the text.  While editing, a keyboard accessory toolbar (#wr-kbar) sits
+  // flush above the keyboard: outdent / indent / undo / redo on the left and a
+  // dismiss-keyboard button on the far right — dismissing brings the header
+  // (and its menu) back.
   //
   // "Keyboard is up" is detected from the visual viewport, not from focus
   // alone: `_trackViewportHeight` records the tallest viewport seen per
@@ -781,10 +794,25 @@ export class WriterApp {
     // _updateEditingChrome, so a missed event can't wedge the state.
     document.addEventListener('focusin', () => this._updateEditingChrome());
     document.addEventListener('focusout', () => setTimeout(() => this._updateEditingChrome(), 50));
-    // Dismiss-keyboard button (floating, only visible while editing):
-    // blur → keyboard drops → header returns.
-    document.getElementById('wr-kbd-down').addEventListener('click', () => {
-      this.editor.root.blur();
+    // Keyboard toolbar.  Same keep-the-keyboard-up dance as the slash menu:
+    // mousedown is preventDefaulted so the editor never loses focus, and on
+    // touch the action runs from touchstart (whose preventDefault also
+    // suppresses the synthetic click, so it doesn't run twice).  The dismiss
+    // button is the exception — it blurs on purpose: keyboard drops → header
+    // returns.
+    const kbar = document.getElementById('wr-kbar');
+    const run = (btn) => {
+      if (btn.id === 'wr-kbd-down') this.editor.root.blur();
+      else this._exec(btn.dataset.cmd);
+    };
+    kbar.addEventListener('mousedown', (e) => e.preventDefault());
+    kbar.addEventListener('touchstart', (e) => {
+      const btn = e.target.closest('button');
+      if (btn) { e.preventDefault(); run(btn); }
+    }, { passive: false });
+    kbar.addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (btn) run(btn);
     });
     this._updateEditingChrome();
   }
