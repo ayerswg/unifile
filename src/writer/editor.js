@@ -655,24 +655,24 @@ export class WriterEditor {
   // One-finger horizontal drag on a list/quote line: right = indent, left =
   // outdent.  Vertical-first movement is a scroll and cancels the gesture; a
   // plain tap has no movement, so caret placement is untouched (touchstart
-  // stays passive).  Once latched the line tracks the finger and every STEP px
-  // commits one level, so a long drag walks multiple levels (all coalesced
-  // into a single undo step).  A multi-line selection that includes the
+  // stays passive).  The drag never slides freely: once latched, the line
+  // snaps between 2ch DETENTS — the indent grid itself, since one level is
+  // two spaces in a monospaced editor — with one detent per STEP px of drag,
+  // clamped so an impossible outdent never previews.  Nothing is edited while
+  // the finger is down; the whole preview lands as ONE edit (one undo step)
+  // on release, and because translateX(2ch·level) is exactly where the
+  // re-indented text renders, swapping the transform for the real edit is
+  // pixel-identical — no jump.  A multi-line selection that includes the
   // touched line swipes as a block.  Uses `infos[].type` as the gate, so a
   // `- item` inside a code fence or front matter never triggers.
   // -------------------------------------------------------------------------
 
   _bindSwipe() {
     const LATCH = 14;   // px of horizontal travel before the gesture claims the touch
-    const STEP = 48;    // px per committed indent level
-    const MAXX = 72;    // visual clamp for the drag transform
+    const STEP = 48;    // px of drag per detent (indent level)
+    const MAXLVL = 6;   // sanity cap on preview levels per drag
     const SWIPABLE = new Set(['bullet', 'ordered', 'task', 'quote']);
     let sw = null;
-
-    const clearTransforms = () => {
-      if (!sw) return;
-      for (const d of sw.divs) { d.style.transition = ''; d.style.transform = ''; }
-    };
 
     this.root.addEventListener('touchstart', (e) => {
       sw = null;
@@ -695,12 +695,21 @@ export class WriterEditor {
         if (idx >= la && idx <= lb) { a = la; b = lb; }
       }
       let anySwipable = false;
-      for (let i = a; i <= b; i++) if (SWIPABLE.has(this.infos[i]?.type)) anySwipable = true;
+      // Outdent detents are bounded by what the leading whitespace can give up
+      // (the most any affected line can, so a lone line previews exactly).
+      let maxOut = 0;
+      for (let i = a; i <= b; i++) {
+        if (SWIPABLE.has(this.infos[i]?.type)) anySwipable = true;
+        let lead = /^[ \t]*/.exec(this.lines[i])[0];
+        let n = 0;
+        while (lead) { lead = lead.replace(/^ {1,2}|^\t/, ''); n++; }
+        maxOut = Math.max(maxOut, n);
+      }
       if (!anySwipable) return;
       sw = {
-        id: t.identifier, x0: t.clientX, y0: t.clientY, a, b,
+        id: t.identifier, x0: t.clientX, y0: t.clientY, a, b, maxOut,
         divs: Array.prototype.slice.call(this.root.children, a, b + 1),
-        latched: false, committed: false,
+        latched: false, level: 0,
       };
     }, { passive: true });
 
@@ -708,36 +717,40 @@ export class WriterEditor {
       if (!sw) return;
       let t = null;
       for (const x of e.touches) if (x.identifier === sw.id) t = x;
-      if (!t) { clearTransforms(); sw = null; return; }
+      if (!t) return;
       const dx = t.clientX - sw.x0;
       const dy = t.clientY - sw.y0;
       if (!sw.latched) {
         if (Math.abs(dy) > LATCH && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }  // it's a scroll
         if (Math.abs(dx) < LATCH || Math.abs(dx) < 1.5 * Math.abs(dy)) return;
         sw.latched = true;
-        for (const d of sw.divs) d.style.transition = 'none';   // 1:1 finger tracking
       }
       e.preventDefault();
-      if (Math.abs(dx) >= STEP) {
-        if (this.indentLines(sw.a, sw.b, dx > 0 ? 1 : -1, { coalesce: sw.committed })) {
-          sw.committed = true;
-        }
-        // Content shifted (or refused to) — re-measure the next level from here.
-        sw.x0 = t.clientX;
-        for (const d of sw.divs) d.style.transform = '';
-      } else {
-        const clamped = Math.max(-MAXX, Math.min(MAXX, dx));
-        for (const d of sw.divs) d.style.transform = `translateX(${clamped}px)`;
+      const lvl = Math.max(-sw.maxOut, Math.min(MAXLVL, Math.round(dx / STEP)));
+      if (lvl !== sw.level) {
+        sw.level = lvl;
+        // .wr-line's transform transition animates the snap between detents.
+        for (const d of sw.divs) d.style.transform = lvl ? `translateX(${lvl * 2}ch)` : '';
       }
     }, { passive: false });
 
-    const end = () => {
+    const end = (commit) => {
       if (!sw) return;
-      clearTransforms();   // transition back on → CSS snaps the line home
+      const { a, b, level, divs } = sw;
       sw = null;
+      if (commit && level) {
+        // The preview already sits at the final text position: clear the
+        // transform transition-less in the same frame the edit re-renders.
+        for (const d of divs) { d.style.transition = 'none'; d.style.transform = ''; }
+        const dir = level > 0 ? 1 : -1;
+        for (let i = 0; i < Math.abs(level); i++) this.indentLines(a, b, dir, { coalesce: i > 0 });
+        requestAnimationFrame(() => { for (const d of divs) d.style.transition = ''; });
+      } else {
+        for (const d of divs) d.style.transform = '';   // animated snap home
+      }
     };
-    this.root.addEventListener('touchend', end);
-    this.root.addEventListener('touchcancel', end);
+    this.root.addEventListener('touchend', () => end(true));
+    this.root.addEventListener('touchcancel', () => end(false));
   }
 
   _onBeforeInput(e) {
