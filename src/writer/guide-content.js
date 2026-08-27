@@ -25,9 +25,16 @@ wrapped text lines up under the item's text, not under the bullet.
 The caret line's paragraph can be isolated with **Focus mode** (in the ⋯
 menu): everything except the paragraph you are writing is dimmed.
 
+**Swipe to indent** — on a touch screen, drag a list or quote line
+sideways, the way Notes does it: **swipe right to indent, left to
+outdent**. Keep dragging for more than one level (a long swipe walks
+several; one undo reverts the whole swipe). If you've selected several
+lines, swiping any of them moves the block together. \`/indent\` and
+\`/outdent\` in the / menu do the same thing.
+
 While you write on a phone, the title bar slides away so its space goes to
-your text — a small floating button appears at the bottom right; tapping it
-dismisses the keyboard and brings the title bar (and its menu) back.
+your text; dismissing the keyboard (the **✓** on iOS's keyboard bar)
+brings it back, along with its menu.
 
 ## The / menu
 
@@ -41,7 +48,7 @@ action runs, so it never lands in your text.
 At the start of a line the menu offers block inserts — Heading 1–3, Text,
 bullet / numbered / task lists, quote, code block, divider, table. After a
 space mid-sentence it offers inline actions — bold, italic,
-strikethrough, code, link — plus undo and redo. A \`/\` inside a word
+strikethrough, code, link, indent, outdent — plus undo and redo. A \`/\` inside a word
 (\`and/or\`), a URL, or a code block never opens the menu.
 
 On a hardware keyboard: **⌘B** bold, **⌘I** italic, **⌘K** link,

@@ -7,7 +7,7 @@
  * chrome, one accent colour, generous measure.
  *
  * Mobile/iOS is the primary target: the shell is a fixed column sized by
- * --app-height (JS-measured visual viewport, so the toolbar sits above the
+ * --app-height (JS-measured visual viewport, so the UI sits above the
  * soft keyboard), only #wr-scroll scrolls, and every touch target is ≥40px.
  */
 
@@ -193,6 +193,9 @@ body {
   overflow-wrap: break-word;
   padding-left: var(--hang, 0ch);
   text-indent: calc(-1 * var(--hang, 0ch));
+  /* Swipe-indent snap-back (editor.js _bindSwipe sets transition:none while
+     the finger is down, so this only animates the release). */
+  transition: transform 0.16s ease;
 }
 
 /* Syntax markers — visible but receded (quieter than the words). */
@@ -348,30 +351,6 @@ body {
   color: var(--dim);
   font: 500 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
 }
-
-/* ── Floating dismiss-keyboard button ─────────────────────────────────────
-   Only while editing (header hidden): one tap drops the keyboard, which
-   brings the header (and its menu) back. Sits just above the keyboard
-   because the app column is sized to the visual viewport. */
-#wr-kbd-down {
-  position: absolute;
-  right: 12px;
-  bottom: calc(12px + env(safe-area-inset-bottom));
-  z-index: 30;
-  display: none;
-  width: 42px;
-  height: 42px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--bg-elev);
-  color: var(--fg-mut);
-  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.15);
-  cursor: pointer;
-  place-items: center;
-  -webkit-tap-highlight-color: transparent;
-}
-#unifile-app[data-editing] #wr-kbd-down { display: grid; }
-#unifile-app[data-preview] #wr-kbd-down { display: none; }
 
 /* ── Overlay + bottom sheets ──────────────────────────────────────────────── */
 
