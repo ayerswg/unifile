@@ -665,14 +665,37 @@ export class WriterEditor {
   // pixel-identical — no jump.  A multi-line selection that includes the
   // touched line swipes as a block.  Uses `infos[].type` as the gate, so a
   // `- item` inside a code fence or front matter never triggers.
+  //
+  // Yielding to iOS text interactions (the swipe must NEVER win these):
+  //   • a touch starting on/near the caret is a CARET DRAG — never armed;
+  //   • a touch near either END of a selection is a selection-HANDLE drag —
+  //     never armed (the middle of a selection still block-swipes);
+  //   • a swipe is a FLICK: if the finger hasn't latched within LATCH_MS it's
+  //     a long-press (loupe / word-select) — abandoned;
+  //   • iOS moving the selection mid-gesture (long-press select, autocorrect
+  //     bubble…) cancels an unlatched gesture — once latched we preventDefault
+  //     so the two can't interleave.
   // -------------------------------------------------------------------------
 
   _bindSwipe() {
-    const LATCH = 14;   // px of horizontal travel before the gesture claims the touch
-    const STEP = 48;    // px of drag per detent (indent level)
-    const MAXLVL = 6;   // sanity cap on preview levels per drag
+    const LATCH = 16;     // px of horizontal travel before the gesture claims the touch
+    const STEP = 48;      // px of drag per detent (indent level)
+    const MAXLVL = 6;     // sanity cap on preview levels per drag
+    const LATCH_MS = 300; // must latch this soon after touchstart — slower = long-press
+    const NEAR = 32;      // px around the caret / selection handles that never swipes
     const SWIPABLE = new Set(['bullet', 'ordered', 'task', 'quote']);
     let sw = null;
+
+    // iOS changing the selection under an unlatched gesture (long-press
+    // word-select, caret placement…) means the touch belongs to the text
+    // system, not to us.
+    document.addEventListener('selectionchange', () => {
+      if (sw && !sw.latched) sw = null;
+    });
+
+    const near = (t, rect) =>
+      rect && t.clientX > rect.left - NEAR && t.clientX < rect.right + NEAR &&
+      t.clientY > rect.top - NEAR / 2 && t.clientY < rect.bottom + NEAR / 2;
 
     this.root.addEventListener('touchstart', (e) => {
       sw = null;
@@ -689,10 +712,26 @@ export class WriterEditor {
       // A selection spanning the touched line swipes as one block.
       let a = idx, b = idx;
       const sel = this._selOffsets();
+      const focused = document.activeElement === this.root;
       if (sel && sel.start !== sel.end) {
         const la = this._lineAt(sel.start).lineIdx;
         const lb = this._lineAt(sel.end).lineIdx;
         if (idx >= la && idx <= lb) { a = la; b = lb; }
+      }
+      // Yield to the iOS text system: a touch on the caret is a caret drag,
+      // a touch near a selection endpoint is a handle drag.
+      if (focused) {
+        const domSel = window.getSelection();
+        if (domSel && domSel.rangeCount) {
+          const range = domSel.getRangeAt(0);
+          if (range.collapsed) {
+            if (near(t, this.caretRect())) return;
+          } else {
+            const rects = range.getClientRects();
+            if (rects.length && (near(t, rects[0]) && t.clientX < rects[0].left + NEAR
+              || near(t, rects[rects.length - 1]) && t.clientX > rects[rects.length - 1].right - NEAR)) return;
+          }
+        }
       }
       let anySwipable = false;
       // Outdent detents are bounded by what the leading whitespace can give up
@@ -707,8 +746,12 @@ export class WriterEditor {
       }
       if (!anySwipable) return;
       sw = {
-        id: t.identifier, x0: t.clientX, y0: t.clientY, a, b, maxOut,
+        id: t.identifier, x0: t.clientX, y0: t.clientY, t0: performance.now(), a, b, maxOut,
         divs: Array.prototype.slice.call(this.root.children, a, b + 1),
+        // Any edit replaces this.lines (autocorrect commit, composition…) —
+        // the captured indexes would then point at the WRONG lines, so the
+        // gesture dies with the model it was aimed at.
+        linesRef: this.lines,
         latched: false, level: 0,
       };
     }, { passive: true });
@@ -720,9 +763,17 @@ export class WriterEditor {
       if (!t) return;
       const dx = t.clientX - sw.x0;
       const dy = t.clientY - sw.y0;
+      if (sw.linesRef !== this.lines) {   // the document changed under the gesture
+        for (const d of sw.divs) d.style.transform = '';
+        sw = null;
+        return;
+      }
       if (!sw.latched) {
+        // A swipe is a flick — a touch still unlatched after LATCH_MS is a
+        // long-press (selection loupe), not an indent.
+        if (performance.now() - sw.t0 > LATCH_MS) { sw = null; return; }
         if (Math.abs(dy) > LATCH && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }  // it's a scroll
-        if (Math.abs(dx) < LATCH || Math.abs(dx) < 1.5 * Math.abs(dy)) return;
+        if (Math.abs(dx) < LATCH || Math.abs(dx) < 2 * Math.abs(dy)) return;
         sw.latched = true;
       }
       e.preventDefault();
@@ -737,8 +788,9 @@ export class WriterEditor {
     const end = (commit) => {
       if (!sw) return;
       const { a, b, level, divs } = sw;
+      const stale = sw.linesRef !== this.lines;
       sw = null;
-      if (commit && level) {
+      if (commit && level && !stale) {
         // The preview already sits at the final text position: clear the
         // transform transition-less in the same frame the edit re-renders.
         for (const d of divs) { d.style.transition = 'none'; d.style.transform = ''; }
