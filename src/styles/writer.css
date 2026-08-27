@@ -202,23 +202,19 @@ body {
 .wr-line .md { color: var(--dim); }
 .wr-line .bullet { color: var(--fg-mut); }
 
-/* Headings: same family, weight + a touch of size for hierarchy. */
-.t-h1 { font-weight: 700; font-size: 1.3em; line-height: 1.45; }
-.t-h2 { font-weight: 700; font-size: 1.12em; line-height: 1.5; }
-.t-h3, .t-h4, .t-h5, .t-h6 { font-weight: 700; }
+/* Headings: same family and SAME SIZE as body text (a uniform type size
+   keeps the editing surface calm and the ch-based indent math exact) —
+   hierarchy comes from weight alone; the preview supplies real sizes. */
+.t-h1, .t-h2, .t-h3, .t-h4, .t-h5, .t-h6 { font-weight: 700; }
 
 .t-quote { color: var(--fg-mut); font-style: italic; }
 .t-quote .md { font-style: normal; }
 
-.t-fence, .t-code {
-  background: var(--code-bg);
-  font-size: 0.92em;
-  line-height: 1.75;
-}
+.t-fence, .t-code { background: var(--code-bg); }
 
 .t-hr { color: var(--dim); letter-spacing: 0.2em; }
 
-.t-fm-fence, .t-fm { color: var(--fg-mut); font-size: 0.88em; line-height: 1.8; }
+.t-fm-fence, .t-fm { color: var(--fg-mut); }
 .t-fm .fm-key { color: var(--accent); }
 
 .wr-line code { background: var(--code-bg); border-radius: 3px; padding: 0 1px; }
