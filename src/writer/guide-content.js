@@ -27,8 +27,9 @@ menu): everything except the paragraph you are writing is dimmed.
 
 **Swipe to indent** — on a touch screen, drag a list or quote line
 sideways, the way Notes does it: **swipe right to indent, left to
-outdent**. Keep dragging for more than one level (a long swipe walks
-several; one undo reverts the whole swipe). If you've selected several
+outdent**. The line snaps between indent stops as you drag, and the
+change lands when you let go. Keep dragging for more than one level
+(a long swipe walks several; one undo reverts the whole swipe). If you've selected several
 lines, swiping any of them moves the block together. \`/indent\` and
 \`/outdent\` in the / menu do the same thing.
 
