@@ -8,8 +8,8 @@
 // CACHE_PREFIX namespaces caches per build type (e.g. "unifile-abc") so multiple
 // unifile PWAs installed on the same origin (markdown, abc, …) don't evict each
 // other's caches.  CACHE_VERSION appends a content hash so updates supersede.
-const CACHE_PREFIX  = 'unifile-abc';
-const CACHE_VERSION = 'unifile-abc-3c4bacfcba97';
+const CACHE_PREFIX  = 'unifile-wr';
+const CACHE_VERSION = 'unifile-wr-4ce03139a62c';
 const APP_SHELL = [
   './',
   './index.html',
