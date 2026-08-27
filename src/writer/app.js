@@ -106,6 +106,7 @@ export class WriterApp {
     this._refreshCount();
     this._bindSlashMenu();
     this._bindEditingChrome();
+    this._guardFocusScroll();
 
     if (!IS_QUINE && 'serviceWorker' in navigator) {
       this._bindServiceWorker();
@@ -817,6 +818,66 @@ export class WriterApp {
     window.visualViewport?.addEventListener('scroll', set);
     window.addEventListener('pageshow', set);
     [50, 200, 500].forEach(ms => setTimeout(set, ms));
+  }
+
+  /**
+   * iOS/WebKit: tapping the (unfocused) editor to place the caret can yank
+   * #wr-scroll to the TOP of the document.  The editor is one contenteditable
+   * spanning the whole document, and WebKit's focus-time "reveal the focused
+   * element" scroll (plus a scroll-anchoring bug while the keyboard opens)
+   * targets the ELEMENT's top rect, not the caret — so the view jumps to the
+   * first line while the caret sits where you tapped, off-screen.
+   *
+   * Guard: remember the scroller position when the tap lands; for a short
+   * window after the editor gains focus, any scroll that leaves the caret
+   * OUTSIDE the visible pane is the browser's bogus reveal — restore the
+   * tapped position (and, if the keyboard shrank the pane over the caret,
+   * nudge the caret back into the lower part of the view).  A scroll that
+   * keeps the caret visible (iOS's legit lift above the keyboard, or the
+   * user's own flick — which also cancels the guard via touchmove/wheel)
+   * is never touched.
+   */
+  _guardFocusScroll() {
+    const scroll = document.getElementById('wr-scroll');
+    let tapTop = null;      // scroller position at the moment of the tap
+    let guardUntil = 0;     // guard is live until this timestamp
+    let fixing = false;     // re-entrancy latch (our own fix fires 'scroll')
+
+    scroll.addEventListener('pointerdown', () => {
+      tapTop = scroll.scrollTop;
+      // Only a tap that is about to FOCUS the editor triggers the reveal
+      // scroll; taps while already editing never jump.
+      guardUntil = document.activeElement === this.editor.root ? 0 : Date.now() + 900;
+    }, { capture: true, passive: true });
+    // A deliberate scroll gesture / wheel hands control back to the user.
+    scroll.addEventListener('touchmove', () => { guardUntil = 0; }, { passive: true });
+    scroll.addEventListener('wheel', () => { guardUntil = 0; }, { passive: true });
+
+    const fix = () => {
+      if (fixing || Date.now() > guardUntil) return;
+      if (document.activeElement !== this.editor.root) return;
+      const box = scroll.getBoundingClientRect();
+      const rect = this.editor.caretRect();
+      if (!rect || !box.height) return;
+      const pad = 8;
+      if (rect.bottom >= box.top + pad && rect.top <= box.bottom - pad) return;  // caret visible — all good
+      fixing = true;
+      if (tapTop != null) scroll.scrollTop = tapTop;
+      const r2 = this.editor.caretRect();
+      if (r2 && (r2.top < box.top + pad || r2.bottom > box.bottom - pad)) {
+        scroll.scrollTop += r2.top - (box.top + box.height * 0.6);
+      }
+      fixing = false;
+    };
+
+    // The bogus reveal can land any time between focus and the end of the
+    // keyboard animation — check on every scroll in the window, plus a few
+    // timed sweeps (visualViewport resize = the keyboard actually moving).
+    scroll.addEventListener('scroll', fix, { passive: true });
+    window.visualViewport?.addEventListener('resize', () => setTimeout(fix, 0));
+    this.editor.root.addEventListener('focus', () => {
+      [0, 60, 160, 350, 650].forEach(ms => setTimeout(fix, ms));
+    });
   }
 
   _lockWindowScroll() {
