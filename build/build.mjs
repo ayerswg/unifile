@@ -81,6 +81,29 @@ export const APP_VERSION = detectVersion();
 // two builds of the SAME version are distinguishable when debugging caching.
 export const APP_BUILT = new Date().toISOString().slice(0, 19) + 'Z';
 
+// Commit identity — 7-char hash + commit timestamp, shown in About.  The dev
+// channel (dev.unifile.app = the `dev` branch's Cloudflare Pages preview)
+// deploys every push without a version bump, so the hash is the only way to
+// tell which build you're looking at.  Cloudflare's shallow checkout has no
+// tags but does have HEAD, and Pages also exports CF_PAGES_COMMIT_SHA.
+function detectCommit() {
+  let sha = process.env.CF_PAGES_COMMIT_SHA || null;
+  if (!sha) {
+    try {
+      sha = execSync('git rev-parse HEAD', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString().trim() || null;
+    } catch { /* not a git checkout (e.g. source tarball) */ }
+  }
+  let at = null;
+  try {
+    at = execSync('git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd', {
+      cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TZ: 'UTC' }
+    }).toString().trim() || null;
+  } catch { /* ditto */ }
+  return { hash: sha ? sha.slice(0, 7) : '', at: at || '' };
+}
+export const APP_COMMIT = detectCommit();
+
 // ---------------------------------------------------------------------------
 // esbuild plugins for bundle size / offline behaviour
 // ---------------------------------------------------------------------------
@@ -267,7 +290,9 @@ function buildOptions(entryPoint, unifileMode, plugins) {
       'process.env.NODE_ENV': DEV ? '"development"' : '"production"',
       'UNIFILE_MODE': `"${unifileMode}"`,
       'UNIFILE_VERSION': JSON.stringify(APP_VERSION),
-      'UNIFILE_BUILT': JSON.stringify(APP_BUILT)
+      'UNIFILE_BUILT': JSON.stringify(APP_BUILT),
+      'UNIFILE_COMMIT': JSON.stringify(APP_COMMIT.hash),
+      'UNIFILE_COMMIT_AT': JSON.stringify(APP_COMMIT.at)
     },
     logOverride: { 'indirect-require': 'silent' },
     plugins: esPlugins,

@@ -14,7 +14,7 @@
  * scroll is pinned to (0,0), and only #wr-scroll scrolls.
  */
 
-/* global UNIFILE_VERSION, UNIFILE_BUILT */
+/* global UNIFILE_VERSION, UNIFILE_BUILT, UNIFILE_COMMIT, UNIFILE_COMMIT_AT */
 
 import {
   IS_QUINE, captureTemplate, loadEmbeddedData, generateQuine,
@@ -32,6 +32,8 @@ import { GUIDE_MD } from './guide-content.js';
 
 const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
 const BUILT = (typeof UNIFILE_BUILT !== 'undefined') ? UNIFILE_BUILT : 'dev';
+const COMMIT = (typeof UNIFILE_COMMIT !== 'undefined') ? UNIFILE_COMMIT : '';
+const COMMIT_AT = (typeof UNIFILE_COMMIT_AT !== 'undefined') ? UNIFILE_COMMIT_AT : '';
 const DOC_ID = 'writer';
 
 const SEED = `---
@@ -728,7 +730,8 @@ export class WriterApp {
       <div class="wr-sheet-head">About</div>
       <div class="wr-sheet-body">
         <p><b>Unifile Writer</b> v${esc(VERSION)}
-          <span class="wr-mut">· build ${esc(BUILT)}</span></p>
+          <span class="wr-mut">· build ${esc(BUILT)}${COMMIT
+            ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(COMMIT_AT.slice(0, 16).replace('T', ' '))}Z)` : ''}` : ''}</span></p>
         <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'
           : 'App mode — your document is stored on this device (IndexedDB).'}</p>
         <p class="wr-mut">Fully offline. Nothing leaves your device. <br>unifile.app</p>

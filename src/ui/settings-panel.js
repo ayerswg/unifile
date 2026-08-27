@@ -13,6 +13,8 @@ import { checkForUpdate } from './update-check.js';
 // Stamped by esbuild `define` in build.mjs (from the latest git tag); guard for
 // any non-built context (e.g. raw ESM in tests).
 const APP_VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
+const APP_COMMIT = (typeof UNIFILE_COMMIT !== 'undefined') ? UNIFILE_COMMIT : '';
+const APP_COMMIT_AT = (typeof UNIFILE_COMMIT_AT !== 'undefined') ? UNIFILE_COMMIT_AT : '';
 
 export class SettingsPanel {
   /** @param {HTMLElement} container */
@@ -131,7 +133,9 @@ export class SettingsPanel {
             <!-- ── About ──────────────────────────────────────────────── -->
             <div class="settings-section-label">About</div>
             <p class="settings-about">
-              Unifile <span class="settings-version">v${escHtml(APP_VERSION)}</span>
+              Unifile <span class="settings-version">v${escHtml(APP_VERSION)}</span>${APP_COMMIT
+                ? ` · <span class="settings-version">${escHtml(APP_COMMIT)}</span>${APP_COMMIT_AT
+                  ? ` · ${escHtml(APP_COMMIT_AT.slice(0, 16).replace('T', ' '))}Z` : ''}` : ''}
             </p>
           </div>
 

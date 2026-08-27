@@ -87,6 +87,24 @@ function detectChannels() {
   return { stable, latest };
 }
 
+/** 7-char commit hash + commit time (UTC) — mirrors detectCommit in build.mjs. */
+function detectCommit() {
+  let sha = process.env.CF_PAGES_COMMIT_SHA || null;
+  if (!sha) {
+    try {
+      sha = execSync('git rev-parse HEAD', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString().trim() || null;
+    } catch { /* not a git checkout */ }
+  }
+  let at = null;
+  try {
+    at = execSync('git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd', {
+      cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TZ: 'UTC' }
+    }).toString().trim() || null;
+  } catch { /* ditto */ }
+  return { hash: sha ? sha.slice(0, 7) : '', at: at || '' };
+}
+
 const FILES = [
   ['unifile.md.html',  'dl/unifile.md.html'],
   ['unifile.mer.html', 'dl/unifile.mer.html'],
@@ -144,9 +162,13 @@ async function main() {
   //    read a single field; new clients pick `stable` or `latest` per the user's
   //    release-candidate opt-in (Settings).
   const { stable, latest } = detectChannels();
+  const commit = detectCommit();
   await writeFile(join(DOCS, 'version.json'),
-    JSON.stringify({ version: stable, stable, latest, released: new Date().toISOString() }, null, 2) + '\n', 'utf8');
-  console.log(`  ✓ docs/version.json  (stable v${stable}, latest v${latest})`);
+    JSON.stringify({
+      version: stable, stable, latest, released: new Date().toISOString(),
+      commit: commit.hash, commitAt: commit.at
+    }, null, 2) + '\n', 'utf8');
+  console.log(`  ✓ docs/version.json  (stable v${stable}, latest v${latest}, commit ${commit.hash || 'n/a'})`);
 
   console.log('\nSite synced. Commit docs/ and push to publish on GitHub Pages.');
 }
