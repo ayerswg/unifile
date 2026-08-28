@@ -32,7 +32,7 @@
  */
 
 import * as esbuild from 'esbuild';
-import { readFile, writeFile, mkdir, unlink } from 'fs/promises';
+import { readFile, writeFile, mkdir, unlink, copyFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { gzipSync } from 'zlib';
@@ -393,10 +393,18 @@ async function buildPWA(plugins, meta, tag) {
   ]);
 
   // Stamp the variant identity into the manifest + shell so each type installs
-  // as its own app, seeded with the right default DSL.
-  const manifest = manifestRaw
-    .replace(/"name":\s*"[^"]*"/,       () => `"name": ${JSON.stringify(appName)}`)
-    .replace(/"short_name":\s*"[^"]*"/, () => `"short_name": ${JSON.stringify(appName)}`);
+  // as its own app, seeded with the right default DSL.  Icons are the per-type
+  // U-border set (build/icons.mjs → committed PNGs in templates/icons/<abbrev>/,
+  // copied alongside the shell below).
+  const manifestJson = JSON.parse(manifestRaw);
+  manifestJson.name = appName;
+  manifestJson.short_name = appName;
+  manifestJson.icons = [
+    { src: './icon-192.png',          sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: './icon-512.png',          sizes: '512x512', type: 'image/png', purpose: 'any' },
+    { src: './icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+  ];
+  const manifest = JSON.stringify(manifestJson, null, 2) + '\n';
   const pwaHtml = pwaHtmlRaw
     .replace(/<title>[^<]*<\/title>/, () => `<title>${appName}</title>`)
     .replace(/(apple-mobile-web-app-title"\s+content=")[^"]*"/, (_, p) => `${p}${appName}"`)
@@ -419,12 +427,17 @@ async function buildPWA(plugins, meta, tag) {
     .replace('UNIFILE_CACHE_PREFIX',  () => cachePrefix)
     .replace('UNIFILE_CACHE_VERSION', () => cacheVersion);
 
+  // Per-variant icon PNGs (committed; regenerate with `node build/gen-icons.mjs`).
+  const iconDir = join(TEMPLATES, 'icons', meta.abbrev);
+  const iconFiles = ['icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
+
   await Promise.all([
     writeFile(join(pwaDir, 'app.js'),        jsResult.outputFiles[0].text, 'utf8'),
     writeFile(join(pwaDir, 'app.css'),       css,                          'utf8'),
     writeFile(join(pwaDir, 'index.html'),    pwaHtml,                      'utf8'),
     writeFile(join(pwaDir, 'sw.js'),         swStamped,                    'utf8'),
-    writeFile(join(pwaDir, 'manifest.json'), manifest,                     'utf8')
+    writeFile(join(pwaDir, 'manifest.json'), manifest,                     'utf8'),
+    ...iconFiles.map(f => copyFile(join(iconDir, f), join(pwaDir, f)))
   ]);
 
   const kb = ((jsResult.outputFiles[0].text.length + css.length) / 1024).toFixed(0);

@@ -12,7 +12,8 @@
     "build:site": "node build/sync-site.mjs",
     "site:preview": "node build/render-site.mjs",
     "gen:soundfont": "node build/gen-soundfont.mjs",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "gen:icons": "node build/gen-icons.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.20.0"
