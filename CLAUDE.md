@@ -72,8 +72,13 @@ build/
   build.mjs          esbuild pipeline (one quine + PWA per dedicated DSL variant)
   sync-site.mjs      Builds variants + copies into docs/ + writes docs/version.json
   render-site.mjs    No-Ruby site renderer (docs/ → docs/_site); Cloudflare's production build
+  icons.mjs          The U-border icon system (single source: glyph paths + iconSvg());
+                     maps each variant to its u-codename (writer=uPub, markdown=uDoc,
+                     mermaid=uDraw, abcjs=uNote)
+  gen-icons.mjs      One-off: rasterize icons.mjs → templates/icons/<abbrev>/*.png via
+                     headless Chromium (committed, like the soundfont — CI never needs a browser)
   gen-soundfont.mjs  One-off: fetch FluidR3 piano → src/assets/piano-soundfont.js (network!)
-templates/           quine.html, pwa.html, sw.js, manifest.json
+templates/           quine.html, pwa.html, sw.js, manifest.json, icons/<abbrev>/*.png
 docs/                The website (Cloudflare Pages; rendered by render-site.mjs) + committed build artifacts
 dist/                Build output (gitignored)
 ```
@@ -95,7 +100,7 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 - `UNIFILE_MODE` = `"quine"` | `"pwa"` → `IS_QUINE` in storage.js.
 - `UNIFILE_VERSION` = the git tag (see Versioning).
 
-**Two build targets per variant:** `buildQuine()` embeds the JS **gzip+base64** into the HTML template's `<script id="unifile-data">` region (so plain-text grep won't find code strings in a quine — grep the PWA's `app.js` instead). `buildPWA()` writes plain files + a service worker whose cache name is namespaced per type (`unifile-abc`, etc.) with a content hash so updates supersede cleanly.
+**Two build targets per variant:** `buildQuine()` embeds the JS **gzip+base64** into the HTML template's `<script id="unifile-data">` region (so plain-text grep won't find code strings in a quine — grep the PWA's `app.js` instead). `buildPWA()` writes plain files + a service worker whose cache name is namespaced per type (`unifile-abc`, etc.) with a content hash so updates supersede cleanly. Each PWA also gets its **per-variant U-border icons** (copied from `templates/icons/<abbrev>/`, stamped into the manifest + `<link rel="apple-touch-icon">`; regenerate with `npm run gen:icons` after editing `build/icons.mjs`), and `templates/pwa.html` carries a self-contained **pre-install banner** (shows only outside `display-mode: standalone`, per-device install walkthrough, `beforeinstallprompt` when available, dismissal persisted per path in localStorage — template-level so it covers the standard shell AND Writer).
 
 **Direction (2026-07):** dedicated per-content-type builds only — the universal multi-DSL app and the runtime drag-drop plugin system were removed. `npm run build:abcjs` is the flagship (ships the offline piano).
 
@@ -276,9 +281,9 @@ Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`
 
 **Hosted on Cloudflare Pages** (as of 2026-07; migrated off GitHub Pages, which was flaky/queue-stuck). Project `unifile` → `unifile-8yt.pages.dev`, custom domain **`unifile.app`**. Cloudflare **auto-builds on every push to `main`** with build command `npm run build:site && npm run site:preview` and output dir **`docs/_site`**. No queue, no Ruby. GitHub Pages is unpublished; `docs/CNAME` was removed (Cloudflare manages the custom domain via a proxied `CNAME` record in its own DNS — the domain's DNS lives on Cloudflare, registrar stays Namecheap).
 
-**The site is rendered by `build/render-site.mjs`** (`npm run site:preview`) — a **no-Ruby Node renderer** (uses `marked`) that reads `docs/` (top-level `*.md` pages, `_posts`, `_data/{apps,types}.yml`, the `launcher` include), writes rendered HTML + `search.json` into `docs/_site`, and copies through `assets/`, `dl/`, `pwa-{md,mer,abc}/`, `version.json`. It was formerly just a local preview mirror; **it is now the production build**, so if you change layouts/includes you must update `render-site.mjs` (it only understands a small hand-rolled Liquid subset — the post/app-list loops + the launcher include — not full Jekyll). `docs/_site/` is a build output (gitignored). Note: `npm run build:site` still regenerates + commits `docs/dl/*` and `docs/pwa-*/`, but Cloudflare rebuilds them from source anyway, so committing them is now redundant (candidate cleanup).
+**The site is rendered by `build/render-site.mjs`** (`npm run site:preview`) — a **no-Ruby Node renderer** (uses `marked`) that reads `docs/` (top-level `*.md` pages, `_posts`, `_data/{apps,types}.yml`; the `{% include launcher.html %}` token in hub pages is rendered by `renderLauncher()` — there is no include file), writes rendered HTML + `search.json` into `docs/_site`, and copies through `assets/`, `dl/`, `pwa-{md,mer,abc,wr}/`, `version.json`. **It is the production build** — all layouts live as template strings inside it (the Jekyll `_layouts`/`_includes`/`_config.yml`/`Gemfile` were deleted in the 2026-08 redesign). `docs/_site/` is a build output (gitignored). Note: `npm run build:site` still regenerates + commits `docs/dl/*` and `docs/pwa-*/`, but Cloudflare rebuilds them from source anyway, so committing them is now redundant (candidate cleanup).
 
-Navigation is a **command-bar** (type to jump; index = `docs/search.json`). Per-type front doors (`/get/`=Markdown, `/mermaid/`, `/abc/`) device-detect and route via `launcher.html` + `assets/js/launch.js` (install PWA on mobile; PWA or `.html` on desktop).
+**Design (2026-08 redesign): static old-school mainframe terminal** — green phosphor on black, IBM Plex Mono, ISPF-style "PRIMARY OPTION MENU". One deliberate dark look; the theme toggle and the command-bar navigation were **removed** (nav = plain header links + an F-key footer bar). The **home page is the app listing**: one row per type with its U-border icon + codename (uDoc/uDraw/uPub/uNote, inlined themed via `iconSvg()` from `build/icons.mjs`) and three actions — INSTALL / OPEN / DOWNLOAD. **INSTALL opens the per-device walkthrough modal** (`assets/js/install.js`, `[data-install]` triggers, tabs for iPhone/Android/Desktop defaulting to the visitor's platform; step 1 is always "open the app" because a PWA can only be installed from its own scope — the PWA's own pre-install banner takes over from there). `search.json` is still generated (the in-app site-nav fetches it); the committed Jekyll-era `docs/search.json` source file is gone. Per-type front doors (`/get/`=Markdown, `/mermaid/`, `/abc/`, `/writer/`) keep the device-aware `assets/js/launch.js` buttons and also link the walkthrough modal.
 
 **Cloudflare clean-URL gotcha:** Pages 308-redirects `/foo.html` → `/foo`, which would strip the `.html` off a downloaded quine. The download links therefore set an explicit `download="unifile.<abbrev>.html"` (in `launch.js` + both no-JS launcher fallbacks) so the saved filename is preserved.
 
