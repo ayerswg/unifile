@@ -410,26 +410,26 @@ async function buildPWA(plugins, meta, tag) {
     .replace(/(apple-mobile-web-app-title"\s+content=")[^"]*"/, (_, p) => `${p}${appName}"`)
     .replace(/"dslType":\s*"[^"]*"/, () => `"dslType": ${JSON.stringify(meta.defaultDslType)}`);
 
-  // Content-hash cache version so each new build invalidates its own cache;
-  // prefixed by type so it only ever supersedes caches of the same type.  Hash
-  // ALL cached shell files (js, css, html, manifest) so a change to the CSP or
-  // manifest alone — not just app.js — still busts the service-worker cache.
-  const cacheVersion = `${cachePrefix}-${
-    createHash('sha256')
-      .update(jsResult.outputFiles[0].text)
-      .update(css)
-      .update(pwaHtml)
-      .update(manifest)
-      .digest('hex')
-      .slice(0, 12)
-  }`;
-  const swStamped = sw
-    .replace('UNIFILE_CACHE_PREFIX',  () => cachePrefix)
-    .replace('UNIFILE_CACHE_VERSION', () => cacheVersion);
-
   // Per-variant icon PNGs (committed; regenerate with `node build/gen-icons.mjs`).
   const iconDir = join(TEMPLATES, 'icons', meta.abbrev);
   const iconFiles = ['icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
+  const iconData = await Promise.all(iconFiles.map(f => readFile(join(iconDir, f))));
+
+  // Content-hash cache version so each new build invalidates its own cache;
+  // prefixed by type so it only ever supersedes caches of the same type.  Hash
+  // ALL precached shell files (js, css, html, manifest, icons) so a change to
+  // the CSP, manifest or icons alone — not just app.js — still busts the
+  // service-worker cache.
+  const shellHash = createHash('sha256')
+    .update(jsResult.outputFiles[0].text)
+    .update(css)
+    .update(pwaHtml)
+    .update(manifest);
+  for (const buf of iconData) shellHash.update(buf);
+  const cacheVersion = `${cachePrefix}-${shellHash.digest('hex').slice(0, 12)}`;
+  const swStamped = sw
+    .replace('UNIFILE_CACHE_PREFIX',  () => cachePrefix)
+    .replace('UNIFILE_CACHE_VERSION', () => cacheVersion);
 
   await Promise.all([
     writeFile(join(pwaDir, 'app.js'),        jsResult.outputFiles[0].text, 'utf8'),

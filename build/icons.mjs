@@ -24,7 +24,11 @@ export const ICON_BG = '#0a0f0a';
 export const ICON_FG = '#4af626';
 
 // The U border: rounded square, top intentionally open.  ViewBox is 0 0 96 96.
-const U_BORDER = 'M 10 8 L 10 68 A 20 20 0 0 0 30 88 L 66 88 A 20 20 0 0 0 86 68 L 86 8';
+// The arms deliberately stop short of the top edge (y=16, not ~6): iOS renders
+// home-screen icons in a square/squircle with tight corner cropping, and
+// full-height arms read as touching the mask.  The glyphs stay where they are —
+// only the arms were shortened.
+const U_BORDER = 'M 10 16 L 10 68 A 20 20 0 0 0 30 88 L 66 88 A 20 20 0 0 0 86 68 L 86 16';
 
 // Glyphs — arrays of path `d` strings, drawn inside the U (roughly x 26–70, y 22–66).
 const GLYPHS = {

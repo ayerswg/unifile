@@ -317,7 +317,7 @@ in **\u22EF menu \u2192 About**, with a manual "Check for updates" button.
 There is no server. The only network request the app ever makes is a
 version check against \`unifile.app/version.json\` to offer updates. Your
 text never leaves the device unless *you* export or share it.
-`;var Te="0.4.3",Ai="2026-08-28T14:10:04Z",Li="d2d9a39",Ci="2026-08-27T16:30:47Z",Zt="writer",dr=`---
+`;var Te="0.4.3",Ai="2026-08-29T23:56:54Z",Li="3ae63c9",Ci="2026-08-29T02:52:30Z",Zt="writer",dr=`---
 title: Untitled
 author:
 ---
