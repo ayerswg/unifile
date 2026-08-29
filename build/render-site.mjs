@@ -152,17 +152,21 @@ function navBar(url) {
 // ── home: the primary option menu ───────────────────────────────────────────
 function layoutHome(types) {
   const shortName = (t) => t.title.replace(/^Unifile\s+/i, '').toUpperCase();
+  // The sysline already says FULLY OFFLINE — drop the redundant tagline suffix
+  // so the one-line descriptions fit without truncating.
+  const menuDesc = (t) => (t.tagline || '').replace(/\s*[—-]\s*(fully\s+)?offline\.?\s*$/i, '.');
   const rows = types.map((t, i) => {
     const ic = ICONS[TYPE_TO_ICON[t.id]] || {};
     const hub = t.id === 'markdown' ? '/get/' : `/${t.id}/`;
     const dlName = (t.download || '').split('/').pop();
     return `<li class="menu-row">
-  <span class="menu-opt">${i + 1}</span>
   <a class="menu-app" href="${rel(hub)}" title="About ${esc(t.title)}">
-    <span class="menu-icon">${iconSvg(ic.glyph, { size: 44 })}</span>
+    <span class="menu-opt">${i + 1}</span>
+    <span class="menu-icon">${iconSvg(ic.glyph, { size: 40 })}</span>
+    <span class="menu-code">${esc(ic.codename || '')}</span>
     <span class="menu-id">
-      <span class="menu-line"><span class="menu-code">${esc(ic.codename || '')}</span><span class="menu-name">${shortName(t)}</span></span>
-      <span class="menu-desc">${esc(t.tagline || '')}</span>
+      <span class="menu-name">${shortName(t)}</span>
+      <span class="menu-desc">${esc(menuDesc(t))}</span>
     </span>
   </a>
   <span class="menu-actions">
@@ -182,8 +186,8 @@ function layoutHome(types) {
     <span class="tbar-ready">READY<span class="cursor"></span></span>
   </header>
 
-  <p class="sysline">SINGLE-FILE DOCUMENT APPS &mdash; FULLY OFFLINE, GIT-STYLE HISTORY BUILT IN.
-NO SERVER. NO ACCOUNT. NOTHING EVER LEAVES YOUR DEVICE.</p>
+  <p class="sysline">SINGLE-FILE DOCUMENT APPS WITH BUILT-IN VERSION HISTORY.
+FULLY OFFLINE &mdash; NO SERVER, NO ACCOUNT, NOTHING LEAVES YOUR DEVICE.</p>
 
   <div class="rule">SELECT AN APPLICATION</div>
 
@@ -193,9 +197,9 @@ ${rows}
 
   <div class="rule">NOTES</div>
   <dl class="notes">
-    <dt>INSTALL</dt><dd>step-by-step guide for <em>your</em> device (iPhone, Android, desktop) &mdash; the app goes on your home screen or dock and works with no connection.</dd>
-    <dt>OPEN</dt><dd>run it right here in the browser &mdash; you can install it from there too.</dd>
-    <dt>DOWNLOAD</dt><dd>one <code>.html</code> file that <em>is</em> the whole app plus your document and its history. Save it, open it anywhere, even from a USB stick.</dd>
+    <dt>INSTALL</dt><dd>step-by-step guide for your device &mdash; the app goes on your home screen or dock, works with no connection.</dd>
+    <dt>OPEN</dt><dd>run it in the browser; you can install it from there too.</dd>
+    <dt>DOWNLOAD</dt><dd>one <code>.html</code> file that <em>is</em> the whole app plus your document and its history &mdash; open it anywhere.</dd>
   </dl>
 
   ${fkeyBar()}
