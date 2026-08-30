@@ -442,7 +442,8 @@ function layoutFloor(floorStmts, meta, issues) {
         const x = along === 'e' ? bb.x + bb.w - rw : along === 'w' ? bb.x : bb.x + (bb.w - rw) / 2;
         const y = along === 's' ? bb.y + bb.h - rh : along === 'n' ? bb.y : bb.y + (bb.h - rh) / 2;
         stairs.push({ rect: { x: Math.round(x), y: Math.round(y), w: rw, h: rh },
-          runAxis: vertical ? 'v' : 'h', dir: stmt.dir,
+          runAxis: vertical ? 'v' : 'h', dir: stmt.dir, roomId: room.id,
+          width: stmt.w, run: stmt.h,
           line: stmt.line, from: stmt.from, to: stmt.to });
         break;
       }
@@ -654,6 +655,8 @@ function resolveOpening(stmt, ctx) {
     axis: seg.axis, band: seg.band, lo, hi,
     shared: !!seg.shared,
     rooms: seg.shared ? [seg.loSideRoom, seg.hiSideRoom] : [roomA.id],
+    wallSide: exteriorSide,                               // exterior openings only
+    width, offsetFromLo: lo - measureLo,                  // for the inspector
     into, hingeEnd, openDir,
     line: stmt.line, from: stmt.from, to: stmt.to,
   };

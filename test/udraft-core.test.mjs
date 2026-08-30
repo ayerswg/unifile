@@ -339,9 +339,13 @@ test('svg: entities carry hit rects; a labelled room label targets its label lin
   // Doors, windows, openings, stairs, fixtures, dims all get ud-hit rects.
   assert.ok((svg.match(/class="ud-hit"/g) || []).length >= 8, svg.match(/ud-hit/g)?.length);
   // The living room's label block is its own target, pointing at the `label` line.
-  const label = /<g class="ud-ent ud-roomlabel" data-doc-from="(\d+)" data-doc-to="(\d+)">/.exec(svg);
+  const label = /<g class="ud-ent ud-roomlabel"[^>]*data-doc-from="(\d+)" data-doc-to="(\d+)">/.exec(svg);
   assert.ok(label, 'labelled room has a ud-roomlabel target');
   assert.match(HOUSE.slice(+label[1], +label[2]), /^label living/);
+  // Room interior hit paths render BEFORE entities (so objects win the tap)
+  // and label groups render after.
+  assert.ok(svg.indexOf('ud-room-hit') < svg.indexOf('ud-door'), 'room hits under entities');
+  assert.ok(svg.indexOf('ud-roomlabel') > svg.indexOf('ud-fixture'), 'labels over entities');
   // Exports stay clean of hit machinery.
   const doc = renderExportSvg(scene, 0);
   assert.doesNotMatch(doc, /ud-hit/);

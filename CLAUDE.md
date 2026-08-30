@@ -288,13 +288,25 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
   `0`/negative left). `crossFloorStairsCheck` warns when an `up`/`down`
   flight has no stairs overlapping its footprint on the adjacent floor.
 - **The eye toggles the blueprint** (uPub's preview pattern): floor tabs when
-  multiple `floor` blocks exist, issue strip (tap → source line), entity
-  click → jump to the statement. **Every entity is a real click target** —
-  thin strokes are hopeless taps, so interactive renders add invisible
-  `ud-hit` rects per entity (transparent fill still hit-tests); a room's
-  label block targets its `label` statement when one exists (innermost
-  data-doc-from wins), the interior targets the `room` line; exports carry
-  none of it. **Zoom/pan rewrites the svg VIEWBOX, not a CSS transform**
+  multiple `floor` blocks exist, issue strip (tap → source line). Plan
+  interaction is HIERARCHICAL (`_bindPlanNav`): tap a room → enter its
+  context (`_ctxRoomId` — the label moves up into the context bar
+  `#ud-ctxbar`, the interior tints, the view animates to the room); tap an
+  object → select (`_selFrom`, dashed marquee + accent) and the bar shows its
+  specifics (`_entInfo`: size/wall/position/swing…); tap empty → step back
+  out; **long-press (550 ms, <8 px movement) or the bar's ‹/› button → jump
+  to the DSL line**. State survives live re-renders via `_entIndex` (records
+  keyed by statement offset) and drops when the statement no longer resolves.
+  **Every entity is a real tap target** — thin strokes are hopeless taps, so
+  interactive renders add invisible `ud-hit` rects per entity (transparent
+  fill still hit-tests); exports carry none of it. **LAYERING IS LOAD-BEARING**:
+  room interior hit paths render just above the walls and label groups render
+  LAST — rendering room hits late shadowed every object inside the room (real
+  bug; a label group targets its `label` statement when one exists, else the
+  `room` line). **Do NOT setPointerCapture on pointerdown** — capture
+  retargets the compatibility `click` to the captured element, so taps never
+  reach entity groups (real bug; capture only once a drag latches).
+  **Zoom/pan rewrites the svg VIEWBOX, not a CSS transform**
   (transform-scaled svg rasterizes at layout size and blurs; a narrowed
   viewBox stays vector-crisp): wheel zooms at the cursor, one pointer pans,
   two pinch, −/⛶/+ buttons (`_bindZoom`; `this._view` survives live

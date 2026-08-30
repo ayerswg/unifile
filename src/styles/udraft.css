@@ -61,6 +61,56 @@
 }
 #ud-ptabs button.active { color: var(--accent); border-color: var(--accent); }
 
+/* ── Context bar — breadcrumb + object inspector ──────────────────────────── */
+
+#ud-ctxbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 14px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  min-height: 44px;
+}
+#ud-ctxbar[hidden] { display: none; }
+#ud-ctxbar button {
+  appearance: none;
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-mut);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-ctxbar button:active { background: var(--bg-alt); color: var(--accent); }
+#ud-ctx-back { font: 600 20px/1 -apple-system, system-ui, sans-serif; }
+#ud-ctx-src  { font: 600 12px/1 ui-monospace, "SF Mono", Menlo, monospace; }
+#ud-ctx-text {
+  flex: 1;
+  min-width: 0;
+  font: 500 14px/1.35 -apple-system, system-ui, sans-serif;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#ud-ctx-text .ud-crumb { color: var(--fg-mut); font-weight: 400; }
+#ud-ctx-text .ud-spec {
+  display: block;
+  color: var(--fg-mut);
+  font: 400 12.5px/1.3 ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #ud-issues {
   flex: none;
   display: flex;
@@ -92,6 +142,9 @@
   min-height: 0;
   overflow: hidden;       /* zoom/pan owns this surface — no native scroll */
   touch-action: none;     /* one finger pans, two pinch (app.js _bindZoom) */
+  -webkit-touch-callout: none;   /* long-press = jump to source, not iOS menu */
+  user-select: none;
+  -webkit-user-select: none;
   padding: 14px;
   cursor: grab;
 }
@@ -128,12 +181,30 @@
 
 #ud-plan .ud-ent { cursor: pointer; }
 #ud-plan .ud-hit { pointer-events: all; }
+#ud-plan .ud-room-hit { pointer-events: all; cursor: pointer; }
 #ud-plan .ud-ent:hover .ud-sym,
 #ud-plan .ud-ent:hover .ud-thin { stroke: var(--accent); }
 #ud-plan .ud-ent:hover .ud-txt  { fill: var(--accent); }
 /* Hovering a room's interior shouldn't light the label if the label is its
    own target (a `label` statement) — the inner group re-scopes the hover. */
 #ud-plan .ud-ent.ud-roomlabel:hover .ud-txt { fill: var(--accent); }
+
+/* Selected object: accent linework + a dashed marquee over its hit area. */
+#ud-plan .ud-selected .ud-sym,
+#ud-plan .ud-selected .ud-thin { stroke: var(--accent); }
+#ud-plan .ud-selected .ud-txt  { fill: var(--accent); }
+#ud-plan .ud-selected > .ud-hit {
+  stroke: var(--accent);
+  stroke-width: 18;
+  stroke-dasharray: 90 60;
+  fill: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* Room context: the in-plan label moves up into the context bar, and the
+   interior gets a whisper of tint so the focus reads.  (The hit path and the
+   label are separate top-level layers — see svg.js — so ud-ctx lands on both.) */
+#ud-plan .ud-roomlabel.ud-ctx { display: none; }
+#ud-plan .ud-room-hit.ud-ctx { fill: color-mix(in srgb, var(--accent) 5%, transparent); }
 
 /* ── Zoom controls (bottom-right of the preview) ──────────────────────────── */
 

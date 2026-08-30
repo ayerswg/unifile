@@ -10,9 +10,18 @@ blueprint. You write statements — one per line — and the plan draws itself:
 walls, door swings, window symbols, dimension strings, room labels with areas.
 
 Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
-On the drawing: **scroll or pinch to zoom, drag to pan** (the −/⛶/+ buttons
-do the same; ⛶ fits the whole floor), and **tap anything** — a room, a door,
-a sink, a dimension — to jump to the line that drew it.
+
+On the drawing:
+
+- **Scroll or pinch to zoom, drag to pan** (the −/⛶/+ buttons do the same;
+  ⛶ fits the whole floor).
+- **Tap a room** to step into it — the view zooms to the room and its name
+  moves up into the context bar.
+- **Tap an object** — a door, a sink, a stair, a dimension — to select it:
+  it highlights and the bar shows its specifics (size, wall, position,
+  swing…). Tap empty space (or ‹) to step back out.
+- **Long-press anything** (or tap **‹/›** in the bar) to jump to the DSL
+  line that defines it.
 
 ## Rooms — the spine
 

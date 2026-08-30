@@ -35,7 +35,7 @@ import { UPubEditor } from '../upub/editor.js';
 import { SlashMenu } from '../upub/slash-menu.js';
 import { renderMarkdown } from '../upub/preview.js';
 import * as udSyntax from './syntax.js';
-import { parseDocument, formatArea, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES } from '../core/udraft/parse.js';
+import { parseDocument, formatArea, formatLength, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SIDE_NAMES } from '../core/udraft/parse.js';
 import { layoutDocument } from '../core/udraft/layout.js';
 import { renderFloorSvg, renderExportSvg, renderPrintBody, exportStyles } from '../core/udraft/svg.js';
 import { GUIDE_MD } from './guide-content.js';
@@ -285,6 +285,11 @@ export class UDraftApp {
         <div id="wr-scroll"><div id="wr-sheet"></div></div>
         <div id="wr-preview" hidden>
           <div id="ud-ptabs" hidden></div>
+          <div id="ud-ctxbar" hidden>
+            <button id="ud-ctx-back" aria-label="Back">‹</button>
+            <div id="ud-ctx-text"></div>
+            <button id="ud-ctx-src" title="Show in source" aria-label="Show in source">‹/›</button>
+          </div>
           <div id="ud-issues" hidden></div>
           <div id="ud-plan"></div>
           <div id="ud-zoomctl">
@@ -322,13 +327,12 @@ export class UDraftApp {
       if (e.key === 'Escape') this._closeSheet();
     });
 
-    // Blueprint click-to-source: any drawn entity carries its statement's
-    // absolute char offsets (a pan/pinch drag suppresses the click).
-    document.getElementById('ud-plan').addEventListener('click', (e) => {
-      if (this._planDragged) return;
-      const ent = e.target.closest('[data-doc-from]');
-      if (ent) this._jumpToSource(+ent.dataset.docFrom, +ent.dataset.docTo);
-    });
+    // Blueprint interaction (hierarchical — see _bindPlanNav):
+    //   tap a room       → enter the room's context (breadcrumb bar, zoom in)
+    //   tap an object    → select it: highlight + its specifics in the bar
+    //   tap empty space  → step back out (selection first, then room context)
+    //   LONG-PRESS       → jump to the DSL line that defines it (the ‹/›
+    //                      button in the bar does the same for the selection)
     document.getElementById('ud-issues').addEventListener('click', (e) => {
       const row = e.target.closest('[data-doc-from]');
       if (row) this._jumpToSource(+row.dataset.docFrom, +row.dataset.docTo);
@@ -338,9 +342,203 @@ export class UDraftApp {
       if (!tab) return;
       this.activeFloor = +tab.dataset.floor;
       this._view = null;                                  // new floor, fresh fit
+      this._ctxRoomId = null;
+      this._selFrom = null;
       this._renderPreview();
     });
     this._bindZoom();
+    this._bindPlanNav();
+  }
+
+  // -------------------------------------------------------------------------
+  // Plan navigation — room context, object selection, long-press to source
+  // -------------------------------------------------------------------------
+
+  _bindPlanNav() {
+    const plan = document.getElementById('ud-plan');
+    this._ctxRoomId = null;      // the room the view is "in" (null = floor)
+    this._selFrom = null;        // selected entity's data-doc-from (null = none)
+
+    plan.addEventListener('click', (e) => {
+      if (this._planDragged || this._lpFired) return;
+      const g = e.target.closest('[data-ent]');
+      if (!g) { this._planTapEmpty(); return; }
+      if (g.dataset.ent === 'room') {
+        this._enterRoom(g.dataset.roomId);
+      } else if (g.dataset.docFrom != null) {
+        this._selectEnt(+g.dataset.docFrom);
+      }
+    });
+    plan.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    document.getElementById('ud-ctx-back').addEventListener('click', () => {
+      if (this._selFrom != null) { this._selFrom = null; this._applyPlanState(); }
+      else if (this._ctxRoomId) this._exitRoom();
+    });
+    document.getElementById('ud-ctx-src').addEventListener('click', () => {
+      const rec = this._selFrom != null ? this._entIndex?.get(this._selFrom)
+        : this._ctxRoom();
+      if (rec) this._jumpToSource(rec.from, rec.to);
+    });
+  }
+
+  _ctxRoom() {
+    if (!this._ctxRoomId) return null;
+    return this.scene.floors[this.activeFloor]?.rooms.find(r => r.id === this._ctxRoomId) ?? null;
+  }
+
+  _enterRoom(id) {
+    if (this._ctxRoomId === id) {
+      // Tapping the context room again just steps a selection back off.
+      if (this._selFrom != null) { this._selFrom = null; this._applyPlanState(); }
+      return;
+    }
+    this._ctxRoomId = id;
+    this._selFrom = null;
+    this._applyPlanState();
+    const room = this._ctxRoom();
+    if (room) this._zoomToRect(room.bbox);
+  }
+
+  _exitRoom() {
+    this._ctxRoomId = null;
+    this._selFrom = null;
+    this._applyPlanState();
+    const svg = document.querySelector('#ud-plan svg');
+    if (svg && svg._udBase) {
+      this._animateView(svg, svg._udBase.slice(), () => {
+        this._view = null;
+        svg.setAttribute('viewBox', svg._udBase.join(' '));
+      });
+    }
+  }
+
+  _selectEnt(from) {
+    if (!this._entIndex?.has(from)) return;               // auto dims etc.
+    this._selFrom = this._selFrom === from ? null : from; // tap again = deselect
+    this._applyPlanState();
+  }
+
+  _planTapEmpty() {
+    if (this._selFrom != null) { this._selFrom = null; this._applyPlanState(); }
+    else if (this._ctxRoomId) this._exitRoom();
+  }
+
+  /** Sync selection/context classes + the context bar to the current state. */
+  _applyPlanState() {
+    const svg = document.querySelector('#ud-plan svg');
+    if (svg) {
+      for (const el of svg.querySelectorAll('.ud-selected')) el.classList.remove('ud-selected');
+      for (const el of svg.querySelectorAll('.ud-ctx')) el.classList.remove('ud-ctx');
+      if (this._ctxRoomId) {
+        // Both room layers (interior hit path + label group) carry the id.
+        for (const el of svg.querySelectorAll(`[data-room-id="${CSS.escape(this._ctxRoomId)}"]`)) {
+          el.classList.add('ud-ctx');
+        }
+      }
+      if (this._selFrom != null) {
+        svg.querySelector(`[data-ent][data-doc-from="${this._selFrom}"]`)
+          ?.classList.add('ud-selected');
+      }
+    }
+    this._updateCtxBar();
+  }
+
+  _updateCtxBar() {
+    const bar = document.getElementById('ud-ctxbar');
+    const room = this._ctxRoom();
+    const sel = this._selFrom != null ? this._entIndex?.get(this._selFrom) : null;
+    if (!room && !sel) { bar.hidden = true; return; }
+    bar.hidden = false;
+
+    const units = this.scene.meta.units;
+    const crumb = [];
+    const floors = this.scene.floors;
+    const floor = floors[this.activeFloor];
+    if (floors.length > 1 && floor) {
+      crumb.push(esc(floor.title || (floor.num != null ? `Floor ${floor.num}` : '')));
+    }
+    let title, spec;
+    if (sel) {
+      // Only claim the room crumb when the selection actually belongs to it.
+      const inRoom = room && (sel.roomId === room.id || sel.rooms?.includes(room.id));
+      if (inRoom) crumb.push(esc(room.label.toUpperCase()));
+      ({ title, spec } = this._entInfo(sel, units));
+    } else {
+      title = esc(room.label.toUpperCase());
+      spec = `${formatLength(room.bbox.w, units)} × ${formatLength(room.bbox.h, units)}`
+        + ` · ${formatArea(room.areaUm2, units)}`
+        + (room.note ? ` · ${esc(room.note)}` : '');
+    }
+    const crumbs = crumb.length ? `<span class="ud-crumb">${crumb.join(' › ')} › </span>` : '';
+    document.getElementById('ud-ctx-text').innerHTML =
+      `${crumbs}<b>${title}</b><span class="ud-spec">${spec}</span>`;
+  }
+
+  /** Inspector line for a selected entity (title + monospace specifics). */
+  _entInfo(rec, units) {
+    const L = (um) => formatLength(um, units);
+    switch (rec.kind) {
+      case 'door': case 'window': case 'opening': {
+        const wall = rec.shared
+          ? `${rec.rooms[0]} / ${rec.rooms[1]}`
+          : `${rec.rooms[0]} · ${SIDE_NAMES[rec.wallSide]} wall`;
+        const loEnd = rec.axis === 'v' ? 'north' : 'west';
+        let spec = `${esc(wall)} · ${L(rec.offsetFromLo)} from ${loEnd}`;
+        if (rec.kind === 'door') {
+          const hinge = rec.axis === 'v'
+            ? (rec.hingeEnd === 'lo' ? 'north' : 'south')
+            : (rec.hingeEnd === 'lo' ? 'west' : 'east');
+          spec += ` · opens into ${esc(rec.into ?? 'outside')} · hinge ${hinge}`;
+        }
+        return { title: `${rec.kind.toUpperCase()} ${L(rec.width)}`, spec };
+      }
+      case 'fixture': {
+        const horiz = rec.side === 'n' || rec.side === 's';
+        const along = horiz ? rec.rect.w : rec.rect.h;
+        const deep = horiz ? rec.rect.h : rec.rect.w;
+        return {
+          title: esc(rec.type.toUpperCase()),
+          spec: `${L(along)} × ${L(deep)} · ${esc(rec.roomId)} · ${SIDE_NAMES[rec.side]} wall`,
+        };
+      }
+      case 'stairs':
+        return {
+          title: `STAIRS ${rec.dir.toUpperCase()}`,
+          spec: `${L(rec.width)} wide · ${L(rec.run)} run · ${esc(rec.roomId)}`,
+        };
+      case 'dim':
+        return { title: 'DIMENSION', spec: L(rec.um) };
+      default:
+        return { title: esc(rec.kind ?? ''), spec: '' };
+    }
+  }
+
+  /** Animate the viewBox to frame a µm-space rect (room bbox + breathing room). */
+  _zoomToRect(bbox) {
+    const svg = document.querySelector('#ud-plan svg');
+    if (!svg || !svg._udBase) return;
+    const m = this.scene.meta.wallExt / 1000 + 500;       // walls + 0.5 m, in mm
+    this._animateView(svg, [
+      bbox.x / 1000 - m, bbox.y / 1000 - m,
+      bbox.w / 1000 + 2 * m, bbox.h / 1000 + 2 * m,
+    ]);
+  }
+
+  _animateView(svg, target, done) {
+    const from = (this._view ?? svg._udBase).slice();
+    const t0 = performance.now();
+    const MS = 220;
+    const token = (this._animToken = {});
+    const step = (now) => {
+      if (this._animToken !== token) return;              // a gesture took over
+      const t = Math.min((now - t0) / MS, 1);
+      const e = 1 - Math.pow(1 - t, 3);                   // ease-out cubic
+      this._applyView(svg, from.map((v, i) => v + (target[i] - v) * e));
+      if (t < 1) requestAnimationFrame(step);
+      else done?.();
+    };
+    requestAnimationFrame(step);
   }
 
   // -------------------------------------------------------------------------
@@ -379,22 +577,45 @@ export class UDraftApp {
 
     plan.addEventListener('wheel', (e) => {
       e.preventDefault();
+      this._animToken = null;                             // gesture beats animation
       zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0018));
     }, { passive: false });
 
-    // Pointer pan + pinch.  setPointerCapture throws for stale/synthetic
-    // pointer ids — wrapped, do not remove (see CLAUDE.md piano-roll notes).
+    // Pointer pan + pinch + LONG-PRESS (≈550 ms hold without movement = jump
+    // to the pressed entity's DSL line).  setPointerCapture throws for
+    // stale/synthetic pointer ids — wrapped, do not remove (see CLAUDE.md
+    // piano-roll notes).
     const ptrs = new Map();
     let moved = 0;
+    let lpTimer = null;
+    const LP_MS = 550;
+    const cancelLp = () => { clearTimeout(lpTimer); lpTimer = null; };
     const mid = () => {
       const [a, b] = [...ptrs.values()];
       return b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) }
         : { x: a.x, y: a.y, d: 0 };
     };
+    // NO pointer capture on pointerdown: capturing there retargets the
+    // compatibility `click` to the plan div itself, so taps never reach the
+    // entity groups (real bug — synthetic-event tests masked it).  Capture
+    // only once a drag actually latches, when click targeting no longer
+    // matters and the pan must survive leaving the element.
     plan.addEventListener('pointerdown', (e) => {
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (ptrs.size === 1) moved = 0;
-      try { plan.setPointerCapture(e.pointerId); } catch { /* stale id */ }
+      cancelLp();
+      if (ptrs.size === 1) {
+        moved = 0;
+        this._lpFired = false;
+        const target = e.target;
+        lpTimer = setTimeout(() => {
+          lpTimer = null;
+          if (moved > 8 || ptrs.size !== 1) return;
+          const ent = target.closest?.('[data-doc-from]');
+          if (!ent) return;
+          this._lpFired = true;                           // swallow the tail click
+          this._jumpToSource(+ent.dataset.docFrom, +ent.dataset.docTo);
+        }, LP_MS);
+      }
     });
     plan.addEventListener('pointermove', (e) => {
       if (!ptrs.has(e.pointerId)) return;
@@ -402,6 +623,10 @@ export class UDraftApp {
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       const after = mid();
       moved += Math.hypot(after.x - before.x, after.y - before.y);
+      if (moved > 8) cancelLp();
+      if (moved <= 2 && ptrs.size === 1) return;          // jitter — not a pan yet
+      try { plan.setPointerCapture(e.pointerId); } catch { /* stale id */ }
+      this._animToken = null;
       const svg = svgEl();
       if (!svg || !svg._udBase) return;
       if (ptrs.size === 2 && before.d > 0 && after.d > 0) {
@@ -419,6 +644,7 @@ export class UDraftApp {
     });
     const up = (e) => {
       ptrs.delete(e.pointerId);
+      cancelLp();
       if (!ptrs.size && moved > 6) {
         // The click that follows this drag is a pan, not a selection.
         this._planDragged = true;
@@ -433,7 +659,7 @@ export class UDraftApp {
       if (!z) return;
       const svg = svgEl();
       if (!svg) return;
-      if (z === 'fit') { this._view = null; svg.setAttribute('viewBox', svg._udBase.join(' ')); return; }
+      if (z === 'fit') { this._animToken = null; this._view = null; svg.setAttribute('viewBox', svg._udBase.join(' ')); return; }
       const r = plan.getBoundingClientRect();
       zoomAt(r.left + r.width / 2, r.top + r.height / 2, z === 'in' ? 1.4 : 1 / 1.4);
     });
@@ -763,6 +989,10 @@ export class UDraftApp {
     const plan = document.getElementById('ud-plan');
     if (!floor || !floor.rooms.length) {
       plan.innerHTML = '<p class="ud-empty">Declare a room to start drawing — try <code>room living 16\' x 13\'</code>, or type <code>/</code>.</p>';
+      this._ctxRoomId = null;
+      this._selFrom = null;
+      this._entIndex = new Map();
+      this._updateCtxBar();
       return;
     }
     const { svg } = renderFloorSvg(floor, scene.meta, { interactive: true });
@@ -772,6 +1002,20 @@ export class UDraftApp {
     const el = plan.querySelector('svg');
     el._udBase = el.getAttribute('viewBox').split(' ').map(Number);
     if (this._view) el.setAttribute('viewBox', this._view.map(n => Math.round(n * 100) / 100).join(' '));
+
+    // Index the floor's records by their statement offset — the inspector's
+    // lookup for a clicked group — and drop context/selection that no longer
+    // resolves (the statement was edited away, or offsets shifted past it).
+    const idx = new Map();
+    for (const r of floor.rooms) idx.set(r.from, { kind: 'room', ...r });
+    for (const o of floor.openings) idx.set(o.from, o);
+    for (const f of floor.fixtures) idx.set(f.from, { kind: 'fixture', ...f });
+    for (const st of floor.stairs) idx.set(st.from, { kind: 'stairs', ...st });
+    for (const d of floor.dims) { if (d.from != null) idx.set(d.from, { kind: 'dim', ...d }); }
+    this._entIndex = idx;
+    if (this._ctxRoomId && !floor.rooms.some(r => r.id === this._ctxRoomId)) this._ctxRoomId = null;
+    if (this._selFrom != null && !idx.has(this._selFrom)) this._selFrom = null;
+    this._applyPlanState();
   }
 
   // -------------------------------------------------------------------------

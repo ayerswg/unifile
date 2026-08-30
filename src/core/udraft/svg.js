@@ -118,7 +118,7 @@ function openingMarkup(o, interactive) {
       ? hitRect(b0, o.lo, b1 - b0, o.hi - o.lo, interactive)
       : hitRect(o.lo, b0, o.hi - o.lo, b1 - b0, interactive);
   }
-  return `<g class="ud-ent ud-${o.kind}"${docAttrs(o, interactive)}>${gap}${body}${hit}</g>`;
+  return `<g class="ud-ent ud-${o.kind}" data-ent="${o.kind}"${docAttrs(o, interactive)}>${gap}${body}${hit}</g>`;
 }
 
 function doorSwing(o) {
@@ -172,7 +172,7 @@ function stairsMarkup(st, interactive) {
     out.push(text(x + 120 * MM, cy + S.stairText * MM / 3, st.dir === 'up' ? 'UP' : 'DN', 'ud-txt ud-stair-txt'));
   }
   out.push(hitRect(x, y, w, h, interactive, 0));
-  return `<g class="ud-ent ud-stairs"${docAttrs(st, interactive)}>${out.join('')}</g>`;
+  return `<g class="ud-ent ud-stairs" data-ent="stairs"${docAttrs(st, interactive)}>${out.join('')}</g>`;
 }
 
 function arrowHead(x, y, dir) {
@@ -237,7 +237,7 @@ function fixtureMarkup(f, interactive) {
   else if (f.side === 's') tf = `translate(${mm(x + rw)} ${mm(y + rh)}) rotate(180)`;
   else if (f.side === 'w') tf = `translate(${mm(x)} ${mm(y + rh)}) rotate(-90)`;
   else tf = `translate(${mm(x + rw)} ${mm(y)}) rotate(90)`;
-  return `<g class="ud-ent ud-fixture" transform="${tf}"${docAttrs(f, interactive)}>`
+  return `<g class="ud-ent ud-fixture" data-ent="fixture" transform="${tf}"${docAttrs(f, interactive)}>`
     + `${fixtureLocal(f.type, w, d)}${hitRect(0, 0, w, d, interactive)}</g>`;
 }
 
@@ -268,19 +268,34 @@ function dimMarkup(dim, meta, interactive) {
   out.push(dim.axis === 'h'
     ? hitRect(dim.u0, dim.pos - band, dim.u1 - dim.u0, band + 180 * MM, interactive)
     : hitRect(dim.pos - band, dim.u0, band + 180 * MM, dim.u1 - dim.u0, interactive));
-  return `<g class="ud-ent ud-dim"${docAttrs(dim, interactive)}>${out.join('')}</g>`;
+  return `<g class="ud-ent ud-dim" data-ent="dim"${docAttrs(dim, interactive)}>${out.join('')}</g>`;
 }
 
-function roomMarkup(room, meta, interactive) {
+/**
+ * The room's interior hit surface.  Rendered EARLY — just above the walls —
+ * so every entity inside the room (fixtures, door swings, stairs) paints
+ * OVER it and wins the tap; the room only catches clicks on empty interior.
+ * (Rendering it late shadowed every object in the room — real bug.)
+ */
+function roomHitMarkup(room, interactive) {
+  if (!interactive) return '';
+  const polyD = 'M' + room.poly.map(p => `${mm(p[0])} ${mm(p[1])}`).join('L') + 'Z';
+  return `<path class="ud-room-hit" d="${polyD}" fill="transparent" data-ent="room"`
+    + ` data-room-id="${esc(room.id)}" data-room="${esc(room.id)}"${docAttrs(room, true)}/>`;
+}
+
+/**
+ * The room's label block — rendered LAST so it stays readable and tappable
+ * over everything.  Tapping it enters the room like the interior does
+ * (data-ent="room"); its doc offsets point at the `label` statement when one
+ * renamed the room, else at the `room` line (what long-press jumps to).
+ */
+function roomLabelMarkup(room, meta, interactive) {
   // Label at the centre of the room's largest decomposed rect (good for L-shapes).
   let best = room.rects[0] || room.bbox;
   for (const r of room.rects) if (r.w * r.h > best.w * best.h) best = r;
   const cx = best.x + best.w / 2;
   const cy = best.y + best.h / 2;
-  const polyD = 'M' + room.poly.map(p => `${mm(p[0])} ${mm(p[1])}`).join('L') + 'Z';
-  const hit = interactive
-    ? `<path class="ud-room-hit" d="${polyD}" fill="transparent" data-room="${esc(room.id)}"/>`
-    : '';
   const lines = [
     text(cx, cy, room.label.toUpperCase(), 'ud-txt ud-label', ' text-anchor="middle"'),
     text(cx, cy + S.areaText * MM * 1.35, formatArea(room.areaUm2, meta.units), 'ud-txt ud-area', ' text-anchor="middle"'),
@@ -290,17 +305,12 @@ function roomMarkup(room, meta, interactive) {
     lines.push(text(cx, cy + S.areaText * MM * 1.35 + S.noteText * MM * 1.35, `(${room.note})`, 'ud-txt ud-note', ' text-anchor="middle"'));
     noteH = S.noteText * MM * 1.35;
   }
-  // The label block is its own click target: when a `label` statement renamed
-  // the room it jumps THERE (closest data-doc wins), else it falls through to
-  // the room group.  Sized from the monospace-ish label width estimate.
   const labelW = Math.max(room.label.length * S.labelText * 0.62, 8 * S.labelText) * MM;
   const labelTop = cy - S.labelText * MM;
   const labelH = S.labelText * MM + S.areaText * MM * 1.35 + noteH + 120 * MM;
   const labelHit = hitRect(cx - labelW / 2, labelTop, labelW, labelH, interactive, 0);
-  const labelGroup = room.labelStmt
-    ? `<g class="ud-ent ud-roomlabel"${docAttrs(room.labelStmt, interactive)}>${lines.join('')}${labelHit}</g>`
-    : `<g class="ud-roomlabel">${lines.join('')}${labelHit}</g>`;
-  return `<g class="ud-ent ud-room"${docAttrs(room, interactive)}>${hit}${labelGroup}</g>`;
+  const attrs = docAttrs(room.labelStmt ?? room, interactive);
+  return `<g class="ud-ent ud-roomlabel" data-ent="room" data-room-id="${esc(room.id)}"${attrs}>${lines.join('')}${labelHit}</g>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,11 +352,12 @@ export function renderFloorSvg(floor, meta, opts = {}) {
     parts.push(`<rect class="ud-paper" x="${mm(vb.x)}" y="${mm(vb.y)}" width="${mm(vb.w)}" height="${mm(vb.h)}"/>`);
   }
   parts.push(wallsPath(floor.wallRects));
+  for (const room of floor.rooms) parts.push(roomHitMarkup(room, interactive));
   for (const o of floor.openings) parts.push(openingMarkup(o, interactive));
   for (const st of floor.stairs) parts.push(stairsMarkup(st, interactive));
   for (const f of floor.fixtures) parts.push(fixtureMarkup(f, interactive));
-  for (const room of floor.rooms) parts.push(roomMarkup(room, meta, interactive));
   for (const d of floor.dims) parts.push(dimMarkup(d, meta, interactive));
+  for (const room of floor.rooms) parts.push(roomLabelMarkup(room, meta, interactive));
 
   const widthMm = mm(vb.w), heightMm = mm(vb.h);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${mm(vb.x)} ${mm(vb.y)} ${widthMm} ${heightMm}"`
