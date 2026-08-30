@@ -284,3 +284,65 @@ test('syntax: rendering only wraps, never changes text', async () => {
   assert.equal(infos[6].kw, 'room');
   assert.equal(infos[11].type, 'text');
 });
+
+// ---------------------------------------------------------------------------
+// Floors: per-floor room ids, stacked stair shafts, cross-floor warnings
+// ---------------------------------------------------------------------------
+
+const THREE_FLOORS = `floor 1 "Main"
+room living 16' x 13'
+room hall 5' x 9' south of living, align west
+stairs hall 3' x 9' up, along west
+floor 2 "Upper"
+room bedroom 16' x 13'
+room landing 5' x 9' south of bedroom, align west
+stairs landing 3' x 9' down, along west
+floor 0 "Basement"
+room rec 16' x 13'
+room stairwell 5' x 9' south of rec, align west
+stairs stairwell 3' x 9' up, along west
+`;
+
+test('floors: room ids are scoped per floor', () => {
+  const p = parseDocument(`floor 1\nroom bath 6' x 9'\nfloor 2\nroom bath 6' x 9'\n`);
+  assert.equal(p.issues.length, 0, JSON.stringify(p.issues));
+  const dup = parseDocument(`room bath 6' x 9'\nroom bath 5' x 5' east of bath\n`);
+  assert.match(dup.issues[0].message, /already declared on this floor/);
+});
+
+test('floors: a stacked stair shaft lays out clean across three floors', () => {
+  const scene = layoutDocument(parseDocument(THREE_FLOORS));
+  assert.equal(scene.issues.length, 0, JSON.stringify(scene.issues));
+  assert.equal(scene.floors.length, 3);
+  // Shared origin + identical relative placements = identical stair rects.
+  const rects = scene.floors.map(f => JSON.stringify(f.stairs[0].rect));
+  assert.equal(rects[0], rects[1]);
+  assert.equal(rects[1], rects[2]);
+});
+
+test('floors: an up flight with nothing above it warns', () => {
+  const scene = layoutDocument(parseDocument(
+    `floor 1\nroom a 10' x 10'\nstairs a 3' x 9' up, along west\n`
+    + `floor 2\nroom b 10' x 10'\nstairs b 3' x 9' down, along east\n`));
+  const warns = scene.issues.filter(i => /shaft should stack/.test(i.message));
+  assert.equal(warns.length, 2);                               // both flights miss
+  assert.ok(warns.every(w => w.severity === 'warning'));
+});
+
+// ---------------------------------------------------------------------------
+// Click targets: every entity gets a hit area; labels jump to their statement
+// ---------------------------------------------------------------------------
+
+test('svg: entities carry hit rects; a labelled room label targets its label line', () => {
+  const scene = layoutDocument(parseDocument(HOUSE));
+  const { svg } = renderFloorSvg(scene.floors[0], scene.meta, { interactive: true });
+  // Doors, windows, openings, stairs, fixtures, dims all get ud-hit rects.
+  assert.ok((svg.match(/class="ud-hit"/g) || []).length >= 8, svg.match(/ud-hit/g)?.length);
+  // The living room's label block is its own target, pointing at the `label` line.
+  const label = /<g class="ud-ent ud-roomlabel" data-doc-from="(\d+)" data-doc-to="(\d+)">/.exec(svg);
+  assert.ok(label, 'labelled room has a ud-roomlabel target');
+  assert.match(HOUSE.slice(+label[1], +label[2]), /^label living/);
+  // Exports stay clean of hit machinery.
+  const doc = renderExportSvg(scene, 0);
+  assert.doesNotMatch(doc, /ud-hit/);
+});

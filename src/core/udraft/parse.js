@@ -446,7 +446,7 @@ export function parseDocument(text) {
   let floor = null;
 
   const openFloor = (num, title, line) => {
-    floor = { num, title, line, statements: [] };
+    floor = { num, title, line, statements: [], ids: new Set() };
     floors.push(floor);
   };
 
@@ -483,12 +483,15 @@ export function parseDocument(text) {
       }
       if (!floor) openFloor(null, null, null);             // implicit single floor
       if (stmt.kind === 'room') {
-        if (roomIds.includes(stmt.id)) {
+        // Ids are scoped PER FLOOR (each storey can have its own "bath");
+        // roomIds stays the deduped global list for editor autocomplete.
+        if (floor.ids.has(stmt.id)) {
           issues.push({ line: li, col: head.col, from, to, severity: 'error',
-            message: `room "${stmt.id}" is already declared` });
+            message: `room "${stmt.id}" is already declared on this floor` });
           continue;
         }
-        roomIds.push(stmt.id);
+        floor.ids.add(stmt.id);
+        if (!roomIds.includes(stmt.id)) roomIds.push(stmt.id);
       }
       floor.statements.push(stmt);
     } catch (e) {

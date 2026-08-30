@@ -51,27 +51,30 @@ title: Lakeside Cottage
 units: imperial
 ---
 # Welcome to uDraft — rooms in, blueprint out.  Tap the eye to see the plan.
+# Three floors share one origin, so the same relative placements stack the
+# stair shaft (hall → landing → stairwell) exactly on top of itself.
+
+floor 1 "Main Floor"
 
 room living    16' x 13'
 room kitchen   11' x 10'   east of living, align north
 room dining    11' x 8'    south of kitchen, align west offset 2'
 room hall       5' x 9'    south of living, align west
 room bath       6' x 9'    east of hall
-room bedroom   12' x 11'   south of hall, align west
 room porch  outline E 9' S 6' W 9' close   north of living, align west
+
+stairs hall 3' x 9' up, along west
 
 door   living south    3'    at 6" from east, swing in east    # front door
 door   living/porch    3'    centered, swing living west
 door   living/kitchen  2'8"  at 1' from north, swing kitchen north
 door   hall/bath       2'6"  centered, swing bath north
-door   hall/bedroom    2'8"  at 6" from west, swing bedroom west
 opening living/hall    4'    centered
 opening kitchen/dining 5'    centered
 window living west     4'    at 2'
 window living west     4'    at 8'
 window kitchen north   3'    centered
 window dining south    4'    centered
-window bedroom south   4'    centered
 window bath east       2'    centered
 
 fixture kitchen sink   30" on north at 2'
@@ -79,10 +82,51 @@ fixture kitchen range  30" on north at 6'
 fixture kitchen fridge on east at 6"
 fixture bath  toilet   on west at 1'
 fixture bath  tub      on south
-fixture bedroom bed    on south at 3'
 
 label living "Living Room"
 note  porch  "screened"
+
+floor 2 "Second Floor"
+
+room bedroom   16' x 13'                                # over the living room
+room landing    5' x 9'    south of bedroom, align west # over the hall
+room bath       6' x 9'    east of landing              # over the main bath
+room office    11' x 10'   east of bedroom, align north # over the kitchen
+
+stairs landing 3' x 9' down, along west
+
+door   bedroom/landing 2'8"  centered, swing bedroom west
+door   landing/bath    2'6"  centered, swing bath north
+door   bedroom/office  2'8"  at 1' from north, swing office north
+window bedroom west    4'    at 2'
+window bedroom west    4'    at 8'
+window office north    3'    centered
+window bath east       2'    centered
+
+fixture bedroom bed    on west at 3'
+fixture bath  toilet   on west at 1'
+fixture bath  shower   on south
+fixture office table   on north
+
+label bedroom "Primary Bedroom"
+
+floor 0 "Basement"
+
+room rec       16' x 13'                                # under the living room
+room stairwell  5' x 9'    south of rec, align west     # under the hall
+room utility   10' x 9'    east of stairwell
+
+stairs stairwell 3' x 9' up, along west
+
+opening rec/stairwell    4'    centered
+door    stairwell/utility 2'6" centered, swing utility north
+
+fixture utility washer       on south at 1'
+fixture utility dryer        on south at 4'
+fixture utility water-heater on east
+
+label rec "Rec Room"
+note  rec "below grade"
 `;
 
 const ICONS = {
@@ -243,6 +287,11 @@ export class UDraftApp {
           <div id="ud-ptabs" hidden></div>
           <div id="ud-issues" hidden></div>
           <div id="ud-plan"></div>
+          <div id="ud-zoomctl">
+            <button data-z="out" title="Zoom out" aria-label="Zoom out">−</button>
+            <button data-z="fit" title="Fit" aria-label="Fit to view">⛶</button>
+            <button data-z="in" title="Zoom in" aria-label="Zoom in">+</button>
+          </div>
         </div>
       </main>
       <div id="wr-overlay" hidden>
@@ -274,8 +323,9 @@ export class UDraftApp {
     });
 
     // Blueprint click-to-source: any drawn entity carries its statement's
-    // absolute char offsets.
+    // absolute char offsets (a pan/pinch drag suppresses the click).
     document.getElementById('ud-plan').addEventListener('click', (e) => {
+      if (this._planDragged) return;
       const ent = e.target.closest('[data-doc-from]');
       if (ent) this._jumpToSource(+ent.dataset.docFrom, +ent.dataset.docTo);
     });
@@ -287,8 +337,111 @@ export class UDraftApp {
       const tab = e.target.closest('button[data-floor]');
       if (!tab) return;
       this.activeFloor = +tab.dataset.floor;
+      this._view = null;                                  // new floor, fresh fit
       this._renderPreview();
     });
+    this._bindZoom();
+  }
+
+  // -------------------------------------------------------------------------
+  // Blueprint zoom & pan — by REWRITING THE SVG VIEWBOX, not CSS transforms:
+  // a CSS-scaled svg is rasterized at its layout size and blurs when zoomed;
+  // narrowing the viewBox re-renders the vectors crisp at any depth.
+  // Wheel zooms at the cursor, one-finger/pointer drag pans, two fingers
+  // pinch, the −/⛶/+ buttons cover discoverability (⛶ = back to fit).
+  // `this._view` ([x y w h] or null = fit) survives live re-renders while
+  // editing and resets on floor switch.
+  // -------------------------------------------------------------------------
+
+  _bindZoom() {
+    const plan = document.getElementById('ud-plan');
+    this._view = null;
+    this._planDragged = false;
+    const svgEl = () => plan.querySelector('svg');
+
+    const zoomAt = (cx, cy, f) => {
+      const svg = svgEl();
+      if (!svg || !svg._udBase) return;
+      const b = svg._udBase;
+      const v = this._view ?? b.slice();
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const pt = new DOMPoint(cx, cy).matrixTransform(ctm.inverse());
+      const w = Math.min(Math.max(v[2] / f, b[2] / 50), b[2] * 2);   // 50× in … 2× out
+      const rf = v[2] / w;
+      this._applyView(svg, [
+        pt.x - (pt.x - v[0]) / rf,
+        pt.y - (pt.y - v[1]) / rf,
+        w, v[3] / rf,
+      ]);
+    };
+    this._zoomAt = zoomAt;
+
+    plan.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0018));
+    }, { passive: false });
+
+    // Pointer pan + pinch.  setPointerCapture throws for stale/synthetic
+    // pointer ids — wrapped, do not remove (see CLAUDE.md piano-roll notes).
+    const ptrs = new Map();
+    let moved = 0;
+    const mid = () => {
+      const [a, b] = [...ptrs.values()];
+      return b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) }
+        : { x: a.x, y: a.y, d: 0 };
+    };
+    plan.addEventListener('pointerdown', (e) => {
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (ptrs.size === 1) moved = 0;
+      try { plan.setPointerCapture(e.pointerId); } catch { /* stale id */ }
+    });
+    plan.addEventListener('pointermove', (e) => {
+      if (!ptrs.has(e.pointerId)) return;
+      const before = mid();
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const after = mid();
+      moved += Math.hypot(after.x - before.x, after.y - before.y);
+      const svg = svgEl();
+      if (!svg || !svg._udBase) return;
+      if (ptrs.size === 2 && before.d > 0 && after.d > 0) {
+        zoomAt(after.x, after.y, after.d / before.d);
+      }
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const v = this._view ?? svg._udBase.slice();
+      this._applyView(svg, [
+        v[0] - (after.x - before.x) / ctm.a,
+        v[1] - (after.y - before.y) / ctm.d,
+        v[2], v[3],
+      ]);
+      e.preventDefault();
+    });
+    const up = (e) => {
+      ptrs.delete(e.pointerId);
+      if (!ptrs.size && moved > 6) {
+        // The click that follows this drag is a pan, not a selection.
+        this._planDragged = true;
+        setTimeout(() => { this._planDragged = false; }, 0);
+      }
+    };
+    plan.addEventListener('pointerup', up);
+    plan.addEventListener('pointercancel', up);
+
+    document.getElementById('ud-zoomctl').addEventListener('click', (e) => {
+      const z = e.target.closest('button')?.dataset.z;
+      if (!z) return;
+      const svg = svgEl();
+      if (!svg) return;
+      if (z === 'fit') { this._view = null; svg.setAttribute('viewBox', svg._udBase.join(' ')); return; }
+      const r = plan.getBoundingClientRect();
+      zoomAt(r.left + r.width / 2, r.top + r.height / 2, z === 'in' ? 1.4 : 1 / 1.4);
+    });
+  }
+
+  _applyView(svg, v) {
+    this._view = v;
+    svg.setAttribute('viewBox', v.map(n => Math.round(n * 100) / 100).join(' '));
   }
 
   _jumpToSource(from, to) {
@@ -450,8 +603,10 @@ export class UDraftApp {
     const toks = tokenizeLine(beforeWord);
 
     const item = (label, hint, insert) => ({ id: label, label, hint, insert, keywords: '' });
-    const roomItems = () => (this.scene ? this.scene.floors.flatMap(f => f.rooms) : [])
-      .map(r => item(r.id, 'room'));
+    // Room ids are floor-scoped, so the same "bath" can exist per storey —
+    // dedupe for the popup.
+    const roomItems = () => [...new Set((this.scene ? this.scene.floors.flatMap(f => f.rooms) : [])
+      .map(r => r.id))].map(id => item(id, 'room'));
     const sideItems = () => ['north', 'south', 'east', 'west'].map(s => item(s, 'side'));
 
     let items = null;
@@ -576,11 +731,15 @@ export class UDraftApp {
     const floors = scene.floors;
     if (this.activeFloor >= floors.length) this.activeFloor = 0;
 
-    // Floor tabs (only when there is more than one floor).
+    // Floor tabs (only when there is more than one floor), ordered by floor
+    // number when every floor has one — basement (0, -1…) left, upper right.
     const tabs = document.getElementById('ud-ptabs');
     if (floors.length > 1) {
       tabs.hidden = false;
-      tabs.innerHTML = floors.map((f, i) => {
+      const order = floors.map((f, i) => i);
+      if (floors.every(f => f.num != null)) order.sort((a, b) => floors[a].num - floors[b].num);
+      tabs.innerHTML = order.map(i => {
+        const f = floors[i];
         const name = f.title || (f.num != null ? `Floor ${f.num}` : `Floor ${i + 1}`);
         return `<button data-floor="${i}" class="${i === this.activeFloor ? 'active' : ''}">${esc(name)}</button>`;
       }).join('');
@@ -608,6 +767,11 @@ export class UDraftApp {
     }
     const { svg } = renderFloorSvg(floor, scene.meta, { interactive: true });
     plan.innerHTML = svg;
+    // Live edits re-render the svg out from under the zoom state — remember
+    // the rendered (fit) viewBox and re-apply the user's window over it.
+    const el = plan.querySelector('svg');
+    el._udBase = el.getAttribute('viewBox').split(' ').map(Number);
+    if (this._view) el.setAttribute('viewBox', this._view.map(n => Math.round(n * 100) / 100).join(' '));
   }
 
   // -------------------------------------------------------------------------
