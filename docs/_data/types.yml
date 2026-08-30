@@ -31,8 +31,8 @@
   pwa: /pwa-mer/
   download: /dl/unifile.mer.html
 
-- id: writer
-  title: Unifile Writer
+- id: upub
+  title: uPub
   tagline: A quiet Markdown writing app that exports real e-books — fully offline.
   overview: >
     A distraction-free writing app built for phones. Plain Markdown
@@ -42,8 +42,8 @@
     - Works 100% offline — no server, no account, no sync
     - EPUB 3 export — every "#" heading becomes a chapter
     - Built-in git-style commits, history and restore
-  pwa: /pwa-wr/
-  download: /dl/unifile.wr.html
+  pwa: /pwa-upub/
+  download: /dl/unifile.upub.html
 
 - id: abc
   title: ABC Notation

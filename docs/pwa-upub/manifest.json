@@ -1,6 +1,6 @@
 {
-  "name": "Unifile Writer",
-  "short_name": "Unifile Writer",
+  "name": "uPub",
+  "short_name": "uPub",
   "description": "Offline document editor with built-in version history",
   "start_url": "./",
   "display": "standalone",

@@ -8,7 +8,7 @@
        connect-src 'self' lets the in-app site-nav fetch /search.json. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:; media-src blob:; frame-src 'none'; object-src 'none';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Unifile Writer</title>
+  <title>uPub</title>
   <meta name="description" content="Unifile – offline document editor with full version history.">
 
   <!-- PWA / installability -->
@@ -26,7 +26,7 @@
        at the bottom that no CSS can recover.  With the default status-bar style,
        `display:standalone` + `viewport-fit=cover` reserves the status bar and lets
        content reach the true bottom — no chin gap.  (See xefig PWA chin-gap tests.) -->
-  <meta name="apple-mobile-web-app-title" content="Unifile Writer">
+  <meta name="apple-mobile-web-app-title" content="uPub">
 
   <link rel="stylesheet" href="./app.css">
 </head>
@@ -50,7 +50,7 @@
     installed / not display-mode:standalone).  Walks the visitor through
     installing on THEIR device; dismissible (persisted per app path).
     Self-contained (inline style + script) so it works for every shell
-    (standard ui/ app AND the Writer shell) without touching app code.
+    (standard ui/ app AND the uPub shell) without touching app code.
   -->
   <style>
     #uf-install-banner {
@@ -195,7 +195,7 @@
 {
   "version": "0.1.0",
   "title": "Untitled Document",
-  "dslType": "writer",
+  "dslType": "upub",
   "currentBranch": "main",
   "branches": { "main": { "name": "main", "head": null } },
   "commits": {},

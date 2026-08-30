@@ -175,7 +175,7 @@ function chapterToXhtml(mdSource, chapterTitle, images, usedIds) {
   return { xhtml, sections };
 }
 
-const BOOK_CSS = `/* unifile writer — epub stylesheet */
+const BOOK_CSS = `/* uPub — epub stylesheet */
 body { margin: 5% 6%; line-height: 1.6; }
 h1, h2, h3, h4, h5, h6 { line-height: 1.25; font-weight: 600; }
 h1 { margin: 1.8em 0 0.8em; font-size: 1.7em; }
@@ -199,7 +199,7 @@ th, td { border: 1px solid #999; padding: 0.3em 0.6em; }
 `;
 
 /**
- * Build an EPUB 3 from a writer document.
+ * Build an EPUB 3 from a uPub document.
  *
  * @param {object} opts
  * @param {string} opts.content   full document text (may start with front matter)

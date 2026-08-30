@@ -26,8 +26,8 @@
   pinned: true
   excerpt: ABC music notation — overview, then install the app or download the file.
 
-- title: Writer
-  url: /writer/
+- title: uPub
+  url: /upub/
   kind: app
   pinned: true
   excerpt: Distraction-free Markdown writing with EPUB export — install or download.
@@ -63,12 +63,12 @@
   kind: pwa
   excerpt: Install the ABC notation app as an offline app.
 
-- title: Writer — download (.html)
-  url: /dl/unifile.wr.html
+- title: uPub — download (.html)
+  url: /dl/unifile.upub.html
   kind: download
   excerpt: Standalone single-file Markdown writing app with EPUB export.
 
-- title: Writer — install (PWA)
-  url: /pwa-wr/
+- title: uPub — install (PWA)
+  url: /pwa-upub/
   kind: pwa
-  excerpt: Install the Writer app as an offline writing app.
+  excerpt: Install uPub as an offline writing app.

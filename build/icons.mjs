@@ -10,7 +10,7 @@
  *
  * Suite naming: every app has a u-codename ("uPub", "uDoc", …).  The mapping
  * to shipping variants lives in ICONS below — change it in ONE place:
- *   writer → uPub · markdown → uDoc · mermaid → uDraw · abcjs → uNote
+ *   upub → uPub · markdown → uDoc · mermaid → uDraw · abcjs → uNote
  *
  * Consumers:
  *   build/gen-icons.mjs   one-off: rasterize PNGs into templates/icons/<abbrev>/
@@ -67,10 +67,10 @@ const CIRCLES = {
 /** Per-variant icon identity: DSL id → { codename, glyph, abbrev }.
  *  abbrev mirrors DSL_META in build.mjs (names templates/icons/<abbrev>/). */
 export const ICONS = {
-  writer:   { codename: 'uPub',  glyph: 'pub',  abbrev: 'wr'  },
-  markdown: { codename: 'uDoc',  glyph: 'doc',  abbrev: 'md'  },
-  mermaid:  { codename: 'uDraw', glyph: 'draw', abbrev: 'mer' },
-  abcjs:    { codename: 'uNote', glyph: 'note', abbrev: 'abc' },
+  upub:     { codename: 'uPub',  glyph: 'pub',  abbrev: 'upub' },
+  markdown: { codename: 'uDoc',  glyph: 'doc',  abbrev: 'md'   },
+  mermaid:  { codename: 'uDraw', glyph: 'draw', abbrev: 'mer'  },
+  abcjs:    { codename: 'uNote', glyph: 'note', abbrev: 'abc'  },
 };
 
 /**
