@@ -274,37 +274,61 @@ blue, for the romance. Default stays theme-following.
 
 ---
 
-## 4. Editor intelligence
+## 4. Editor — uPub-style shell (decided 2026-08-30)
 
-Same stack as mermaid, one module each:
+uDraft does **not** use CodeMirror or the standard `ui/` shell. Like uPub, it
+ships its own shell (`DSL_META.udraft.entry` + `.css`): the custom
+contenteditable line editor, a thin title bar, bottom sheets for
+menu/history/export/settings/guide/about, and linear history. The editing
+surface is the uPub editor's model — one `<div>` per source line, native
+character input reconciled afterwards, custom snapshot undo, absolute-offset
+caret restore — which is exactly right for a one-statement-per-line DSL.
 
-- **Highlighting**: `StreamLanguage` — keywords (`room`, `door`, …), lengths
-  (`12'6"` as numbers — the lexer rule from 2.5), compass words, room ids
-  (name), strings, comments.
-- **Completion**: statement keywords at line start; after `of`/`/`-references,
-  **the declared room ids** (the parse is cheap enough to re-run for the
-  completion source); fixture types after `fixture <room> `.
-- **Lint**: the real parser + layout pass (it's fast and pure), surfacing parse
-  errors, forward references, non-closing outlines, overlaps, and
-  openings that don't fit their wall — each on its own line.
-- **Hover docs** for keywords and fixture types.
-- **DSL_HELP** entry (`topbar.js`): the grouped syntax reference — Rooms /
-  Openings / Fixtures / Annotation / Front matter.
-- Collapsible section bars: front matter + per-`floor` bars fit the existing
-  `editor-sections.js` model naturally (multi-floor docs collapse to the floor
-  you're working on). Nice-to-have, not v1-blocking.
+**The editor core is shared, not forked.** `upub/editor.js` gains a pluggable
+`syntax` option (defaulting to its own Markdown module, so uPub is untouched
+behaviorally); uDraft passes its own classifier/renderer. The markdown-specific
+commands and the swipe-indent gesture are gated on line types uDraft's
+classifier never emits, so they're inert. Layered on top:
+
+- **Syntax highlighting** (`udraft/syntax.js`): per-line classification +
+  span rendering under the uPub invariant (`textContent(rendered) === line`).
+  Statement keywords, lengths (`12'6"` — the digit-then-inch-mark lexer rule),
+  compass words, room ids, `roomA/roomB` wall references, strings, `#`
+  comments dimmed, front-matter keys — plus **inline error underlining** from
+  the real parser (it runs on every edit anyway; a bad line gets a subtle
+  wavy underline and the message surfaces in the preview's issue strip).
+- **Autocomplete** (`udraft/autocomplete.js`): a caret-anchored popup (same
+  positioning/interaction machinery as the slash menu — tap keeps the
+  keyboard up, ↑/↓+Enter/Tab on hardware keyboards). Context-aware from the
+  parse: statement keywords at line start, **declared room ids** after
+  `of ` / in `roomA/roomB` references, side words after `on`/wall positions,
+  fixture types in `fixture` statements, `swing`/`centered`/`at` clause
+  keywords. Fires on typing (word ≥1 char in a completable slot), never
+  inside strings or comments.
+- **Slash menu**: uPub's `SlashMenu` verbatim, with uDraft items — Room,
+  Door, Window, Opening, Fixture, Stairs, Floor, Label, Dimension, Note,
+  Front matter, Undo/Redo. Block items insert a statement template with the
+  caret landing on the first thing to edit (e.g. `/room` → `room name 12' x 10'`
+  with `name` selected).
+- **Preview = the eye icon.** The title-bar eye button toggles the rendered
+  blueprint pane (same `togglePreview` pattern as uPub), re-rendered live
+  while open. Floor tabs when the document has multiple floors; a slim issue
+  strip lists diagnostics with tap-to-line.
+- **Guide sheet** (`udraft/guide-content.js`): the full syntax reference,
+  rendered in-app; also emitted as `/udraft/guide/` by render-site.mjs.
 
 ---
 
 ## 5. Integration & build
 
-- `src/dsl/udraft.js` (plugin entry: register, render, editor extensions,
-  exporters) + `src/core/udraft/` for the pure parts (`parse.js`, `layout.js`,
-  `scene.js`) + `src/dsl/udraft-symbols.js`, `udraft-svg.js`. Pure core in
-  `core/` per the repo's no-DOM convention, tested in Node.
-- `DSL_META.udraft = { abbrev: 'dft', plugins: ['markdown', 'udraft'],
-  defaultDslType: 'udraft', label: 'uDraft' }` → `dist/unifile.dft.html` +
-  `dist/pwa-dft/`. Standard shell (CodeMirror), unlike uPub.
+- `src/udraft/` — the shell (uPub's layout): `main.js`, `app.js`, `syntax.js`,
+  `autocomplete.js`, `preview.js`, `guide-content.js`; reuses `upub/editor.js`
+  (pluggable syntax) and `upub/slash-menu.js`. `src/core/udraft/` — the pure
+  parts (`parse.js`, `layout.js`, `svg.js` — string-building, DOM-free, tested
+  in Node). `src/styles/udraft.css` — own stylesheet, derived from upub.css.
+- `DSL_META.udraft = { abbrev: 'dft', plugins: [], defaultDslType: 'udraft',
+  label: 'uDraft', entry: 'udraft/main.js', css: 'styles/udraft.css' }` →
+  `dist/unifile.dft.html` + `dist/pwa-dft/`. Own shell, like uPub.
 - Icons: add `udraft → uDraft` to `build/icons.mjs`'s u-codename map, design
   the glyph (proposal: a door-swing arc — the most recognizable plan symbol),
   `npm run gen:icons`.
@@ -330,7 +354,8 @@ Same stack as mermaid, one module each:
    both directions, theme-aware. Verify in the preview at 375px too.
 3. **Blueprint completeness**: dimension strings, stairs, fixture library,
    floors/tabs, sheet furniture.
-4. **Editor**: highlighting, lint, completion, hover, DSL_HELP.
+4. **Editor**: uPub-shell adaptation, syntax highlighting, autocomplete,
+   slash menu, eye-icon preview toggle, guide.
 5. **Ship**: DSL_META + icon + site pages + exporters (SVG/PDF-at-scale/PNG);
    `node build/build.mjs --dsl=udraft --no-pwa` in the loop throughout.
 
@@ -339,15 +364,10 @@ section when the dust settles (per the repo rule: keep it current).
 
 ---
 
-## 7. Open questions (defaults chosen, flag disagreement)
+## 7. Resolved questions (2026-08-30)
 
-1. **Abbrev `dft`** (→ `unifile.dft.html`, `pwa-dft/`) — or `ud`/`draft`?
-2. **Compass-only directions** (2.4) — comfortable? `left/right/top/bottom`
-   aliases are possible but two vocabularies for one concept usually reads
-   worse, so the plan says compass only.
-3. **Interior dimensions** (2.3) is the chosen convention; builders sometimes
-   think in exterior/framing dims. A `dims-basis:` front-matter key could
-   switch later, but v1 commits to interior-clear.
-4. **Relation phrasing**: `east of living` (spaced, reads like English) vs
-   `east-of living` (one token, simpler lexer). Plan says spaced — the parser
-   is line-scoped and can afford the two-word lookahead.
+All four defaults confirmed: abbrev **`dft`**, **compass-only** directions,
+**interior-clear** dimensions, **spaced** relation phrasing (`east of living`).
+Also decided: the editor is a **uPub-style shell** (see §4) — custom line
+editor with uDraft syntax highlighting, autocomplete, and slash menu; the
+title-bar **eye icon toggles the rendered blueprint**.

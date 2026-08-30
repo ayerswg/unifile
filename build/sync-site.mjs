@@ -110,12 +110,14 @@ const FILES = [
   ['unifile.mer.html',  'dl/unifile.mer.html'],
   ['unifile.abc.html',  'dl/unifile.abc.html'],
   ['unifile.upub.html', 'dl/unifile.upub.html'],
+  ['unifile.dft.html',  'dl/unifile.dft.html'],
 ];
 const DIRS = [
   ['pwa-md',   'pwa-md'],
   ['pwa-mer',  'pwa-mer'],
   ['pwa-abc',  'pwa-abc'],
   ['pwa-upub', 'pwa-upub'],
+  ['pwa-dft',  'pwa-dft'],
 ];
 
 // Stale artifacts to delete from docs/ (the universal multi-DSL build is gone,
