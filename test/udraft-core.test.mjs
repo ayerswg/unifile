@@ -350,3 +350,38 @@ test('svg: entities carry hit rects; a labelled room label targets its label lin
   const doc = renderExportSvg(scene, 0);
   assert.doesNotMatch(doc, /ud-hit/);
 });
+
+// ---------------------------------------------------------------------------
+// Scope annotations + extents (the drill-down view)
+// ---------------------------------------------------------------------------
+
+test('scope: room annotations draw interior dims on the plan', async () => {
+  const { annotationMarkup } = await import('../src/core/udraft/svg.js');
+  const scene = layoutDocument(parseDocument(HOUSE));
+  const floor = scene.floors[0];
+  const anno = annotationMarkup(floor, scene.meta, { roomId: 'living' });
+  assert.match(anno, /class="ud-anno"/);
+  assert.match(anno, /20'-0&quot;/);                           // interior width
+  assert.match(anno, /14'-0&quot;/);                           // interior depth
+  assert.equal(annotationMarkup(floor, scene.meta, { roomId: 'nope' }), '');
+});
+
+test('scope: object annotations show width + position; extents include swing', async () => {
+  const { annotationMarkup, scopeExtent } = await import('../src/core/udraft/svg.js');
+  const scene = layoutDocument(parseDocument(HOUSE));
+  const floor = scene.floors[0];
+  const door = floor.openings[0];                              // living/kitchen at 2' from north
+  const anno = annotationMarkup(floor, scene.meta, { entFrom: door.from });
+  assert.match(anno, /2'-8&quot;/);                            // width
+  assert.match(anno, /2'-0&quot;/);                            // offset from the north end
+  const ext = scopeExtent(floor, { entFrom: door.from });
+  // Door opens east: extent reaches into the kitchen by the leaf width.
+  assert.ok(ext.w >= door.band[1] - door.band[0] + (door.hi - door.lo));
+  // Room extent is its bbox.
+  const rext = scopeExtent(floor, { roomId: 'living' });
+  assert.deepEqual(rext, floor.rooms[0].bbox);
+  // Scoped render embeds the annotations; exports never do.
+  const { svg } = renderFloorSvg(floor, scene.meta, { interactive: true, scope: { roomId: 'living' } });
+  assert.match(svg, /ud-anno/);
+  assert.doesNotMatch(renderExportSvg(scene, 0), /ud-anno/);
+});

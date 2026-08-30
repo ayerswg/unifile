@@ -11,17 +11,23 @@ walls, door swings, window symbols, dimension strings, room labels with areas.
 
 Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
 
-On the drawing:
+The drawing is navigated hierarchically — floor › room › object:
 
-- **Scroll or pinch to zoom, drag to pan** (the −/⛶/+ buttons do the same;
-  ⛶ fits the whole floor).
-- **Tap a room** to step into it — the view zooms to the room and its name
-  moves up into the context bar.
-- **Tap an object** — a door, a sink, a stair, a dimension — to select it:
-  it highlights and the bar shows its specifics (size, wall, position,
-  swing…). Tap empty space (or ‹) to step back out.
-- **Long-press anything** (or tap **‹/›** in the bar) to jump to the DSL
-  line that defines it.
+- **Tap a room** (anywhere in it) to step into it: the view zooms to the
+  room, its name moves up into the breadcrumb bar, and its interior
+  dimensions draw onto the plan like a real drawing.
+- **Inside a room, tap an object** — a door, a sink, a stair — to select
+  it: the view zooms to it, its own measurements (width, position, depth)
+  draw next to it, and the bar shows its specifics.
+- **The breadcrumbs** (Main Floor › KITCHEN › SINK) are buttons — tap any
+  level to go back up. Tapping empty space or ‹ steps up one level.
+- **The bar at the bottom** shows the DSL statement for whatever you're
+  looking at — tap it to expand and **edit it live**: every keystroke
+  redraws the plan.
+- **Scroll or pinch to zoom, drag to pan** anytime (−/⛶/+ do the same;
+  ⛶ fits the floor).
+- **Long-press anything** (or tap **‹/›** in the bar) to jump to that line
+  in the full editor.
 
 ## Rooms — the spine
 

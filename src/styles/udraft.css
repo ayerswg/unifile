@@ -102,7 +102,25 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#ud-ctx-text .ud-crumb { color: var(--fg-mut); font-weight: 400; }
+#ud-ctx-text .ud-crumbs { display: flex; align-items: baseline; gap: 2px; min-width: 0; }
+/* The crumbs are real buttons — undo the bar's 36px icon-button sizing. */
+#ud-ctxbar button.ud-crumb-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: 400 13.5px/1.3 -apple-system, system-ui, sans-serif;
+  width: auto;
+  height: auto;
+  display: inline-block;
+  padding: 2px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.ud-crumb-btn:active { background: var(--bg-alt); }
+.ud-crumb-sep { color: var(--dim); padding: 0 1px; }
 #ud-ctx-text .ud-spec {
   display: block;
   color: var(--fg-mut);
@@ -205,6 +223,82 @@
    label are separate top-level layers — see svg.js — so ud-ctx lands on both.) */
 #ud-plan .ud-roomlabel.ud-ctx { display: none; }
 #ud-plan .ud-room-hit.ud-ctx { fill: color-mix(in srgb, var(--accent) 5%, transparent); }
+
+/* ── Live scope annotations (dimensions drawn on the blueprint) ───────────── */
+
+#ud-plan .ud-anno { pointer-events: none; }
+#ud-plan .ud-anno-ln { stroke: var(--accent); stroke-width: 14; fill: none; }
+#ud-plan .ud-anno-txt {
+  fill: var(--accent);
+  stroke: none;
+  font-size: 190px;
+  font-weight: 600;
+}
+
+/* ── Scope editor — bottom collapse/expand bar for the scoped statement ───── */
+
+#ud-edit {
+  flex: none;
+  padding: 8px 14px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--bg-elev);
+}
+#ud-edit[hidden] { display: none; }
+#ud-edit-chip {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-edit-chip[hidden] { display: none; }
+#ud-edit-chip code {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg);
+  font: 400 13px/1.3 ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ud-edit-pencil { flex: none; color: var(--fg-mut); font-size: 13px; }
+#ud-edit-body { display: flex; gap: 8px; }
+#ud-edit-body[hidden] { display: none; }
+#ud-edit-input {
+  flex: 1;
+  min-width: 0;
+  font: 400 16px/1.3 ui-monospace, "SF Mono", Menlo, monospace;  /* ≥16px stops iOS focus-zoom */
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 9px 12px;
+  outline: none;
+}
+#ud-edit-close {
+  appearance: none;
+  flex: none;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg-mut);
+  width: 42px;
+  border-radius: 10px;
+  font-size: 16px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The zoom pad rides above the scope editor when it is showing. */
+#wr-preview:has(#ud-edit:not([hidden])) #ud-zoomctl {
+  bottom: calc(72px + env(safe-area-inset-bottom));
+}
 
 /* ── Zoom controls (bottom-right of the preview) ──────────────────────────── */
 

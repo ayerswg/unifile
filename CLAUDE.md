@@ -289,14 +289,25 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
   flight has no stairs overlapping its footprint on the adjacent floor.
 - **The eye toggles the blueprint** (uPub's preview pattern): floor tabs when
   multiple `floor` blocks exist, issue strip (tap → source line). Plan
-  interaction is HIERARCHICAL (`_bindPlanNav`): tap a room → enter its
-  context (`_ctxRoomId` — the label moves up into the context bar
-  `#ud-ctxbar`, the interior tints, the view animates to the room); tap an
-  object → select (`_selFrom`, dashed marquee + accent) and the bar shows its
-  specifics (`_entInfo`: size/wall/position/swing…); tap empty → step back
-  out; **long-press (550 ms, <8 px movement) or the bar's ‹/› button → jump
-  to the DSL line**. State survives live re-renders via `_entIndex` (records
-  keyed by statement offset) and drops when the statement no longer resolves.
+  interaction is STRICTLY HIERARCHICAL (`_bindPlanNav`, one setter
+  `_setScope(roomId, from)`): at floor level every tap resolves to a ROOM
+  (tapping a door first enters the room it belongs to — `_roomOfRec`); inside
+  a room, tapping its objects selects them. Each drill-down re-renders the
+  plan with the scope's LIVE DIMENSION ANNOTATIONS drawn on the blueprint
+  (`annotationMarkup` in svg.js — room = interior clear dims, object =
+  width/position/depth; class `ud-anno`, accent-themed, never in exports) and
+  animates the view to `scopeExtent` (bbox + swing/offset + margin). The
+  context bar `#ud-ctxbar` is a BREADCRUMB (Floor › ROOM › OBJECT — upper
+  levels are buttons back up) + inspector line (`_entInfo`); the bar's ‹/›
+  and a LONG-PRESS (550 ms, <8 px) jump to the DSL line. The bottom
+  `#ud-edit` bar is the SCOPE EDITOR: collapsed it chips the scoped
+  statement, expanded it live-edits that line (`_replaceLineNoCaret` —
+  selection-free like uPub's indentLines, so focus stays in the input; undo
+  coalesces as typing; the line-start offset anchor survives same-line
+  edits, and scope state is NOT dropped while the input is focused, so a
+  half-typed statement doesn't collapse the view). State survives live
+  re-renders via `_entIndex` (records keyed by statement offset) and drops
+  when the statement no longer resolves.
   **Every entity is a real tap target** — thin strokes are hopeless taps, so
   interactive renders add invisible `ud-hit` rects per entity (transparent
   fill still hit-tests); exports carry none of it. **LAYERING IS LOAD-BEARING**:
