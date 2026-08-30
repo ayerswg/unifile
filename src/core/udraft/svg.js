@@ -314,6 +314,137 @@ function roomLabelMarkup(room, meta, interactive) {
 }
 
 // ---------------------------------------------------------------------------
+// Scope annotations — live dimensions drawn ON the blueprint for the focused
+// room or object (the app's drill-down view).  Class `ud-anno` themes them as
+// "live" (accent) in the app; exports never pass a scope, so they stay clean.
+// ---------------------------------------------------------------------------
+
+/** One annotation dimension: line, ticks, and the measurement text. */
+function annoDim(axis, u0, u1, pos, um, meta) {
+  if (u1 - u0 <= 0) return '';
+  const t = formatLength(um, meta.units);
+  const tick = 90 * MM;
+  const out = [];
+  if (axis === 'h') {
+    out.push(line(u0, pos, u1, pos, 'ud-anno-ln'));
+    out.push(line(u0 - tick, pos + tick, u0 + tick, pos - tick, 'ud-anno-ln'));
+    out.push(line(u1 - tick, pos + tick, u1 + tick, pos - tick, 'ud-anno-ln'));
+    out.push(text((u0 + u1) / 2, pos - 80 * MM, t, 'ud-anno-txt', ' text-anchor="middle"'));
+  } else {
+    out.push(line(pos, u0, pos, u1, 'ud-anno-ln'));
+    out.push(line(pos - tick, u0 + tick, pos + tick, u0 - tick, 'ud-anno-ln'));
+    out.push(line(pos - tick, u1 + tick, pos + tick, u1 - tick, 'ud-anno-ln'));
+    out.push(text(pos - 80 * MM, (u0 + u1) / 2, t, 'ud-anno-txt',
+      ` text-anchor="middle" transform="rotate(-90 ${mm(pos - 80 * MM)} ${mm((u0 + u1) / 2)})"`));
+  }
+  return out.join('');
+}
+
+/**
+ * Annotations for the current drill-down scope.
+ * @param {object} scope  { roomId } (room scope) or { entFrom } (object scope)
+ * @returns {string} svg markup (empty when the scope doesn't resolve)
+ */
+export function annotationMarkup(floor, meta, scope) {
+  if (!scope) return '';
+  const D = 420 * MM;                                    // offset from what's measured
+  if (scope.entFrom == null) {
+    const room = floor.rooms.find(r => r.id === scope.roomId);
+    if (!room) return '';
+    const b = room.bbox;
+    // Interior clear dims, inset past counter-depth fixtures (~610 mm) so the
+    // lines don't cross whatever stands against the north/west walls.
+    return `<g class="ud-anno">`
+      + annoDim('h', b.x, b.x + b.w, b.y + 2.6 * D, b.w, meta)
+      + annoDim('v', b.y, b.y + b.h, b.x + 2.6 * D, b.h, meta)
+      + `</g>`;
+  }
+  const from = scope.entFrom;
+  const parts = [];
+  const o = floor.openings.find(e => e.from === from);
+  if (o) {
+    const [b0, b1] = o.band;
+    // Annotate on the side away from a door's swing so nothing crosses the arc.
+    const away = o.kind === 'door'
+      ? (o.openDir === 'w' || o.openDir === 'n' ? 1 : -1)   // opposite the leaf
+      : -1;                                                  // lo band side
+    const pos = away < 0 ? b0 - D : b1 + D;
+    const axis = o.axis === 'v' ? 'v' : 'h';
+    parts.push(annoDim(axis, o.lo, o.hi, pos, o.width, meta));
+    if (o.offsetFromLo > 0) {
+      parts.push(annoDim(axis, o.lo - o.offsetFromLo, o.lo, pos, o.offsetFromLo, meta));
+    }
+  }
+  const f = floor.fixtures.find(e => e.from === from);
+  if (f) {
+    const r = f.rect;
+    // Width along the wall on the room-inward side; depth beside it.
+    if (f.side === 'n') {
+      parts.push(annoDim('h', r.x, r.x + r.w, r.y + r.h + D, r.w, meta));
+      parts.push(annoDim('v', r.y, r.y + r.h, r.x - D, r.h, meta));
+    } else if (f.side === 's') {
+      parts.push(annoDim('h', r.x, r.x + r.w, r.y - D + 160 * MM, r.w, meta));
+      parts.push(annoDim('v', r.y, r.y + r.h, r.x - D, r.h, meta));
+    } else if (f.side === 'w') {
+      parts.push(annoDim('v', r.y, r.y + r.h, r.x + r.w + D, r.h, meta));
+      parts.push(annoDim('h', r.x, r.x + r.w, r.y - D + 160 * MM, r.w, meta));
+    } else {
+      parts.push(annoDim('v', r.y, r.y + r.h, r.x - D, r.h, meta));
+      parts.push(annoDim('h', r.x, r.x + r.w, r.y - D + 160 * MM, r.w, meta));
+    }
+  }
+  const st = floor.stairs.find(e => e.from === from);
+  if (st) {
+    const r = st.rect;
+    if (st.runAxis === 'v') {
+      parts.push(annoDim('h', r.x, r.x + r.w, r.y - D + 160 * MM, r.w, meta));
+      parts.push(annoDim('v', r.y, r.y + r.h, r.x + r.w + D, r.h, meta));
+    } else {
+      parts.push(annoDim('v', r.y, r.y + r.h, r.x - D, r.h, meta));
+      parts.push(annoDim('h', r.x, r.x + r.w, r.y - D + 160 * MM, r.w, meta));
+    }
+  }
+  return parts.length ? `<g class="ud-anno">${parts.join('')}</g>` : '';
+}
+
+/** The µm-space rect a scope's zoom-extents should frame (annotations included). */
+export function scopeExtent(floor, scope) {
+  if (!scope) return null;
+  const pad = (r, p) => ({ x: r.x - p, y: r.y - p, w: r.w + 2 * p, h: r.h + 2 * p });
+  if (scope.entFrom == null) {
+    const room = floor.rooms.find(r => r.id === scope.roomId);
+    return room ? room.bbox : null;
+  }
+  const from = scope.entFrom;
+  const o = floor.openings.find(e => e.from === from);
+  if (o) {
+    const w = o.hi - o.lo;
+    const [b0, b1] = o.band;
+    let r = o.axis === 'v'
+      ? { x: b0, y: o.lo - o.offsetFromLo, w: b1 - b0, h: (o.hi - o.lo) + o.offsetFromLo }
+      : { x: o.lo - o.offsetFromLo, y: b0, w: (o.hi - o.lo) + o.offsetFromLo, h: b1 - b0 };
+    if (o.kind === 'door') {                             // include the swing
+      if (o.openDir === 'w') { r.x -= w; r.w += w; }
+      else if (o.openDir === 'e') r.w += w;
+      else if (o.openDir === 'n') { r.y -= w; r.h += w; }
+      else r.h += w;
+    }
+    return pad(r, 500000);
+  }
+  const f = floor.fixtures.find(e => e.from === from);
+  if (f) return pad(f.rect, 500000);
+  const st = floor.stairs.find(e => e.from === from);
+  if (st) return pad(st.rect, 500000);
+  const d = floor.dims.find(e => e.from === from);
+  if (d) {
+    return d.axis === 'h'
+      ? { x: d.u0, y: d.pos - 800000, w: d.u1 - d.u0, h: 1600000 }
+      : { x: d.pos - 800000, y: d.u0, w: 1600000, h: d.u1 - d.u0 };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Floor → SVG
 // ---------------------------------------------------------------------------
 
@@ -338,9 +469,11 @@ function floorBounds(floor) {
  * Render one floor to SVG markup.
  * @param {object} floor  a floor from layoutDocument()
  * @param {object} meta   scene meta
- * @param {object} opts   { interactive?, styles?, background? }
+ * @param {object} opts   { interactive?, styles?, background?, scope? }
  *   styles     — a <style> payload embedded in the svg (exports); omit in-app
  *   background — paint an opaque paper rect (exports)
+ *   scope      — drill-down scope ({roomId} or {entFrom}); draws live
+ *                dimension annotations on top (app preview only)
  * @returns {{ svg: string, viewBox: {x,y,w,h}, widthMm: number, heightMm: number }}
  */
 export function renderFloorSvg(floor, meta, opts = {}) {
@@ -358,6 +491,7 @@ export function renderFloorSvg(floor, meta, opts = {}) {
   for (const f of floor.fixtures) parts.push(fixtureMarkup(f, interactive));
   for (const d of floor.dims) parts.push(dimMarkup(d, meta, interactive));
   for (const room of floor.rooms) parts.push(roomLabelMarkup(room, meta, interactive));
+  if (opts.scope) parts.push(annotationMarkup(floor, meta, opts.scope));
 
   const widthMm = mm(vb.w), heightMm = mm(vb.h);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${mm(vb.x)} ${mm(vb.y)} ${widthMm} ${heightMm}"`

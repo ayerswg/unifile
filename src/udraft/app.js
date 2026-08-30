@@ -37,7 +37,7 @@ import { renderMarkdown } from '../upub/preview.js';
 import * as udSyntax from './syntax.js';
 import { parseDocument, formatArea, formatLength, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SIDE_NAMES } from '../core/udraft/parse.js';
 import { layoutDocument } from '../core/udraft/layout.js';
-import { renderFloorSvg, renderExportSvg, renderPrintBody, exportStyles } from '../core/udraft/svg.js';
+import { renderFloorSvg, renderExportSvg, renderPrintBody, exportStyles, scopeExtent } from '../core/udraft/svg.js';
 import { GUIDE_MD } from './guide-content.js';
 
 const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
@@ -292,6 +292,14 @@ export class UDraftApp {
           </div>
           <div id="ud-issues" hidden></div>
           <div id="ud-plan"></div>
+          <div id="ud-edit" hidden>
+            <button id="ud-edit-chip"><code></code><span class="ud-edit-pencil">✎</span></button>
+            <div id="ud-edit-body" hidden>
+              <input id="ud-edit-input" type="text" autocomplete="off" autocapitalize="off"
+                     autocorrect="off" spellcheck="false" enterkeyhint="done" aria-label="Edit statement">
+              <button id="ud-edit-close" aria-label="Done editing">⌄</button>
+            </div>
+          </div>
           <div id="ud-zoomctl">
             <button data-z="out" title="Zoom out" aria-label="Zoom out">−</button>
             <button data-z="fit" title="Fit" aria-label="Fit to view">⛶</button>
@@ -359,27 +367,29 @@ export class UDraftApp {
     this._ctxRoomId = null;      // the room the view is "in" (null = floor)
     this._selFrom = null;        // selected entity's data-doc-from (null = none)
 
+    // Navigation is strictly HIERARCHICAL: at floor level everything resolves
+    // to a ROOM (tapping a door before entering a room takes you into the
+    // room it belongs to); objects become selectable only inside their room.
     plan.addEventListener('click', (e) => {
       if (this._planDragged || this._lpFired) return;
       const g = e.target.closest('[data-ent]');
-      if (!g) { this._planTapEmpty(); return; }
-      if (g.dataset.ent === 'room') {
-        this._enterRoom(g.dataset.roomId);
-      } else if (g.dataset.docFrom != null) {
-        this._selectEnt(+g.dataset.docFrom);
-      }
+      if (!g) { this._navUp(); return; }
+      if (g.dataset.ent === 'room') { this._tapRoom(g.dataset.roomId); return; }
+      if (g.dataset.docFrom != null) this._tapEnt(+g.dataset.docFrom);
     });
     plan.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    document.getElementById('ud-ctx-back').addEventListener('click', () => {
-      if (this._selFrom != null) { this._selFrom = null; this._applyPlanState(); }
-      else if (this._ctxRoomId) this._exitRoom();
+    document.getElementById('ud-ctx-back').addEventListener('click', () => this._navUp());
+    document.getElementById('ud-ctx-text').addEventListener('click', (e) => {
+      const nav = e.target.closest('[data-nav]')?.dataset.nav;
+      if (nav === 'floor') this._setScope(null, null);
+      else if (nav === 'room') this._setScope(this._ctxRoomId, null);
     });
     document.getElementById('ud-ctx-src').addEventListener('click', () => {
-      const rec = this._selFrom != null ? this._entIndex?.get(this._selFrom)
-        : this._ctxRoom();
+      const rec = this._scopeRec();
       if (rec) this._jumpToSource(rec.from, rec.to);
     });
+    this._bindScopeEdit();
   }
 
   _ctxRoom() {
@@ -387,44 +397,83 @@ export class UDraftApp {
     return this.scene.floors[this.activeFloor]?.rooms.find(r => r.id === this._ctxRoomId) ?? null;
   }
 
-  _enterRoom(id) {
-    if (this._ctxRoomId === id) {
-      // Tapping the context room again just steps a selection back off.
-      if (this._selFrom != null) { this._selFrom = null; this._applyPlanState(); }
-      return;
-    }
-    this._ctxRoomId = id;
-    this._selFrom = null;
-    this._applyPlanState();
-    const room = this._ctxRoom();
-    if (room) this._zoomToRect(room.bbox);
+  /** The record the current scope points at (selected entity, else the room). */
+  _scopeRec() {
+    if (this._selFrom != null) return this._entIndex?.get(this._selFrom) ?? null;
+    return this._ctxRoom();
   }
 
-  _exitRoom() {
-    this._ctxRoomId = null;
-    this._selFrom = null;
-    this._applyPlanState();
+  /** The scope descriptor the renderer/extent helpers understand. */
+  _scope() {
+    if (this._selFrom != null) return { entFrom: this._selFrom };
+    if (this._ctxRoomId) return { roomId: this._ctxRoomId };
+    return null;
+  }
+
+  /** Which room an entity belongs to (a door reads as its `into` room). */
+  _roomOfRec(rec) {
+    if (!rec) return null;
+    return rec.roomId ?? rec.into ?? rec.rooms?.[0] ?? null;
+  }
+
+  _tapRoom(id) {
+    if (this._ctxRoomId === id && this._selFrom == null) return;
+    this._setScope(id, null);
+  }
+
+  _tapEnt(from) {
+    const rec = this._entIndex?.get(from);
+    if (!rec) return;                                     // auto dims etc.
+    const inCtx = this._ctxRoomId
+      && (rec.roomId === this._ctxRoomId || rec.rooms?.includes(this._ctxRoomId));
+    if (!inCtx) {
+      const owner = this._roomOfRec(rec);
+      if (owner) this._setScope(owner, null);             // hierarchy: room first
+      return;
+    }
+    this._setScope(this._ctxRoomId, this._selFrom === from ? null : from);
+  }
+
+  /** Step up one level: object → room → floor. */
+  _navUp() {
+    if (this._selFrom != null) this._setScope(this._ctxRoomId, null);
+    else if (this._ctxRoomId) this._setScope(null, null);
+  }
+
+  /**
+   * The one scope setter: floor (null,null) → room (id,null) → object
+   * (id,from).  Re-renders the plan so the scope's live dimension
+   * annotations draw onto the blueprint, then animates the view extents
+   * to the scope.
+   */
+  _setScope(roomId, from) {
+    this._ctxRoomId = roomId;
+    this._selFrom = from;
+    this._renderPreview();
+    this._zoomToScope();
+  }
+
+  _zoomToScope() {
     const svg = document.querySelector('#ud-plan svg');
-    if (svg && svg._udBase) {
+    if (!svg || !svg._udBase) return;
+    const floor = this.scene.floors[this.activeFloor];
+    const scope = this._scope();
+    const ext = floor && scope ? scopeExtent(floor, scope) : null;
+    if (!ext) {
       this._animateView(svg, svg._udBase.slice(), () => {
         this._view = null;
         svg.setAttribute('viewBox', svg._udBase.join(' '));
       });
+      return;
     }
+    const m = this.scene.meta.wallExt / 1000 + 700;       // walls + annotations, mm
+    this._animateView(svg, [
+      ext.x / 1000 - m, ext.y / 1000 - m,
+      ext.w / 1000 + 2 * m, ext.h / 1000 + 2 * m,
+    ]);
   }
 
-  _selectEnt(from) {
-    if (!this._entIndex?.has(from)) return;               // auto dims etc.
-    this._selFrom = this._selFrom === from ? null : from; // tap again = deselect
-    this._applyPlanState();
-  }
-
-  _planTapEmpty() {
-    if (this._selFrom != null) { this._selFrom = null; this._applyPlanState(); }
-    else if (this._ctxRoomId) this._exitRoom();
-  }
-
-  /** Sync selection/context classes + the context bar to the current state. */
+  /** Sync selection/context classes + the context bar + the scope editor. */
   _applyPlanState() {
     const svg = document.querySelector('#ud-plan svg');
     if (svg) {
@@ -442,6 +491,7 @@ export class UDraftApp {
       }
     }
     this._updateCtxBar();
+    this._updateEditPanel();
   }
 
   _updateCtxBar() {
@@ -452,17 +502,14 @@ export class UDraftApp {
     bar.hidden = false;
 
     const units = this.scene.meta.units;
-    const crumb = [];
     const floors = this.scene.floors;
     const floor = floors[this.activeFloor];
-    if (floors.length > 1 && floor) {
-      crumb.push(esc(floor.title || (floor.num != null ? `Floor ${floor.num}` : '')));
-    }
+    const floorName = floor ? (floor.title || (floor.num != null ? `Floor ${floor.num}` : 'Floor')) : 'Floor';
+    // Breadcrumbs: every level above the current one is a button back up.
+    const crumbs = [`<button class="ud-crumb-btn" data-nav="floor">${esc(floorName)}</button>`];
     let title, spec;
     if (sel) {
-      // Only claim the room crumb when the selection actually belongs to it.
-      const inRoom = room && (sel.roomId === room.id || sel.rooms?.includes(room.id));
-      if (inRoom) crumb.push(esc(room.label.toUpperCase()));
+      if (room) crumbs.push(`<button class="ud-crumb-btn" data-nav="room">${esc(room.label.toUpperCase())}</button>`);
       ({ title, spec } = this._entInfo(sel, units));
     } else {
       title = esc(room.label.toUpperCase());
@@ -470,9 +517,90 @@ export class UDraftApp {
         + ` · ${formatArea(room.areaUm2, units)}`
         + (room.note ? ` · ${esc(room.note)}` : '');
     }
-    const crumbs = crumb.length ? `<span class="ud-crumb">${crumb.join(' › ')} › </span>` : '';
+    const sep = '<span class="ud-crumb-sep">›</span>';
     document.getElementById('ud-ctx-text').innerHTML =
-      `${crumbs}<b>${title}</b><span class="ud-spec">${spec}</span>`;
+      `<span class="ud-crumbs">${crumbs.join(sep)}${sep}<b>${title}</b></span><span class="ud-spec">${spec}</span>`;
+  }
+
+  // -------------------------------------------------------------------------
+  // Scope editor — the bottom bar that live-edits the scoped statement.
+  // Collapsed it shows the DSL line as a chip; expanded it is an input whose
+  // every keystroke replaces that line in the document (selection-free, so
+  // focus stays in the input — the uPub indentLines lesson), and the plan,
+  // annotations and inspector re-render live.
+  // -------------------------------------------------------------------------
+
+  _bindScopeEdit() {
+    this._editOpen = false;
+    this._editFrom = null;                                // line anchor (line-start offset)
+    const input = document.getElementById('ud-edit-input');
+    document.getElementById('ud-edit-chip').addEventListener('click', () => {
+      this._editOpen = true;
+      this._updateEditPanel();
+      input.focus();
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* type=text quirk */ }
+    });
+    document.getElementById('ud-edit-close').addEventListener('click', () => {
+      this._editOpen = false;
+      input.blur();
+      this._updateEditPanel();
+    });
+    input.addEventListener('input', () => {
+      if (this._editFrom == null) return;
+      this._replaceLineNoCaret(this._editFrom, input.value);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === 'Escape') {
+        e.preventDefault();
+        this._editOpen = false;
+        input.blur();
+        this._updateEditPanel();
+      }
+    });
+  }
+
+  _updateEditPanel() {
+    const panel = document.getElementById('ud-edit');
+    const input = document.getElementById('ud-edit-input');
+    const chip = document.getElementById('ud-edit-chip');
+    const rec = this._scopeRec();
+    const editing = document.activeElement === input;
+    if (!rec && !editing) {
+      panel.hidden = true;
+      this._editFrom = null;
+      this._editOpen = false;
+      return;
+    }
+    panel.hidden = false;
+    if (rec) this._editFrom = rec.from;
+    const line = this._editFrom != null ? this._lineTextAt(this._editFrom) : '';
+    chip.hidden = this._editOpen;
+    document.getElementById('ud-edit-body').hidden = !this._editOpen;
+    chip.querySelector('code').textContent = line;
+    if (!editing) input.value = line;                     // never fight live typing
+  }
+
+  _lineTextAt(from) {
+    const ed = this.editor;
+    return ed.lines[ed._lineAt(from).lineIdx] ?? '';
+  }
+
+  /**
+   * Replace the line at `from` without touching the DOM selection: setting a
+   * selection would focus the contenteditable and steal focus from the scope
+   * editor's input (and pop the iOS keyboard).  Undo coalesces like typing.
+   * The line-start offset is stable under same-line edits, so the scope
+   * anchor survives every keystroke.
+   */
+  _replaceLineNoCaret(from, textValue) {
+    const ed = this.editor;
+    const { lineIdx } = ed._lineAt(from);
+    const clean = String(textValue).replace(/\n/g, ' ');
+    if (ed.lines[lineIdx] === clean) return;
+    ed._pushUndo('type');
+    ed.lines[lineIdx] = clean;
+    ed._render();
+    ed.onChange();
   }
 
   /** Inspector line for a selected entity (title + monospace specifics). */
@@ -512,17 +640,6 @@ export class UDraftApp {
       default:
         return { title: esc(rec.kind ?? ''), spec: '' };
     }
-  }
-
-  /** Animate the viewBox to frame a µm-space rect (room bbox + breathing room). */
-  _zoomToRect(bbox) {
-    const svg = document.querySelector('#ud-plan svg');
-    if (!svg || !svg._udBase) return;
-    const m = this.scene.meta.wallExt / 1000 + 500;       // walls + 0.5 m, in mm
-    this._animateView(svg, [
-      bbox.x / 1000 - m, bbox.y / 1000 - m,
-      bbox.w / 1000 + 2 * m, bbox.h / 1000 + 2 * m,
-    ]);
   }
 
   _animateView(svg, target, done) {
@@ -992,20 +1109,15 @@ export class UDraftApp {
       this._ctxRoomId = null;
       this._selFrom = null;
       this._entIndex = new Map();
-      this._updateCtxBar();
+      this._applyPlanState();
       return;
     }
-    const { svg } = renderFloorSvg(floor, scene.meta, { interactive: true });
-    plan.innerHTML = svg;
-    // Live edits re-render the svg out from under the zoom state — remember
-    // the rendered (fit) viewBox and re-apply the user's window over it.
-    const el = plan.querySelector('svg');
-    el._udBase = el.getAttribute('viewBox').split(' ').map(Number);
-    if (this._view) el.setAttribute('viewBox', this._view.map(n => Math.round(n * 100) / 100).join(' '));
 
     // Index the floor's records by their statement offset — the inspector's
     // lookup for a clicked group — and drop context/selection that no longer
-    // resolves (the statement was edited away, or offsets shifted past it).
+    // resolves.  EXCEPT while the scope editor's input is focused: a
+    // half-typed statement must not collapse the scope out from under the
+    // person typing it (the issue strip already shows what's wrong).
     const idx = new Map();
     for (const r of floor.rooms) idx.set(r.from, { kind: 'room', ...r });
     for (const o of floor.openings) idx.set(o.from, o);
@@ -1013,8 +1125,19 @@ export class UDraftApp {
     for (const st of floor.stairs) idx.set(st.from, { kind: 'stairs', ...st });
     for (const d of floor.dims) { if (d.from != null) idx.set(d.from, { kind: 'dim', ...d }); }
     this._entIndex = idx;
-    if (this._ctxRoomId && !floor.rooms.some(r => r.id === this._ctxRoomId)) this._ctxRoomId = null;
-    if (this._selFrom != null && !idx.has(this._selFrom)) this._selFrom = null;
+    const editingScope = document.activeElement === document.getElementById('ud-edit-input');
+    if (!editingScope) {
+      if (this._ctxRoomId && !floor.rooms.some(r => r.id === this._ctxRoomId)) this._ctxRoomId = null;
+      if (this._selFrom != null && !idx.has(this._selFrom)) this._selFrom = null;
+    }
+
+    const { svg } = renderFloorSvg(floor, scene.meta, { interactive: true, scope: this._scope() });
+    plan.innerHTML = svg;
+    // Live edits re-render the svg out from under the zoom state — remember
+    // the rendered (fit) viewBox and re-apply the user's window over it.
+    const el = plan.querySelector('svg');
+    el._udBase = el.getAttribute('viewBox').split(' ').map(Number);
+    if (this._view) el.setAttribute('viewBox', this._view.map(n => Math.round(n * 100) / 100).join(' '));
     this._applyPlanState();
   }
 
