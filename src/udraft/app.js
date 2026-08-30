@@ -35,7 +35,7 @@ import { UPubEditor } from '../upub/editor.js';
 import { SlashMenu } from '../upub/slash-menu.js';
 import { renderMarkdown } from '../upub/preview.js';
 import * as udSyntax from './syntax.js';
-import { parseDocument, formatArea, formatLength, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SIDE_NAMES } from '../core/udraft/parse.js';
+import { parseDocument, formatArea, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES } from '../core/udraft/parse.js';
 import { layoutDocument } from '../core/udraft/layout.js';
 import { renderFloorSvg, renderExportSvg, renderPrintBody, exportStyles, scopeExtent } from '../core/udraft/svg.js';
 import { GUIDE_MD } from './guide-content.js';
@@ -288,15 +288,13 @@ export class UDraftApp {
           <div id="ud-ctxbar" hidden>
             <button id="ud-ctx-back" aria-label="Back">‹</button>
             <div id="ud-ctx-text"></div>
-            <button id="ud-ctx-src" title="Show in source" aria-label="Show in source">‹/›</button>
           </div>
           <div id="ud-issues" hidden></div>
           <div id="ud-plan"></div>
           <div id="ud-edit" hidden>
             <button id="ud-edit-chip"><code></code><span class="ud-edit-pencil">✎</span></button>
             <div id="ud-edit-body" hidden>
-              <input id="ud-edit-input" type="text" autocomplete="off" autocapitalize="off"
-                     autocorrect="off" spellcheck="false" enterkeyhint="done" aria-label="Edit statement">
+              <div id="ud-edit-host"></div>
               <button id="ud-edit-close" aria-label="Done editing">⌄</button>
             </div>
           </div>
@@ -385,10 +383,6 @@ export class UDraftApp {
       if (nav === 'floor') this._setScope(null, null);
       else if (nav === 'room') this._setScope(this._ctxRoomId, null);
     });
-    document.getElementById('ud-ctx-src').addEventListener('click', () => {
-      const rec = this._scopeRec();
-      if (rec) this._jumpToSource(rec.from, rec.to);
-    });
     this._bindScopeEdit();
   }
 
@@ -456,21 +450,28 @@ export class UDraftApp {
   _zoomToScope() {
     const svg = document.querySelector('#ud-plan svg');
     if (!svg || !svg._udBase) return;
-    const floor = this.scene.floors[this.activeFloor];
     const scope = this._scope();
-    const ext = floor && scope ? scopeExtent(floor, scope) : null;
-    if (!ext) {
-      this._animateView(svg, svg._udBase.slice(), () => {
-        this._view = null;
-        svg.setAttribute('viewBox', svg._udBase.join(' '));
-      });
-      return;
+    const floor = this.scene.floors[this.activeFloor];
+    if (scope?.entFrom != null && floor) {
+      // Object scope: frame the object + its annotations (inside the
+      // isolated room render).
+      const ext = scopeExtent(floor, scope);
+      if (ext) {
+        const m = this.scene.meta.wallExt / 1000 + 700;
+        this._animateView(svg, [
+          ext.x / 1000 - m, ext.y / 1000 - m,
+          ext.w / 1000 + 2 * m, ext.h / 1000 + 2 * m,
+        ]);
+        return;
+      }
     }
-    const m = this.scene.meta.wallExt / 1000 + 700;       // walls + annotations, mm
-    this._animateView(svg, [
-      ext.x / 1000 - m, ext.y / 1000 - m,
-      ext.w / 1000 + 2 * m, ext.h / 1000 + 2 * m,
-    ]);
+    // Floor fit, or room isolation: the freshly rendered viewBox IS the frame
+    // (the isolation render's own bounds cover the room, its outside dims and
+    // the neighbour arrows).
+    this._animateView(svg, svg._udBase.slice(), () => {
+      this._view = null;
+      svg.setAttribute('viewBox', svg._udBase.join(' '));
+    });
   }
 
   /** Sync selection/context classes + the context bar + the scope editor. */
@@ -494,6 +495,11 @@ export class UDraftApp {
     this._updateEditPanel();
   }
 
+  /**
+   * The top bar is BREADCRUMBS ONLY — dimensions and specifics are drawn on
+   * the plan itself, not written up here.  Every level above the current one
+   * is a button back up.
+   */
   _updateCtxBar() {
     const bar = document.getElementById('ud-ctxbar');
     const room = this._ctxRoom();
@@ -501,145 +507,160 @@ export class UDraftApp {
     if (!room && !sel) { bar.hidden = true; return; }
     bar.hidden = false;
 
-    const units = this.scene.meta.units;
-    const floors = this.scene.floors;
-    const floor = floors[this.activeFloor];
+    const floor = this.scene.floors[this.activeFloor];
     const floorName = floor ? (floor.title || (floor.num != null ? `Floor ${floor.num}` : 'Floor')) : 'Floor';
-    // Breadcrumbs: every level above the current one is a button back up.
     const crumbs = [`<button class="ud-crumb-btn" data-nav="floor">${esc(floorName)}</button>`];
-    let title, spec;
+    let title;
     if (sel) {
       if (room) crumbs.push(`<button class="ud-crumb-btn" data-nav="room">${esc(room.label.toUpperCase())}</button>`);
-      ({ title, spec } = this._entInfo(sel, units));
+      title = esc((sel.kind === 'fixture' ? sel.type : sel.kind).toUpperCase());
     } else {
       title = esc(room.label.toUpperCase());
-      spec = `${formatLength(room.bbox.w, units)} × ${formatLength(room.bbox.h, units)}`
-        + ` · ${formatArea(room.areaUm2, units)}`
-        + (room.note ? ` · ${esc(room.note)}` : '');
     }
     const sep = '<span class="ud-crumb-sep">›</span>';
     document.getElementById('ud-ctx-text').innerHTML =
-      `<span class="ud-crumbs">${crumbs.join(sep)}${sep}<b>${title}</b></span><span class="ud-spec">${spec}</span>`;
+      `<span class="ud-crumbs">${crumbs.join(sep)}${sep}<b>${title}</b></span>`;
   }
 
   // -------------------------------------------------------------------------
-  // Scope editor — the bottom bar that live-edits the scoped statement.
-  // Collapsed it shows the DSL line as a chip; expanded it is an input whose
-  // every keystroke replaces that line in the document (selection-free, so
-  // focus stays in the input — the uPub indentLines lesson), and the plan,
-  // annotations and inspector re-render live.
+  // Scope editor — a second instance of the shared line editor at the bottom
+  // of the preview, syntax-highlighted, MULTI-LINE, editing exactly the
+  // statements that make up the current scope:
+  //   • object scope → its one statement;
+  //   • room scope   → the `room` line plus every statement that references
+  //     the room (openings, fixtures, stairs, label/note/dim).
+  // The pane's rows are anchored to their doc line indexes; every keystroke
+  // reconciles the pane back into the main document row-by-row (a prefix/
+  // suffix diff handles Enter/joins/paste), so scattered source lines edit
+  // in place without being reordered.  Long-press on the plan opens this.
   // -------------------------------------------------------------------------
 
   _bindScopeEdit() {
     this._editOpen = false;
-    this._editFrom = null;                                // line anchor (line-start offset)
-    const input = document.getElementById('ud-edit-input');
-    document.getElementById('ud-edit-chip').addEventListener('click', () => {
-      this._editOpen = true;
-      this._updateEditPanel();
-      input.focus();
-      try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* type=text quirk */ }
+    this._paneAnchors = [];       // doc line index per pane row
+    this._paneLines = [];         // what the pane last reflected
+    this._paneSyncing = false;
+    this.scopeEditor = new UPubEditor(document.getElementById('ud-edit-host'), {
+      syntax: udSyntax,
+      onChange: () => this._paneChanged(),
     });
-    document.getElementById('ud-edit-close').addEventListener('click', () => {
-      this._editOpen = false;
-      input.blur();
-      this._updateEditPanel();
-    });
-    input.addEventListener('input', () => {
-      if (this._editFrom == null) return;
-      this._replaceLineNoCaret(this._editFrom, input.value);
-    });
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === 'Escape') {
-        e.preventDefault();
-        this._editOpen = false;
-        input.blur();
-        this._updateEditPanel();
-      }
+    document.getElementById('ud-edit-chip').addEventListener('click', () => this._openScopeEditor());
+    document.getElementById('ud-edit-close').addEventListener('click', () => this._closeScopeEditor());
+    this.scopeEditor.root.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); this._closeScopeEditor(); }
     });
   }
 
-  _updateEditPanel() {
-    const panel = document.getElementById('ud-edit');
-    const input = document.getElementById('ud-edit-input');
-    const chip = document.getElementById('ud-edit-chip');
-    const rec = this._scopeRec();
-    const editing = document.activeElement === input;
-    if (!rec && !editing) {
-      panel.hidden = true;
-      this._editFrom = null;
-      this._editOpen = false;
-      return;
+  _openScopeEditor() {
+    if (!this._scopeRec()) return;
+    this._editOpen = true;
+    this._populatePane();
+    this._updateEditPanel();
+    this.scopeEditor.focus();
+  }
+
+  _closeScopeEditor() {
+    this._editOpen = false;
+    this.scopeEditor.root.blur();
+    this._updateEditPanel();
+    // Revalidate scope that was pinned while typing.
+    this._renderPreview();
+  }
+
+  /** The doc line indexes that make up the current scope. */
+  _paneStatements() {
+    const floor = this.scene.floors[this.activeFloor];
+    if (!floor) return [];
+    if (this._selFrom != null) {
+      const rec = this._entIndex?.get(this._selFrom);
+      return rec ? [rec.line] : [];
     }
-    panel.hidden = false;
-    if (rec) this._editFrom = rec.from;
-    const line = this._editFrom != null ? this._lineTextAt(this._editFrom) : '';
-    chip.hidden = this._editOpen;
-    document.getElementById('ud-edit-body').hidden = !this._editOpen;
-    chip.querySelector('code').textContent = line;
-    if (!editing) input.value = line;                     // never fight live typing
+    const room = this._ctxRoom();
+    if (!room) return [];
+    const lines = new Set([room.line]);
+    if (room.labelStmt) lines.add(room.labelStmt.line);
+    for (const o of floor.openings) if (o.rooms?.includes(room.id)) lines.add(o.line);
+    for (const f of floor.fixtures) if (f.roomId === room.id) lines.add(f.line);
+    for (const st of floor.stairs) if (st.roomId === room.id) lines.add(st.line);
+    return [...lines].sort((a, b) => a - b);
   }
 
-  _lineTextAt(from) {
+  _populatePane() {
     const ed = this.editor;
-    return ed.lines[ed._lineAt(from).lineIdx] ?? '';
+    this._paneAnchors = this._paneStatements();
+    this._paneLines = this._paneAnchors.map(i => ed.lines[i] ?? '');
+    this._paneSyncing = true;
+    this.scopeEditor.setValue(this._paneLines.join('\n'));
+    this._paneSyncing = false;
   }
 
-  /**
-   * Replace the line at `from` without touching the DOM selection: setting a
-   * selection would focus the contenteditable and steal focus from the scope
-   * editor's input (and pop the iOS keyboard).  Undo coalesces like typing.
-   * The line-start offset is stable under same-line edits, so the scope
-   * anchor survives every keystroke.
-   */
-  _replaceLineNoCaret(from, textValue) {
+  /** Reconcile the pane's rows back into the main document. */
+  _paneChanged() {
+    if (this._paneSyncing || !this._editOpen) return;
     const ed = this.editor;
-    const { lineIdx } = ed._lineAt(from);
-    const clean = String(textValue).replace(/\n/g, ' ');
-    if (ed.lines[lineIdx] === clean) return;
+    const newLines = this.scopeEditor.getValue().split('\n');
+    const old = this._paneLines;
+    const anchors = this._paneAnchors;
+    if (!anchors.length) return;
+    // Common prefix / suffix → the changed row window.
+    let p = 0;
+    while (p < old.length && p < newLines.length && old[p] === newLines[p]) p++;
+    let sfx = 0;
+    while (sfx < old.length - p && sfx < newLines.length - p
+      && old[old.length - 1 - sfx] === newLines[newLines.length - 1 - sfx]) sfx++;
+    const oldN = old.length - p - sfx;
+    const newMid = newLines.slice(p, newLines.length - sfx);
     ed._pushUndo('type');
-    ed.lines[lineIdx] = clean;
+    const n = Math.min(oldN, newMid.length);
+    for (let i = 0; i < n; i++) ed.lines[anchors[p + i]] = newMid[i];
+    if (newMid.length > n) {
+      // Rows added (Enter/paste): insert after the last written row — or,
+      // for a pure insertion, after the previous pane row.
+      const afterDoc = n > 0 ? anchors[p + n - 1] : (p > 0 ? anchors[p - 1] : anchors[0] - 1);
+      const extras = newMid.slice(n);
+      ed.lines.splice(afterDoc + 1, 0, ...extras);
+      for (let i = 0; i < anchors.length; i++) if (anchors[i] > afterDoc) anchors[i] += extras.length;
+      anchors.splice(p + n, 0, ...extras.map((_, k) => afterDoc + 1 + k));
+    } else if (oldN > n) {
+      // Rows removed (join/delete): drop them from the doc too.
+      const dead = anchors.slice(p + n, p + oldN).sort((a, b) => b - a);
+      anchors.splice(p + n, oldN - n);
+      for (const li of dead) {
+        ed.lines.splice(li, 1);
+        for (let i = 0; i < anchors.length; i++) if (anchors[i] > li) anchors[i]--;
+      }
+    }
+    this._paneLines = newLines.slice();
     ed._render();
     ed.onChange();
   }
 
-  /** Inspector line for a selected entity (title + monospace specifics). */
-  _entInfo(rec, units) {
-    const L = (um) => formatLength(um, units);
-    switch (rec.kind) {
-      case 'door': case 'window': case 'opening': {
-        const wall = rec.shared
-          ? `${rec.rooms[0]} / ${rec.rooms[1]}`
-          : `${rec.rooms[0]} · ${SIDE_NAMES[rec.wallSide]} wall`;
-        const loEnd = rec.axis === 'v' ? 'north' : 'west';
-        let spec = `${esc(wall)} · ${L(rec.offsetFromLo)} from ${loEnd}`;
-        if (rec.kind === 'door') {
-          const hinge = rec.axis === 'v'
-            ? (rec.hingeEnd === 'lo' ? 'north' : 'south')
-            : (rec.hingeEnd === 'lo' ? 'west' : 'east');
-          spec += ` · opens into ${esc(rec.into ?? 'outside')} · hinge ${hinge}`;
-        }
-        return { title: `${rec.kind.toUpperCase()} ${L(rec.width)}`, spec };
-      }
-      case 'fixture': {
-        const horiz = rec.side === 'n' || rec.side === 's';
-        const along = horiz ? rec.rect.w : rec.rect.h;
-        const deep = horiz ? rec.rect.h : rec.rect.w;
-        return {
-          title: esc(rec.type.toUpperCase()),
-          spec: `${L(along)} × ${L(deep)} · ${esc(rec.roomId)} · ${SIDE_NAMES[rec.side]} wall`,
-        };
-      }
-      case 'stairs':
-        return {
-          title: `STAIRS ${rec.dir.toUpperCase()}`,
-          spec: `${L(rec.width)} wide · ${L(rec.run)} run · ${esc(rec.roomId)}`,
-        };
-      case 'dim':
-        return { title: 'DIMENSION', spec: L(rec.um) };
-      default:
-        return { title: esc(rec.kind ?? ''), spec: '' };
+  _updateEditPanel() {
+    const panel = document.getElementById('ud-edit');
+    const chip = document.getElementById('ud-edit-chip');
+    const rec = this._scopeRec();
+    const editing = this._paneFocused();
+    if (!rec && !editing) {
+      panel.hidden = true;
+      this._editOpen = false;
+      return;
     }
+    panel.hidden = false;
+    chip.hidden = this._editOpen;
+    document.getElementById('ud-edit-body').hidden = !this._editOpen;
+    if (!this._editOpen && rec) {
+      const stmts = this._paneStatements();
+      const first = this.editor.lines[stmts[0]] ?? '';
+      chip.querySelector('code').textContent =
+        stmts.length > 1 ? `${first.trim()}  … +${stmts.length - 1} more` : first;
+    } else if (this._editOpen && !editing && rec) {
+      // Scope changed while the pane is open but idle → show the new scope.
+      this._populatePane();
+    }
+  }
+
+  _paneFocused() {
+    return this.scopeEditor && this.scopeEditor.root.contains(document.activeElement);
   }
 
   _animateView(svg, target, done) {
@@ -727,10 +748,23 @@ export class UDraftApp {
         lpTimer = setTimeout(() => {
           lpTimer = null;
           if (moved > 8 || ptrs.size !== 1) return;
-          const ent = target.closest?.('[data-doc-from]');
-          if (!ent) return;
+          // LONG-PRESS = focus the pressed thing and open its EDIT PANE
+          // (the scoped, syntax-highlighted editor at the bottom).
+          const g = target.closest?.('[data-ent]');
+          if (!g) return;
           this._lpFired = true;                           // swallow the tail click
-          this._jumpToSource(+ent.dataset.docFrom, +ent.dataset.docTo);
+          if (g.dataset.ent === 'room') {
+            this._setScope(g.dataset.roomId, null);
+          } else if (g.dataset.docFrom != null) {
+            const rec = this._entIndex?.get(+g.dataset.docFrom);
+            if (!rec) return;
+            const owner = this._roomOfRec(rec);
+            const inCtx = this._ctxRoomId
+              && (rec.roomId === this._ctxRoomId || rec.rooms?.includes(this._ctxRoomId));
+            if (inCtx) this._setScope(this._ctxRoomId, +g.dataset.docFrom);
+            else if (owner) this._setScope(owner, null);
+          } else return;
+          this._openScopeEditor();
         }, LP_MS);
       }
     });
@@ -1125,13 +1159,17 @@ export class UDraftApp {
     for (const st of floor.stairs) idx.set(st.from, { kind: 'stairs', ...st });
     for (const d of floor.dims) { if (d.from != null) idx.set(d.from, { kind: 'dim', ...d }); }
     this._entIndex = idx;
-    const editingScope = document.activeElement === document.getElementById('ud-edit-input');
+    const editingScope = this._paneFocused?.();
     if (!editingScope) {
       if (this._ctxRoomId && !floor.rooms.some(r => r.id === this._ctxRoomId)) this._ctxRoomId = null;
       if (this._selFrom != null && !idx.has(this._selFrom)) this._selFrom = null;
     }
 
-    const { svg } = renderFloorSvg(floor, scene.meta, { interactive: true, scope: this._scope() });
+    const { svg } = renderFloorSvg(floor, scene.meta, {
+      interactive: true,
+      scope: this._scope(),
+      isolate: this._ctxRoomId ?? undefined,              // room drill-down = isolation
+    });
     plan.innerHTML = svg;
     // Live edits re-render the svg out from under the zoom state — remember
     // the rendered (fit) viewBox and re-apply the user's window over it.

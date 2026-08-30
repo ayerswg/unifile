@@ -382,9 +382,14 @@ function layoutFloor(floorStmts, meta, issues) {
   }
 
   // ── 3. Wall rects (bands + corner squares) for the union path ────────────
-  const wallRects = walls.map(w => w.axis === 'v'
-    ? { x: w.band[0], y: w.lo, w: w.band[1] - w.band[0], h: w.hi - w.lo }
-    : { x: w.lo, y: w.band[0], w: w.hi - w.lo, h: w.band[1] - w.band[0] });
+  // Each rect carries the room(s) it belongs to so the isolation view can
+  // render just one room's walls.
+  const wallRects = walls.map(w => ({
+    ...(w.axis === 'v'
+      ? { x: w.band[0], y: w.lo, w: w.band[1] - w.band[0], h: w.hi - w.lo }
+      : { x: w.lo, y: w.band[0], w: w.hi - w.lo, h: w.band[1] - w.band[0] }),
+    rooms: w.shared ? [w.loSideRoom, w.hiSideRoom] : [w.roomId],
+  }));
 
   // Band width covering face f at along-axis position u (clamped just inside).
   const widthAt = (f, u) => {
@@ -407,7 +412,7 @@ function layoutFloor(floorStmts, meta, issues) {
       if (!h || !v) continue;
       const x = v.dir === 'e' ? cx : cx - v.w;
       const y = h.dir === 's' ? cy : cy - h.w;
-      wallRects.push({ x, y, w: v.w, h: h.w });
+      wallRects.push({ x, y, w: v.w, h: h.w, rooms: [room.id] });
     }
   }
 

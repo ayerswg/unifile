@@ -352,11 +352,12 @@ export function annotationMarkup(floor, meta, scope) {
     const room = floor.rooms.find(r => r.id === scope.roomId);
     if (!room) return '';
     const b = room.bbox;
-    // Interior clear dims, inset past counter-depth fixtures (~610 mm) so the
-    // lines don't cross whatever stands against the north/west walls.
+    // Interior clear dims, written OUTSIDE the walls (the isolation view has
+    // the space, and the interior stays uncluttered).
+    const out = meta.wallExt + 1400 * MM;
     return `<g class="ud-anno">`
-      + annoDim('h', b.x, b.x + b.w, b.y + 2.6 * D, b.w, meta)
-      + annoDim('v', b.y, b.y + b.h, b.x + 2.6 * D, b.h, meta)
+      + annoDim('h', b.x, b.x + b.w, b.y - out, b.w, meta)
+      + annoDim('v', b.y, b.y + b.h, b.x - out, b.h, meta)
       + `</g>`;
   }
   const from = scope.entFrom;
@@ -445,6 +446,59 @@ export function scopeExtent(floor, scope) {
 }
 
 // ---------------------------------------------------------------------------
+// Neighbour arrows — the isolation view's wayfinding: one labelled arrow per
+// adjoining room, drawn just outside the shared wall (at the connecting
+// opening when there is one), tappable to walk into that room.
+// ---------------------------------------------------------------------------
+
+function neighborMarkup(floor, roomId, interactive) {
+  const nbrs = new Map();                                // id → {side, at, face, via}
+  for (const w of floor.walls) {
+    if (!w.shared) continue;
+    let nbr, side;
+    if (w.loSideRoom === roomId) { nbr = w.hiSideRoom; side = w.axis === 'v' ? 'e' : 's'; }
+    else if (w.hiSideRoom === roomId) { nbr = w.loSideRoom; side = w.axis === 'v' ? 'w' : 'n'; }
+    else continue;
+    const op = floor.openings.find(o => o.shared && o.rooms.includes(roomId)
+      && o.rooms.includes(nbr) && o.axis === w.axis && o.lo >= w.lo && o.hi <= w.hi);
+    const at = op ? (op.lo + op.hi) / 2 : (w.lo + w.hi) / 2;
+    const face = (side === 'e' || side === 's') ? w.band[1] : w.band[0];
+    if (!nbrs.has(nbr) || op) nbrs.set(nbr, { side, at, face, via: !!op });
+  }
+  const parts = [];
+  const GAP = 180 * MM, LEN = 480 * MM, TXT = 150 * MM;
+  for (const [id, n] of nbrs) {
+    const nbrRoom = floor.rooms.find(r => r.id === id);
+    if (!nbrRoom) continue;
+    const name = nbrRoom.label.toUpperCase();
+    let body = '';
+    if (n.side === 'n') {
+      body = line(n.at, n.face - GAP, n.at, n.face - GAP - LEN, 'ud-nbr-ln') + arrowHead(n.at, n.face - GAP - LEN, 'n')
+        + text(n.at, n.face - GAP - LEN - TXT, name, 'ud-txt ud-nbr-txt', ' text-anchor="middle"');
+    } else if (n.side === 's') {
+      body = line(n.at, n.face + GAP, n.at, n.face + GAP + LEN, 'ud-nbr-ln') + arrowHead(n.at, n.face + GAP + LEN, 's')
+        + text(n.at, n.face + GAP + LEN + TXT + 140 * MM, name, 'ud-txt ud-nbr-txt', ' text-anchor="middle"');
+    } else if (n.side === 'e') {
+      body = line(n.face + GAP, n.at, n.face + GAP + LEN, n.at, 'ud-nbr-ln') + arrowHead(n.face + GAP + LEN, n.at, 'e')
+        + text(n.face + GAP + LEN + TXT, n.at + 70 * MM, name, 'ud-txt ud-nbr-txt');
+    } else {
+      body = line(n.face - GAP, n.at, n.face - GAP - LEN, n.at, 'ud-nbr-ln') + arrowHead(n.face - GAP - LEN, n.at, 'w')
+        + text(n.face - GAP - LEN - TXT, n.at + 70 * MM, name, 'ud-txt ud-nbr-txt', ' text-anchor="end"');
+    }
+    // Generous tap target over arrow + name.
+    const nameW = Math.max(name.length * 130 * MM, 900 * MM);
+    let hx, hy, hw, hh;
+    if (n.side === 'n') { hx = n.at - nameW / 2; hy = n.face - GAP - LEN - 2 * TXT - 220 * MM; hw = nameW; hh = LEN + 2 * TXT + GAP + 220 * MM; }
+    else if (n.side === 's') { hx = n.at - nameW / 2; hy = n.face; hw = nameW; hh = LEN + 2 * TXT + GAP + 220 * MM; }
+    else if (n.side === 'e') { hx = n.face; hy = n.at - 300 * MM; hw = GAP + LEN + TXT + nameW; hh = 600 * MM; }
+    else { hx = n.face - GAP - LEN - TXT - nameW; hy = n.at - 300 * MM; hw = GAP + LEN + TXT + nameW; hh = 600 * MM; }
+    parts.push(`<g class="ud-ent ud-nbr" data-ent="room" data-room-id="${esc(id)}"${docAttrs(nbrRoom, interactive)}>`
+      + body + hitRect(hx, hy, hw, hh, interactive, 0) + `</g>`);
+  }
+  return parts.join('');
+}
+
+// ---------------------------------------------------------------------------
 // Floor → SVG
 // ---------------------------------------------------------------------------
 
@@ -469,28 +523,49 @@ function floorBounds(floor) {
  * Render one floor to SVG markup.
  * @param {object} floor  a floor from layoutDocument()
  * @param {object} meta   scene meta
- * @param {object} opts   { interactive?, styles?, background?, scope? }
+ * @param {object} opts   { interactive?, styles?, background?, scope?, isolate? }
  *   styles     — a <style> payload embedded in the svg (exports); omit in-app
  *   background — paint an opaque paper rect (exports)
  *   scope      — drill-down scope ({roomId} or {entFrom}); draws live
  *                dimension annotations on top (app preview only)
+ *   isolate    — a room id: render ONLY that room (its walls, openings,
+ *                fixtures, stairs — no labels, no floor dims) plus labelled
+ *                arrows to adjoining rooms (app drill-down view only)
  * @returns {{ svg: string, viewBox: {x,y,w,h}, widthMm: number, heightMm: number }}
  */
 export function renderFloorSvg(floor, meta, opts = {}) {
   const interactive = !!opts.interactive;
-  const vb = floorBounds(floor);
+  const iso = opts.isolate ? floor.rooms.find(r => r.id === opts.isolate) : null;
+  const inIso = (rec) => !iso
+    || rec.roomId === iso.id || rec.rooms?.includes(iso.id);
+  const vb = iso
+    ? {
+        // The isolation view frames just the room: walls + outside dims +
+        // neighbour arrows and their names.
+        x: iso.bbox.x - meta.wallExt - 3200 * MM,
+        y: iso.bbox.y - meta.wallExt - 3200 * MM,
+        w: iso.bbox.w + 2 * (meta.wallExt + 3200 * MM),
+        h: iso.bbox.h + 2 * (meta.wallExt + 3200 * MM),
+      }
+    : floorBounds(floor);
   const parts = [];
   if (opts.styles) parts.push(`<style>${opts.styles}</style>`);
   if (opts.background) {
     parts.push(`<rect class="ud-paper" x="${mm(vb.x)}" y="${mm(vb.y)}" width="${mm(vb.w)}" height="${mm(vb.h)}"/>`);
   }
-  parts.push(wallsPath(floor.wallRects));
-  for (const room of floor.rooms) parts.push(roomHitMarkup(room, interactive));
-  for (const o of floor.openings) parts.push(openingMarkup(o, interactive));
-  for (const st of floor.stairs) parts.push(stairsMarkup(st, interactive));
-  for (const f of floor.fixtures) parts.push(fixtureMarkup(f, interactive));
-  for (const d of floor.dims) parts.push(dimMarkup(d, meta, interactive));
-  for (const room of floor.rooms) parts.push(roomLabelMarkup(room, meta, interactive));
+  parts.push(wallsPath(iso ? floor.wallRects.filter(r => r.rooms?.includes(iso.id)) : floor.wallRects));
+  for (const room of floor.rooms) {
+    if (!iso || room === iso) parts.push(roomHitMarkup(room, interactive));
+  }
+  for (const o of floor.openings) { if (inIso(o)) parts.push(openingMarkup(o, interactive)); }
+  for (const st of floor.stairs) { if (inIso(st)) parts.push(stairsMarkup(st, interactive)); }
+  for (const f of floor.fixtures) { if (inIso(f)) parts.push(fixtureMarkup(f, interactive)); }
+  if (!iso) {
+    for (const d of floor.dims) parts.push(dimMarkup(d, meta, interactive));
+    for (const room of floor.rooms) parts.push(roomLabelMarkup(room, meta, interactive));
+  } else {
+    parts.push(neighborMarkup(floor, iso.id, interactive));
+  }
   if (opts.scope) parts.push(annotationMarkup(floor, meta, opts.scope));
 
   const widthMm = mm(vb.w), heightMm = mm(vb.h);
