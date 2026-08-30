@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Same-origin only: no external network. manifest-src is required for the
+       web app manifest to load (without it the manifest falls back to
+       default-src 'none' and is blocked → the PWA isn't installable).
+       connect-src 'self' lets the in-app site-nav fetch /search.json. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self' blob:; media-src blob:; frame-src 'none'; object-src 'none';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>uDraft</title>
+  <meta name="description" content="Unifile – offline document editor with full version history.">
+
+  <!-- PWA / installability -->
+  <link rel="manifest" href="./manifest.json">
+  <!-- Per-variant U-border icons (see build/icons.mjs; PNGs copied from
+       templates/icons/<abbrev>/ at build time).  iOS ignores manifest icons —
+       the apple-touch-icon link is what the Add-to-Home-Screen flow uses. -->
+  <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+  <meta name="theme-color" content="#181825">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <!-- NB: deliberately NO `apple-mobile-web-app-status-bar-style: black-translucent`.
+       That style is the iOS "chin gap" bug: iOS offsets the whole view up ~59px
+       (the status-bar height) without growing the viewport, leaving a fixed gap
+       at the bottom that no CSS can recover.  With the default status-bar style,
+       `display:standalone` + `viewport-fit=cover` reserves the status bar and lets
+       content reach the true bottom — no chin gap.  (See xefig PWA chin-gap tests.) -->
+  <meta name="apple-mobile-web-app-title" content="uDraft">
+
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+
+  <!--
+    NO-JS FALLBACK
+    In PWA mode, JS is always available. But if somehow it isn't,
+    show a friendly message.
+  -->
+  <noscript>
+    <div style="padding:2rem;font-family:system-ui,sans-serif;color:#4c4f69">
+      <h1>Unifile requires JavaScript</h1>
+      <p>Please enable JavaScript to use the Unifile editor.</p>
+    </div>
+  </noscript>
+
+  <!--
+    PRE-INSTALL BANNER
+    Shown only when the PWA is viewed in a normal browser tab (not yet
+    installed / not display-mode:standalone).  Walks the visitor through
+    installing on THEIR device; dismissible (persisted per app path).
+    Self-contained (inline style + script) so it works for every shell
+    (standard ui/ app AND the uPub shell) without touching app code.
+  -->
+  <style>
+    #uf-install-banner {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 2147483000;
+      padding-top: env(safe-area-inset-top);
+      background: #0b0f0b; color: #d8ffd8;
+      border-bottom: 1px solid rgba(74, 246, 38, 0.5);
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 13px; line-height: 1.45;
+    }
+    #uf-install-banner[hidden] { display: none; }
+    .uf-ib-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+    .uf-ib-msg { flex: 1; min-width: 0; }
+    .uf-ib-msg b { color: #4af626; font-weight: 600; }
+    .uf-ib-btn {
+      flex-shrink: 0; cursor: pointer; font: inherit;
+      background: none; border: 1px solid #4af626; border-radius: 4px;
+      color: #4af626; padding: 4px 12px;
+    }
+    .uf-ib-btn:hover { background: rgba(74, 246, 38, 0.12); }
+    .uf-ib-x {
+      flex-shrink: 0; cursor: pointer; font: inherit; font-size: 16px;
+      background: none; border: none; color: #7a9a7a; padding: 2px 6px;
+    }
+    .uf-ib-x:hover { color: #d8ffd8; }
+    #uf-ib-steps { padding: 2px 14px 12px; border-top: 1px dashed rgba(74, 246, 38, 0.25); }
+    #uf-ib-steps[hidden] { display: none; }
+    #uf-ib-steps ol { margin: 8px 0 4px; padding-left: 22px; }
+    #uf-ib-steps li { margin: 3px 0; }
+    #uf-ib-steps .uf-ib-note { color: #7a9a7a; }
+    #uf-ib-steps details { margin-top: 6px; }
+    #uf-ib-steps summary { cursor: pointer; color: #7a9a7a; }
+    #uf-ib-steps a { color: #4af626; }
+    #uf-ib-steps kbd {
+      border: 1px solid #3a4a3a; border-radius: 3px; padding: 0 5px;
+      font: inherit; background: #101510;
+    }
+  </style>
+  <div id="uf-install-banner" hidden>
+    <div class="uf-ib-row">
+      <span class="uf-ib-msg"><b>Not installed yet.</b>
+        Install this page as an app — it works fully offline, straight from your home screen or dock.</span>
+      <button class="uf-ib-btn" id="uf-ib-install">Install</button>
+      <button class="uf-ib-x" id="uf-ib-close" aria-label="Dismiss" title="Dismiss">✕</button>
+    </div>
+    <div id="uf-ib-steps" hidden></div>
+  </div>
+  <script>
+  (function () {
+    var banner = document.getElementById('uf-install-banner');
+    var steps  = document.getElementById('uf-ib-steps');
+    var KEY = 'uf-install-banner:' + location.pathname;   // per-app dismissal
+    var standalone = matchMedia('(display-mode: standalone)').matches ||
+                     window.navigator.standalone === true;
+    var dismissed = false;
+    try { dismissed = localStorage.getItem(KEY) === 'dismissed'; } catch (e) {}
+    if (standalone || dismissed) return;
+
+    var ua = navigator.userAgent || '';
+    var isIOS = /iPad|iPhone|iPod/.test(ua) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    var isAndroid = /Android/.test(ua);
+
+    // Instructions per platform (the detected one is shown; the rest fold away).
+    function section(title, body) {
+      return '<details><summary>' + title + '</summary>' + body + '</details>';
+    }
+    var IOS =
+      '<ol><li>Open this page in <b>Safari</b> (installing doesn’t work from inside other apps).</li>' +
+      '<li>Tap the <b>Share</b> button <kbd>&#x2B06;&#xFE0E;</kbd> in the toolbar.</li>' +
+      '<li>Scroll down and tap <b>Add to Home Screen</b>.</li>' +
+      '<li>Tap <b>Add</b>. The app appears on your home screen and works offline.</li></ol>';
+    var ANDROID =
+      '<ol><li>Open this page in <b>Chrome</b>.</li>' +
+      '<li>Tap the <b>&#8942;</b> menu (top right).</li>' +
+      '<li>Tap <b>Install app</b> (or <b>Add to Home screen</b>).</li>' +
+      '<li>Confirm. The app appears on your home screen and works offline.</li></ol>';
+    var DESKTOP =
+      '<ol><li>In <b>Chrome</b> or <b>Edge</b>: click the <b>install icon</b> at the right end of the address bar (a screen with a down arrow), or open the browser menu and choose <b>Install…</b></li>' +
+      '<li>Click <b>Install</b>. The app opens in its own window and works offline.</li></ol>' +
+      '<p class="uf-ib-note">Safari on macOS: <b>File → Add to Dock</b>. ' +
+      'Firefox doesn’t support installing web apps — use the single-file download from ' +
+      '<a href="/">unifile.app</a> instead.</p>';
+
+    if (isIOS) {
+      steps.innerHTML = IOS + section('On Android?', ANDROID) + section('On a computer?', DESKTOP);
+    } else if (isAndroid) {
+      steps.innerHTML = ANDROID + section('On iPhone / iPad?', IOS) + section('On a computer?', DESKTOP);
+    } else {
+      steps.innerHTML = DESKTOP + section('On iPhone / iPad?', IOS) + section('On Android?', ANDROID);
+    }
+
+    banner.hidden = false;
+
+    // If the browser offers a real install prompt, the Install button uses it;
+    // otherwise it toggles the step-by-step walkthrough.
+    var deferredPrompt = null;
+    window.addEventListener('beforeinstallprompt', function (e) {
+      e.preventDefault();
+      deferredPrompt = e;
+    });
+    document.getElementById('uf-ib-install').addEventListener('click', function () {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then(function () { deferredPrompt = null; });
+      } else {
+        steps.hidden = !steps.hidden;
+      }
+    });
+    document.getElementById('uf-ib-close').addEventListener('click', function () {
+      banner.hidden = true;
+      try { localStorage.setItem(KEY, 'dismissed'); } catch (e) {}
+    });
+    window.addEventListener('appinstalled', function () { banner.hidden = true; });
+  })();
+  </script>
+
+  <!-- App root -->
+  <div id="unifile-app">
+    <div id="noscript-preview" style="display:none"></div>
+    <div style="
+      display:flex;align-items:center;justify-content:center;
+      height:100vh;color:#a6adc8;font-family:system-ui,sans-serif;
+      flex-direction:column;gap:12px
+    ">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="6" stroke="#89b4fa" stroke-width="2.5"/>
+        <line x1="2" y1="16" x2="10" y2="16" stroke="#89b4fa" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="22" y1="16" x2="30" y2="16" stroke="#89b4fa" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <span>Loading Unifile…</span>
+    </div>
+  </div>
+
+  <!--
+    PWA DATA STORE
+    Unlike the quine, the PWA reads from IndexedDB.
+    This script tag provides default empty data for a fresh install.
+    On load, the app will check IndexedDB first.
+  -->
+  <script id="unifile-data" type="application/json">
+{
+  "version": "0.1.0",
+  "title": "Untitled Document",
+  "dslType": "udraft",
+  "currentBranch": "main",
+  "branches": { "main": { "name": "main", "head": null } },
+  "commits": {},
+  "comments": {},
+  "password": null
+}
+  </script>
+
+  <script src="./app.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,1087 @@
+/**
+ * uDraft — app shell.
+ *
+ * The uPub shell pattern (see upub/app.js): one editing surface, a thin title
+ * bar, bottom sheets for everything else, linear history on `main`.  Reuses
+ * unifile's core (VCS, storage) and the SHARED custom line editor
+ * (upub/editor.js) with uDraft's own syntax module plugged in.  On top of the
+ * uPub baseline:
+ *
+ *   • the title bar's EYE toggles the rendered blueprint (floor tabs when the
+ *     document has several floors, an issue strip for diagnostics, and
+ *     click-to-source on every drawn entity via data-doc-from/to);
+ *   • the `/` slash menu inserts uDraft statement templates with the first
+ *     placeholder pre-selected;
+ *   • a context-aware AUTOCOMPLETE popup (a second SlashMenu instance — same
+ *     positioning, same keyboard/touch handling) offers statement keywords at
+ *     line start, declared room ids after `of` / `/` / `swing`, sides after
+ *     `align`/`from`/`on`/`along`/`facing`, and fixture types.
+ *
+ * All the iOS layout/scroll machinery is inherited verbatim from uPub — see
+ * CLAUDE.md "Mobile / iOS" before touching any of it.
+ */
+
+/* global UNIFILE_VERSION, UNIFILE_BUILT, UNIFILE_COMMIT, UNIFILE_COMMIT_AT */
+
+import {
+  IS_QUINE, captureTemplate, loadEmbeddedData, generateQuine,
+  saveToIDB, loadFromIDB, downloadBlob, shareOrDownloadFile,
+  requestPersistentStorage, loadUserPrefs, saveUserPrefs,
+  saveDraft, loadDraft, clearDraft, markBackedUp, loadBackupMark,
+} from '../core/storage.js';
+import { VCS } from '../core/vcs.js';
+import { shortHash } from '../core/hash.js';
+import { UPubEditor } from '../upub/editor.js';
+import { SlashMenu } from '../upub/slash-menu.js';
+import { renderMarkdown } from '../upub/preview.js';
+import * as udSyntax from './syntax.js';
+import { parseDocument, formatArea, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES } from '../core/udraft/parse.js';
+import { layoutDocument } from '../core/udraft/layout.js';
+import { renderFloorSvg, renderExportSvg, renderPrintBody, exportStyles } from '../core/udraft/svg.js';
+import { GUIDE_MD } from './guide-content.js';
+
+const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
+const BUILT = (typeof UNIFILE_BUILT !== 'undefined') ? UNIFILE_BUILT : 'dev';
+const COMMIT = (typeof UNIFILE_COMMIT !== 'undefined') ? UNIFILE_COMMIT : '';
+const COMMIT_AT = (typeof UNIFILE_COMMIT_AT !== 'undefined') ? UNIFILE_COMMIT_AT : '';
+const DOC_ID = 'udraft';
+
+const SEED = `---
+title: Lakeside Cottage
+units: imperial
+---
+# Welcome to uDraft — rooms in, blueprint out.  Tap the eye to see the plan.
+
+room living    16' x 13'
+room kitchen   11' x 10'   east of living, align north
+room dining    11' x 8'    south of kitchen, align west offset 2'
+room hall       5' x 9'    south of living, align west
+room bath       6' x 9'    east of hall
+room bedroom   12' x 11'   south of hall, align west
+room porch  outline E 9' S 6' W 9' close   north of living, align west
+
+door   living south    3'    at 6" from east, swing in east    # front door
+door   living/porch    3'    centered, swing living west
+door   living/kitchen  2'8"  at 1' from north, swing kitchen north
+door   hall/bath       2'6"  centered, swing bath north
+door   hall/bedroom    2'8"  at 6" from west, swing bedroom west
+opening living/hall    4'    centered
+opening kitchen/dining 5'    centered
+window living west     4'    at 2'
+window living west     4'    at 8'
+window kitchen north   3'    centered
+window dining south    4'    centered
+window bedroom south   4'    centered
+window bath east       2'    centered
+
+fixture kitchen sink   30" on north at 2'
+fixture kitchen range  30" on north at 6'
+fixture kitchen fridge on east at 6"
+fixture bath  toilet   on west at 1'
+fixture bath  tub      on south
+fixture bedroom bed    on south at 3'
+
+label living "Living Room"
+note  porch  "screened"
+`;
+
+const ICONS = {
+  eye: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
+  dots: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
+};
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+export class UDraftApp {
+  async init() {
+    this.version = VERSION;
+    this.build = BUILT;
+    if (IS_QUINE) captureTemplate();
+
+    // ── Load document ──────────────────────────────────────────────────────
+    let data = null;
+    if (!IS_QUINE) {
+      try { data = await loadFromIDB(DOC_ID); } catch { /* fresh */ }
+    }
+    data = data || loadEmbeddedData();
+    this.data = data;
+    this.vcs = new VCS(data);
+    this.title = data.title || 'Untitled';
+    this.content = data.currentContent ?? this.vcs.headContent ?? '';
+    if (!this.content && !this.vcs.headHash) {
+      this.content = SEED;
+      this.title = 'Lakeside Cottage';
+    }
+    if (IS_QUINE) {
+      const draft = loadDraft();
+      if (draft && draft.headHash === this.vcs.headHash && draft.content !== this.content) {
+        this.content = draft.content;
+      }
+    }
+
+    this.prefs = loadUserPrefs();
+    this._applyTheme(this.prefs.udTheme || 'auto');
+    this.activeFloor = 0;
+    this.scene = layoutDocument(parseDocument(this.content));
+
+    // ── Shell ──────────────────────────────────────────────────────────────
+    this._buildShell();
+    this._trackViewportHeight();
+    this._lockWindowScroll();
+
+    this.editor = new UPubEditor(document.getElementById('wr-sheet'), {
+      syntax: udSyntax,
+      onChange: () => this._onEdit(),
+      onSlash: (ctx) => this._onSlashCtx(ctx),
+      onCaret: () => this._onCaret(),
+    });
+    this.editor.setValue(this.content);
+    this._refreshDirty();
+    this._refreshCount();
+    this._bindSlashMenu();
+    this._bindAutocomplete();
+    this._bindEditingChrome();
+    this._bindScrollChrome();
+    this._guardFocusScroll();
+
+    if (!IS_QUINE && 'serviceWorker' in navigator) {
+      this._bindServiceWorker();
+      requestPersistentStorage();
+    }
+    this._autoUpdateCheck();
+  }
+
+  // -------------------------------------------------------------------------
+  // Self-updating PWA — identical mechanics to uPub (see upub/app.js and
+  // CLAUDE.md "PWA update apply" — never reload on a timer mid-install).
+  // -------------------------------------------------------------------------
+
+  _bindServiceWorker() {
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(console.warn);
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', async () => {
+      if (!hadController) { hadController = true; return; }
+      if (this._reloading) return;
+      this._reloading = true;
+      try { await this._persistNow(); } catch { /* best effort */ }
+      location.reload();
+    });
+    const poke = () => navigator.serviceWorker.getRegistration()
+      .then(reg => reg?.update()).catch(() => {});
+    poke();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') poke();
+    });
+  }
+
+  _autoUpdateCheck() {
+    if (IS_QUINE || location.protocol === 'file:') return;
+    setTimeout(async () => {
+      try {
+        const remote = await this._fetchRemoteVersion();
+        if (this._isNewer(remote)) {
+          this._toast(`v${remote} is available — tap to update`, {
+            duration: 10000,
+            onTap: () => this._applyUpdate(),
+          });
+        }
+      } catch { /* offline */ }
+    }, 2500);
+  }
+
+  async _fetchRemoteVersion() {
+    const res = await fetch(`../version.json?_=${Date.now()}`, { cache: 'no-store' });
+    const info = await res.json();
+    return info.latest ?? info.stable ?? info.version;
+  }
+
+  _isNewer(remote) {
+    return String(remote).localeCompare(String(VERSION), undefined,
+      { numeric: true, sensitivity: 'base' }) > 0;
+  }
+
+  async _applyUpdate() {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (!reg) { location.reload(); return; }
+    await reg.update();
+    const drive = (sw) => {
+      if (!sw) return;
+      if (sw.state === 'installed') sw.postMessage('skipWaiting');
+      else sw.addEventListener('statechange', () => {
+        if (sw.state === 'installed') sw.postMessage('skipWaiting');
+      });
+    };
+    if (reg.waiting) drive(reg.waiting);
+    else if (reg.installing) drive(reg.installing);
+    else reg.addEventListener('updatefound', () => drive(reg.installing));
+  }
+
+  // -------------------------------------------------------------------------
+  // Shell
+  // -------------------------------------------------------------------------
+
+  _buildShell() {
+    const root = document.getElementById('unifile-app');
+    root.className = 'wr-app ud-app';
+    root.innerHTML = `
+      <header id="wr-top">
+        <input id="wr-title" type="text" value="${esc(this.title)}" aria-label="Document title"
+               autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
+        <span id="wr-dirty" title="Uncommitted changes" hidden></span>
+        <div id="wr-top-actions">
+          <button id="wr-count" title="Plan stats" aria-label="Plan stats"></button>
+          <button id="wr-btn-preview" class="wr-icon-btn" title="Blueprint" aria-label="Toggle blueprint">${ICONS.eye}</button>
+          <button id="wr-btn-menu" class="wr-icon-btn" title="Menu" aria-label="Menu">${ICONS.dots}</button>
+        </div>
+      </header>
+      <main id="wr-main">
+        <div id="wr-scroll"><div id="wr-sheet"></div></div>
+        <div id="wr-preview" hidden>
+          <div id="ud-ptabs" hidden></div>
+          <div id="ud-issues" hidden></div>
+          <div id="ud-plan"></div>
+        </div>
+      </main>
+      <div id="wr-overlay" hidden>
+        <div id="wr-modal" role="dialog" aria-modal="true"></div>
+      </div>`;
+
+    const titleEl = document.getElementById('wr-title');
+    titleEl.addEventListener('change', () => {
+      this.title = titleEl.value.trim() || 'Untitled';
+      document.title = this.title;
+      this._persistSoon();
+    });
+    titleEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { titleEl.blur(); this.editor.focus(); }
+    });
+    document.title = this.title;
+
+    document.getElementById('wr-count').addEventListener('click', () => {
+      this._countMode = ((this._countMode || 0) + 1) % 3;
+      this._refreshCount();
+    });
+    document.getElementById('wr-btn-preview').addEventListener('click', () => this.togglePreview());
+    document.getElementById('wr-btn-menu').addEventListener('click', () => this._openMenu());
+    document.getElementById('wr-overlay').addEventListener('click', (e) => {
+      if (e.target.id === 'wr-overlay') this._closeSheet();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this._closeSheet();
+    });
+
+    // Blueprint click-to-source: any drawn entity carries its statement's
+    // absolute char offsets.
+    document.getElementById('ud-plan').addEventListener('click', (e) => {
+      const ent = e.target.closest('[data-doc-from]');
+      if (ent) this._jumpToSource(+ent.dataset.docFrom, +ent.dataset.docTo);
+    });
+    document.getElementById('ud-issues').addEventListener('click', (e) => {
+      const row = e.target.closest('[data-doc-from]');
+      if (row) this._jumpToSource(+row.dataset.docFrom, +row.dataset.docTo);
+    });
+    document.getElementById('ud-ptabs').addEventListener('click', (e) => {
+      const tab = e.target.closest('button[data-floor]');
+      if (!tab) return;
+      this.activeFloor = +tab.dataset.floor;
+      this._renderPreview();
+    });
+  }
+
+  _jumpToSource(from, to) {
+    this.togglePreview(false);
+    this.editor.focus();
+    this.editor._setSelOffsets(from, to);
+    // Bring the line into view (the editor spans the whole scroller).
+    requestAnimationFrame(() => {
+      const rect = this.editor.caretRect();
+      const scroll = document.getElementById('wr-scroll');
+      const box = scroll.getBoundingClientRect();
+      if (rect && (rect.top < box.top || rect.bottom > box.bottom)) {
+        scroll.scrollTop += rect.top - (box.top + box.height * 0.4);
+      }
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Slash insertion menu — uDraft statement templates.
+  // `sel` marks the placeholder (relative offsets into tpl) selected on insert.
+  // -------------------------------------------------------------------------
+
+  static SLASH_ITEMS = [
+    { id: 'room',    label: 'Room',           hint: "12' x 10'", block: true, keywords: 'rect box space',
+      tpl: "room name 12' x 10' east of other", ph: 'name' },
+    { id: 'outline', label: 'Room (outline)', hint: 'L-shape',   block: true, keywords: 'irregular walk legs',
+      tpl: "room name outline E 12' S 8' W 12' close", ph: 'name' },
+    { id: 'door',    label: 'Door',           hint: `2'8"`,      block: true, keywords: 'swing entry',
+      tpl: `door a/b 2'8" centered, swing b north`, ph: 'a/b' },
+    { id: 'extdoor', label: 'Exterior door',  hint: 'swing in',  block: true, keywords: 'front entry outside',
+      tpl: `door room south 3' centered, swing in west`, ph: 'room' },
+    { id: 'window',  label: 'Window',         hint: "4'",        block: true, keywords: 'glass light',
+      tpl: "window room south 4' centered", ph: 'room' },
+    { id: 'opening', label: 'Opening',        hint: 'no leaf',   block: true, keywords: 'archway cased passage',
+      tpl: "opening a/b 6' centered", ph: 'a/b' },
+    { id: 'stairs',  label: 'Stairs',         hint: 'up/down',   block: true, keywords: 'steps stairway',
+      tpl: "stairs room 3' x 9' up, along west", ph: 'room' },
+    { id: 'fixture', label: 'Fixture',        hint: 'sink…',     block: true, keywords: 'sink range fridge toilet tub shower appliance',
+      tpl: 'fixture room sink on north', ph: 'room' },
+    { id: 'label',   label: 'Label',          hint: '"…"',       block: true, keywords: 'name rename title',
+      tpl: 'label room "Text"', ph: 'room' },
+    { id: 'note',    label: 'Note',           hint: '(…)',       block: true, keywords: 'annotation remark',
+      tpl: 'note room "text"', ph: 'room' },
+    { id: 'dim',     label: 'Dimension',      hint: '⟵⟶',       block: true, keywords: 'measure size',
+      tpl: 'dim room south', ph: 'room' },
+    { id: 'floor',   label: 'Floor',          hint: 'storey',    block: true, keywords: 'level storey story',
+      tpl: 'floor 2 "Second Floor"', ph: '2' },
+    { id: 'fm',      label: 'Front matter',   hint: '---',       block: true, keywords: 'title units scale settings meta',
+      tpl: '---\ntitle: Untitled\nunits: imperial\nscale: 1/4in\n---', ph: 'Untitled' },
+    { id: 'undo',    label: 'Undo',           keywords: 'revert back' },
+    { id: 'redo',    label: 'Redo',           keywords: 'again forward' },
+  ];
+
+  _bindSlashMenu() {
+    this.slash = new SlashMenu(document.getElementById('wr-main'), {
+      items: UDraftApp.SLASH_ITEMS,
+      onPick: (item, ctx) => {
+        this.editor._applyEdit(ctx.start, ctx.caret, '', ctx.start, ctx.start, 'none');
+        if (item.tpl) this._insertSnippet(item.tpl, item.ph);
+        else if (item.id === 'undo') this.editor.undo();
+        else if (item.id === 'redo') this.editor.redo();
+      },
+    });
+    // Menu keyboard nav runs in the capture phase so it beats the editor's
+    // own keydown handling; the autocomplete menu gets first refusal.
+    this.editor.root.addEventListener('keydown', (e) => {
+      if (this.auto?.isOpen) {
+        const ctxStart = this.auto.ctx?.start;
+        if (this.auto.handleKey(e)) {
+          if (e.key === 'Escape') this._autoDismissed = ctxStart ?? null;
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      if (!this.slash.isOpen) return;
+      const ctxStart = this.slash.ctx?.start;
+      if (this.slash.handleKey(e)) {
+        if (e.key === 'Escape') this._slashDismissed = ctxStart ?? null;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+  }
+
+  /** Insert `tpl` at the caret, selecting the placeholder `ph` inside it. */
+  _insertSnippet(tpl, ph) {
+    const sel = this.editor._selOffsets();
+    if (!sel) return;
+    const phAt = ph ? tpl.indexOf(ph) : -1;
+    const s = sel.start + (phAt >= 0 ? phAt : tpl.length);
+    const e = sel.start + (phAt >= 0 ? phAt + ph.length : tpl.length);
+    this.editor._applyEdit(sel.start, sel.end, tpl, s, e, 'format');
+  }
+
+  _onSlashCtx(ctx) {
+    if (!this.slash) return;
+    if (!ctx) {
+      this._slashDismissed = null;
+      this.slash.close();
+      return;
+    }
+    this._closeAuto();
+    if (this._slashDismissed === ctx.start) { this.slash.close(); return; }
+    this.slash.open(ctx, this.editor.caretRect());
+  }
+
+  // -------------------------------------------------------------------------
+  // Autocomplete — a second SlashMenu fed context-aware candidates.
+  // -------------------------------------------------------------------------
+
+  _bindAutocomplete() {
+    this.auto = new SlashMenu(document.getElementById('wr-main'), {
+      items: [],
+      onPick: (item, ctx) => {
+        const insert = item.insert ?? item.label;
+        this.editor._applyEdit(ctx.start, ctx.caret, insert,
+          ctx.start + insert.length, ctx.start + insert.length, 'type');
+      },
+    });
+    this.auto.el.id = 'ud-auto';
+  }
+
+  _closeAuto() {
+    this._autoDismissed = null;
+    this.auto?.close();
+  }
+
+  _onCaret() {
+    if (!this.auto) return;
+    if (this.slash?.isOpen || document.activeElement !== this.editor.root) { this.auto.close(); return; }
+    const ctx = this._completionCtx();
+    if (!ctx) { this._closeAuto(); return; }
+    if (this._autoDismissed === ctx.start) { this.auto.close(); return; }
+    this.auto.items = ctx.items;
+    this.auto.open(ctx, this.editor.caretRect());
+  }
+
+  /**
+   * Work out what the word under the caret could complete to.
+   * @returns {null | {start,caret,query,atLineStart,items}} start/caret are
+   *   absolute offsets of the word (SlashMenu removes/replaces [start,caret)).
+   */
+  _completionCtx() {
+    const ed = this.editor;
+    if (ed._composing) return null;
+    const sel = ed._selOffsets();
+    if (!sel || sel.start !== sel.end) return null;
+    const { lineIdx, lineStart, col } = ed._lineAt(sel.start);
+    const info = ed.infos[lineIdx];
+    if (!info || info.type === 'fm' || info.type === 'fm-fence' || info.type === 'comment') return null;
+    const line = ed.lines[lineIdx];
+    const before = line.slice(0, col);
+    const m = /([a-z][a-z0-9_-]*)$/i.exec(before);
+    if (!m) return null;
+    const word = m[1];
+    const wordStart = col - word.length;
+    const beforeWord = before.slice(0, wordStart);
+    const toks = tokenizeLine(beforeWord);
+
+    const item = (label, hint, insert) => ({ id: label, label, hint, insert, keywords: '' });
+    const roomItems = () => (this.scene ? this.scene.floors.flatMap(f => f.rooms) : [])
+      .map(r => item(r.id, 'room'));
+    const sideItems = () => ['north', 'south', 'east', 'west'].map(s => item(s, 'side'));
+
+    let items = null;
+    if (!toks.length) {
+      if (!/^\s*$/.test(beforeWord)) return null;
+      items = STATEMENT_KEYWORDS.map(k => item(k, 'statement', k + ' '));
+    } else {
+      const kw = toks[0].t === 'word' ? toks[0].v.toLowerCase() : null;
+      const last = toks[toks.length - 1];
+      const lw = last.t === 'word' ? last.v.toLowerCase() : null;
+      if (last.t === 'slash') items = roomItems();
+      else if (lw === 'of') items = roomItems();
+      else if (lw === 'swing') items = [...roomItems(), item('in', 'inward'), item('out', 'outward')];
+      else if (lw === 'align' || lw === 'from' || lw === 'on' || lw === 'along' || lw === 'facing') items = sideItems();
+      else if (kw === 'fixture' && toks.length === 2) items = Object.keys(FIXTURES).map(t => item(t, 'fixture', t + ' '));
+      else if (toks.length === 1 && ['door', 'window', 'opening', 'stairs', 'fixture', 'label', 'note', 'dim'].includes(kw)) {
+        items = roomItems();
+      }
+    }
+    if (!items || !items.length) return null;
+    return {
+      start: lineStart + wordStart,
+      caret: sel.start,
+      query: word,
+      atLineStart: true,
+      items,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Content lifecycle
+  // -------------------------------------------------------------------------
+
+  _onEdit() {
+    this.content = this.editor.getValue();
+    this.scene = layoutDocument(parseDocument(this.content));
+    this._refreshDirty();
+    this._refreshCount();
+    this._persistSoon();
+    if (!document.getElementById('wr-preview').hidden) this._renderPreview();
+  }
+
+  get isDirty() { return this.content !== (this.vcs.headContent ?? ''); }
+
+  _refreshDirty() {
+    const el = document.getElementById('wr-dirty');
+    if (el) el.hidden = !this.isDirty;
+  }
+
+  _refreshCount() {
+    const el = document.getElementById('wr-count');
+    if (!el || !this.scene) return;
+    const rooms = this.scene.floors.reduce((n, f) => n + f.rooms.length, 0);
+    const area = this.scene.floors.reduce((n, f) => n + f.rooms.reduce((a, r) => a + r.areaUm2, 0), 0);
+    const errs = this.scene.issues.filter(i => i.severity === 'error').length;
+    const mode = this._countMode || 0;
+    el.textContent = mode === 0 ? `${rooms} room${rooms === 1 ? '' : 's'}`
+      : mode === 1 ? formatArea(area, this.scene.meta.units)
+      : errs ? `${errs} issue${errs === 1 ? '' : 's'}` : 'no issues';
+    el.classList.toggle('ud-has-issues', errs > 0);
+  }
+
+  _currentData() {
+    return {
+      ...this.data,
+      ...this.vcs.serialize(),
+      version: VERSION,
+      title: this.title,
+      dslType: 'udraft',
+      currentContent: this.content,
+    };
+  }
+
+  _persistSoon() {
+    clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => this._persistNow(), 400);
+  }
+
+  async _persistNow() {
+    const data = this._currentData();
+    this.data = data;
+    if (IS_QUINE) {
+      saveDraft(this.content, this.vcs.headHash);
+    } else {
+      try { await saveToIDB(DOC_ID, data); } catch (e) { console.warn('autosave failed', e); }
+    }
+  }
+
+  async commit(message) {
+    const author = (this.prefs.name || '').trim() || 'anonymous';
+    const email = (this.prefs.email || '').trim() || '';
+    await this.vcs.commit({ content: this.content, message: message || '', author, email });
+    clearDraft();
+    this._refreshDirty();
+    await this._persistNow();
+  }
+
+  setContent(text) {
+    this.content = text;
+    this.editor.setValue(text);
+    this.scene = layoutDocument(parseDocument(text));
+    this._refreshDirty();
+    this._refreshCount();
+    this._persistSoon();
+  }
+
+  // -------------------------------------------------------------------------
+  // Blueprint preview (the eye)
+  // -------------------------------------------------------------------------
+
+  togglePreview(force) {
+    const pane = document.getElementById('wr-preview');
+    const on = force ?? pane.hidden;
+    pane.hidden = !on;
+    document.getElementById('unifile-app').toggleAttribute('data-preview', on);
+    document.getElementById('wr-btn-preview').classList.toggle('active', on);
+    if (on) this._renderPreview();
+  }
+
+  _renderPreview() {
+    const scene = this.scene;
+    const floors = scene.floors;
+    if (this.activeFloor >= floors.length) this.activeFloor = 0;
+
+    // Floor tabs (only when there is more than one floor).
+    const tabs = document.getElementById('ud-ptabs');
+    if (floors.length > 1) {
+      tabs.hidden = false;
+      tabs.innerHTML = floors.map((f, i) => {
+        const name = f.title || (f.num != null ? `Floor ${f.num}` : `Floor ${i + 1}`);
+        return `<button data-floor="${i}" class="${i === this.activeFloor ? 'active' : ''}">${esc(name)}</button>`;
+      }).join('');
+    } else {
+      tabs.hidden = true;
+    }
+
+    // Issue strip (tap → source line).
+    const strip = document.getElementById('ud-issues');
+    if (scene.issues.length) {
+      strip.hidden = false;
+      strip.innerHTML = scene.issues.slice(0, 20).map(i =>
+        `<button class="ud-issue ud-${i.severity}" data-doc-from="${i.from}" data-doc-to="${i.to}">`
+        + `<b>${i.line + 1}</b> ${esc(i.message)}</button>`).join('');
+    } else {
+      strip.hidden = true;
+      strip.innerHTML = '';
+    }
+
+    const floor = floors[this.activeFloor];
+    const plan = document.getElementById('ud-plan');
+    if (!floor || !floor.rooms.length) {
+      plan.innerHTML = '<p class="ud-empty">Declare a room to start drawing — try <code>room living 16\' x 13\'</code>, or type <code>/</code>.</p>';
+      return;
+    }
+    const { svg } = renderFloorSvg(floor, scene.meta, { interactive: true });
+    plan.innerHTML = svg;
+  }
+
+  // -------------------------------------------------------------------------
+  // Sheets / toast (same shell furniture as uPub)
+  // -------------------------------------------------------------------------
+
+  _openSheet(html, cls = '') {
+    const overlay = document.getElementById('wr-overlay');
+    const modal = document.getElementById('wr-modal');
+    modal.className = cls;
+    modal.innerHTML = html;
+    overlay.hidden = false;
+    requestAnimationFrame(() => overlay.classList.add('open'));
+    return modal;
+  }
+
+  _closeSheet() {
+    const overlay = document.getElementById('wr-overlay');
+    if (overlay.hidden) return;
+    overlay.classList.remove('open');
+    overlay.hidden = true;
+    document.getElementById('wr-modal').innerHTML = '';
+  }
+
+  _toast(msg, { onTap, duration = 2600 } = {}) {
+    document.querySelector('.wr-toast')?.remove();
+    const el = document.createElement('div');
+    el.className = 'wr-toast' + (onTap ? ' wr-toast-action' : '');
+    el.textContent = msg;
+    if (onTap) {
+      el.addEventListener('click', () => {
+        el.textContent = 'Updating…';
+        onTap();
+      });
+    }
+    document.getElementById('unifile-app').appendChild(el);
+    setTimeout(() => el.classList.add('show'), 10);
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 400); }, duration);
+  }
+
+  // ── Menu ──────────────────────────────────────────────────────────────────
+
+  _openMenu() {
+    const modal = this._openSheet(`
+      <div class="wr-menu">
+        <button data-act="preview">Blueprint</button>
+        <button data-act="history">History${this.isDirty ? ' <span class="wr-menu-dot"></span>' : ''}</button>
+        <button data-act="export">Export…</button>
+        <button data-act="import">Import data file…</button>
+        <button data-act="new">New document</button>
+        <hr>
+        <button data-act="guide">Guide</button>
+        <button data-act="settings">Settings</button>
+        <button data-act="about">About</button>
+      </div>`);
+    modal.addEventListener('click', (e) => {
+      const act = e.target.closest('button')?.dataset.act;
+      if (!act) return;
+      this._closeSheet();
+      const go = {
+        preview: () => this.togglePreview(true),
+        history: () => this._openHistory(),
+        export: () => this._openExport(),
+        import: () => this._importData(),
+        new: () => this._newDocument(),
+        guide: () => this._openGuide(),
+        settings: () => this._openSettings(),
+        about: () => this._openAbout(),
+      };
+      go[act]?.();
+    });
+  }
+
+  // ── History ───────────────────────────────────────────────────────────────
+
+  _openHistory() {
+    const commits = this.vcs.log();
+    const backup = loadBackupMark(this._backupScope());
+    const fmtDate = (t) => new Date(t).toLocaleString(undefined,
+      { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+    const pending = this.isDirty ? `
+      <div class="wr-pending">
+        <div class="wr-pending-head"><span class="wr-node"></span>Uncommitted changes</div>
+        <div class="wr-pending-row">
+          <input id="wr-commit-msg" type="text" placeholder="Message (optional)" autocomplete="off">
+          <button id="wr-commit-btn" class="wr-primary">Commit</button>
+        </div>
+      </div>` : '<div class="wr-clean">Everything committed.</div>';
+
+    const list = commits.length ? commits.map(c => `
+      <div class="wr-commit" data-hash="${c.hash}">
+        <div class="wr-commit-line">
+          <span class="wr-commit-msg">${esc(c.message || '(no message)')}</span>
+          ${c.tag ? `<span class="wr-tag">${esc(c.tag)}</span>` : ''}
+          ${backup && backup.headHash === c.hash ? '<span class="wr-tag wr-exported">exported</span>' : ''}
+        </div>
+        <div class="wr-commit-meta">${esc(shortHash(c.hash))} · ${esc(c.author || '')} · ${fmtDate(c.timestamp)}</div>
+        <button class="wr-restore" data-hash="${c.hash}">Restore</button>
+      </div>`).join('') : '<div class="wr-clean">No commits yet.</div>';
+
+    const modal = this._openSheet(`
+      <div class="wr-sheet-head">History</div>
+      <div class="wr-sheet-body">${pending}<div class="wr-log">${list}</div></div>`, 'tall');
+
+    modal.querySelector('#wr-commit-btn')?.addEventListener('click', async () => {
+      const msg = modal.querySelector('#wr-commit-msg').value.trim();
+      await this.commit(msg);
+      this._closeSheet();
+      this._toast('Committed');
+    });
+    modal.addEventListener('click', (e) => {
+      const btn = e.target.closest('.wr-restore');
+      if (!btn) return;
+      const hash = btn.dataset.hash;
+      if (hash === this.vcs.headHash && !this.isDirty) { this._closeSheet(); return; }
+      if (!confirm('Restore this version into the editor? Your current text stays in history only if committed.')) return;
+      this.setContent(this.vcs.getContentAt(hash));
+      this._closeSheet();
+      this._toast('Restored — commit to keep it');
+    });
+  }
+
+  // ── Export ────────────────────────────────────────────────────────────────
+
+  _slug() {
+    return (this.title || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'plan';
+  }
+
+  _backupScope() { return IS_QUINE ? location.href : DOC_ID; }
+
+  _openExport() {
+    const modal = this._openSheet(`
+      <div class="wr-sheet-head">Export</div>
+      <div class="wr-menu">
+        <button data-act="pdf"><b>PDF</b> — printed at true scale (${esc(this.scene.meta.scale)})</button>
+        <button data-act="svg">SVG — vector drawing of the current floor</button>
+        <button data-act="png">PNG — image of the current floor</button>
+        <button data-act="txt">Text (.udraft.txt) — the raw source</button>
+        <button data-act="data">Data file (.unifile.json) — text + full history</button>
+        ${IS_QUINE ? '<button data-act="quine">Save a copy (.html) — app + document in one file</button>' : ''}
+      </div>`);
+    modal.addEventListener('click', async (e) => {
+      const act = e.target.closest('button')?.dataset.act;
+      if (!act) return;
+      this._closeSheet();
+      try {
+        if (act === 'pdf') this._exportPdf();
+        if (act === 'svg') await shareOrDownloadFile(renderExportSvg(this.scene, this.activeFloor), this._slug() + '.svg', 'image/svg+xml');
+        if (act === 'png') await this._exportPng();
+        if (act === 'txt') await shareOrDownloadFile(this.content, this._slug() + '.udraft.txt', 'text/plain');
+        if (act === 'data') await this._exportData();
+        if (act === 'quine') await this._exportQuine();
+      } catch (err) {
+        if (err?.name !== 'AbortError') this._toast('Export failed: ' + err.message);
+      }
+    });
+  }
+
+  /** Print window sized so the plan is at true drawing scale (see svg.js). */
+  _exportPdf() {
+    const win = window.open('', '_blank');
+    if (!win) { this._toast('Allow pop-ups to export a PDF'); return; }
+    const body = renderPrintBody(this.scene, this.title);
+    win.document.write(`<!doctype html><html><head><meta charset="utf-8">`
+      + `<title>${esc(this.title)}</title>`
+      + `<style>@page{size:letter;margin:0}html,body{margin:0}body{padding:0.5in}</style>`
+      + `</head><body>${body}</body></html>`);
+    win.document.close();
+    setTimeout(() => { try { win.focus(); win.print(); } catch { /* user closed it */ } }, 350);
+  }
+
+  async _exportPng() {
+    const floor = this.scene.floors[this.activeFloor];
+    const { svg, widthMm, heightMm } = renderFloorSvg(floor, this.scene.meta, {
+      background: true, styles: exportStyles(this.scene.meta.style),
+    });
+    const pxW = 2048;
+    const pxH = Math.round(pxW * heightMm / widthMm);
+    const sized = svg.replace('<svg ', `<svg width="${pxW}" height="${pxH}" `);
+    const blob = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = pxW; canvas.height = pxH;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        canvas.toBlob(resolve, 'image/png');
+      };
+      img.onerror = () => reject(new Error('could not rasterize the SVG'));
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(sized);
+    });
+    await this._shareOrDownloadBlob(blob, this._slug() + '.png');
+  }
+
+  async _exportData() {
+    const json = JSON.stringify(this._currentData(), null, 2);
+    const res = await shareOrDownloadFile(json, this._slug() + '.unifile.json', 'application/json');
+    if (res !== 'cancelled' && this.vcs.headHash) {
+      markBackedUp(this._backupScope(), this.vcs.headHash);
+    }
+  }
+
+  async _exportQuine() {
+    const floor = this.scene.floors[this.activeFloor];
+    const still = floor && floor.rooms.length
+      ? renderFloorSvg(floor, this.scene.meta, { styles: exportStyles(this.scene.meta.style), background: true }).svg
+      : '';
+    const html = generateQuine(this._currentData(), still, this.title);
+    await shareOrDownloadFile(html, this._slug() + '.html', 'text/html');
+  }
+
+  async _shareOrDownloadBlob(blob, filename) {
+    try {
+      if (navigator.canShare && typeof File !== 'undefined') {
+        const file = new File([blob], filename, { type: blob.type });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: filename });
+          return;
+        }
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+    }
+    downloadBlob(blob, filename);
+  }
+
+  _importData() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        if (!data.branches || !data.commits) throw new Error('not a unifile data file');
+        if (!confirm(`Replace the current document with “${data.title || 'Untitled'}” (including its history)?`)) return;
+        this.data = data;
+        this.vcs = new VCS(data);
+        this.title = data.title || 'Untitled';
+        document.getElementById('wr-title').value = this.title;
+        document.title = this.title;
+        this.setContent(data.currentContent ?? this.vcs.headContent ?? '');
+        await this._persistNow();
+        this._toast('Imported');
+      } catch (err) {
+        this._toast('Import failed: ' + err.message);
+      }
+    });
+    input.click();
+  }
+
+  _newDocument() {
+    if (!confirm('Start a new document? The current document and its history will be replaced'
+      + (IS_QUINE ? '.' : ' (export a data file first if you want to keep it).'))) return;
+    this.data = {
+      version: VERSION, title: 'Untitled', dslType: 'udraft',
+      currentBranch: 'main', branches: { main: { name: 'main', head: null } },
+      commits: {}, comments: {}, password: null,
+    };
+    this.vcs = new VCS(this.data);
+    this.title = 'Untitled';
+    document.getElementById('wr-title').value = this.title;
+    document.title = this.title;
+    this.setContent('');
+    this._persistNow();
+  }
+
+  // ── Guide / Settings / About ─────────────────────────────────────────────
+
+  _openGuide() {
+    this._openSheet(`
+      <div class="wr-sheet-head">Guide</div>
+      <div class="wr-sheet-body wr-prose">${renderMarkdown(GUIDE_MD)}</div>`, 'tall');
+  }
+
+  _openSettings() {
+    const modal = this._openSheet(`
+      <div class="wr-sheet-head">Settings</div>
+      <div class="wr-sheet-body">
+        <label class="wr-field">Author name
+          <input id="wr-set-name" type="text" value="${esc(this.prefs.name || '')}" autocomplete="name" placeholder="Used for commits & the title block">
+        </label>
+        <label class="wr-field">Email
+          <input id="wr-set-email" type="email" value="${esc(this.prefs.email || '')}" autocomplete="email" placeholder="Optional, for commits">
+        </label>
+        <label class="wr-field">Theme
+          <select id="wr-set-theme">
+            <option value="auto">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </div>`);
+    modal.querySelector('#wr-set-theme').value = this.prefs.udTheme || 'auto';
+    modal.querySelector('#wr-set-name').addEventListener('change', (e) => {
+      this.prefs.name = e.target.value; saveUserPrefs({ name: e.target.value });
+    });
+    modal.querySelector('#wr-set-email').addEventListener('change', (e) => {
+      this.prefs.email = e.target.value; saveUserPrefs({ email: e.target.value });
+    });
+    modal.querySelector('#wr-set-theme').addEventListener('change', (e) => {
+      this.prefs.udTheme = e.target.value;
+      saveUserPrefs({ udTheme: e.target.value });
+      this._applyTheme(e.target.value);
+    });
+  }
+
+  _applyTheme(mode) {
+    const root = document.documentElement;
+    if (mode === 'light' || mode === 'dark') root.setAttribute('data-wr-theme', mode);
+    else root.removeAttribute('data-wr-theme');
+  }
+
+  _openAbout() {
+    const canUpdate = !IS_QUINE && location.protocol !== 'file:';
+    const modal = this._openSheet(`
+      <div class="wr-sheet-head">About</div>
+      <div class="wr-sheet-body">
+        <p><b>uDraft</b> v${esc(VERSION)}
+          <span class="wr-mut">· build ${esc(BUILT)}${COMMIT
+            ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(COMMIT_AT.slice(0, 16).replace('T', ' '))}Z)` : ''}` : ''}</span></p>
+        <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'
+          : 'App mode — your document is stored on this device (IndexedDB).'}</p>
+        <p class="wr-mut">Fully offline. Nothing leaves your device. <br>unifile.app</p>
+        ${canUpdate ? '<button id="wr-update-btn" class="wr-primary">Check for updates</button><div id="wr-update-status" class="wr-mut"></div>' : ''}
+      </div>`);
+    modal.querySelector('#wr-update-btn')?.addEventListener('click', () => this._checkUpdate(modal));
+  }
+
+  async _checkUpdate(modal) {
+    const status = modal.querySelector('#wr-update-status');
+    const btn = modal.querySelector('#wr-update-btn');
+    status.textContent = 'Checking…';
+    try {
+      const remote = await this._fetchRemoteVersion();
+      if (!this._isNewer(remote)) { status.textContent = `Up to date (v${VERSION}).`; return; }
+      status.textContent = `v${remote} available.`;
+      btn.textContent = 'Update & reload';
+      btn.onclick = () => {
+        btn.textContent = 'Updating…';
+        btn.disabled = true;
+        this._applyUpdate();
+      };
+    } catch {
+      status.textContent = 'Could not reach unifile.app (offline?).';
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Editing / reading chrome + iOS viewport handling — inherited from uPub
+  // verbatim (see upub/app.js for the full rationale of every piece; all of
+  // it is load-bearing on device).
+  // -------------------------------------------------------------------------
+
+  _bindEditingChrome() {
+    document.addEventListener('focusin', () => this._updateEditingChrome());
+    document.addEventListener('focusout', () => setTimeout(() => this._updateEditingChrome(), 50));
+    this._updateEditingChrome();
+  }
+
+  _updateEditingChrome() {
+    const focused = document.activeElement === this.editor?.root;
+    const kb = window.visualViewport ? !!this._kbOpen : true;
+    const editing = !!(focused && kb && window.matchMedia('(pointer: coarse)').matches);
+    document.getElementById('unifile-app').toggleAttribute('data-editing', editing);
+  }
+
+  _bindScrollChrome() {
+    const app = document.getElementById('unifile-app');
+    const H = 47;
+    let p = 0;
+    let lastTop = 0;
+    let snapTimer = null;
+    const apply = () => {
+      app.style.setProperty('--wr-hide', String(p));
+      app.toggleAttribute('data-scroll-hidden', p >= 1);
+    };
+    const snap = () => {
+      app.removeAttribute('data-scroll-tracking');
+      const target = (lastTop <= H || p < 0.5) ? 0 : 1;
+      if (target !== p) { p = target; apply(); }
+    };
+    const watch = (el) => {
+      let last = el.scrollTop;
+      el.addEventListener('scroll', () => {
+        const max = Math.max(0, el.scrollHeight - el.clientHeight);
+        const top = Math.min(Math.max(0, el.scrollTop), max);
+        const d = top - last;
+        last = top;
+        if (d === 0) return;
+        if (d < 0 && top >= max - 1) return;   // bottom-edge clamp, not the user
+        lastTop = top;
+        app.setAttribute('data-scroll-tracking', '');
+        p = Math.min(Math.max(p + d / H, 0), 1, top / H);
+        apply();
+        clearTimeout(snapTimer);
+        snapTimer = setTimeout(snap, 140);
+      }, { passive: true });
+    };
+    watch(document.getElementById('wr-scroll'));
+    watch(document.getElementById('wr-preview'));
+  }
+
+  _trackViewportHeight() {
+    this._vvBase = {};
+    const set = () => {
+      const vv = window.visualViewport;
+      const h = Math.round(vv?.height ?? window.innerHeight);
+      const top = Math.round(vv?.offsetTop ?? 0);
+      const root = document.documentElement.style;
+      root.setProperty('--app-height', `${h}px`);
+      root.setProperty('--app-vv-top', `${top}px`);
+      const key = window.innerWidth;
+      if (!this._vvBase[key] || h > this._vvBase[key]) this._vvBase[key] = h;
+      this._kbOpen = this._vvBase[key] - h > 60;
+      this._updateEditingChrome();
+    };
+    set();
+    window.addEventListener('resize', set);
+    window.addEventListener('orientationchange', () => { set(); setTimeout(set, 300); });
+    window.visualViewport?.addEventListener('resize', set);
+    window.visualViewport?.addEventListener('scroll', set);
+    window.addEventListener('pageshow', set);
+    [50, 200, 500].forEach(ms => setTimeout(set, ms));
+  }
+
+  _guardFocusScroll() {
+    const scroll = document.getElementById('wr-scroll');
+    let tapTop = null;
+    let guardUntil = 0;
+    let fixing = false;
+
+    scroll.addEventListener('pointerdown', () => {
+      tapTop = scroll.scrollTop;
+      guardUntil = document.activeElement === this.editor.root ? 0 : Date.now() + 900;
+    }, { capture: true, passive: true });
+    scroll.addEventListener('touchmove', () => { guardUntil = 0; }, { passive: true });
+    scroll.addEventListener('wheel', () => { guardUntil = 0; }, { passive: true });
+
+    const fix = () => {
+      if (fixing || Date.now() > guardUntil) return;
+      if (document.activeElement !== this.editor.root) return;
+      const box = scroll.getBoundingClientRect();
+      const rect = this.editor.caretRect();
+      if (!rect || !box.height) return;
+      const pad = 8;
+      if (rect.bottom >= box.top + pad && rect.top <= box.bottom - pad) return;
+      fixing = true;
+      if (tapTop != null) scroll.scrollTop = tapTop;
+      const r2 = this.editor.caretRect();
+      if (r2 && (r2.top < box.top + pad || r2.bottom > box.bottom - pad)) {
+        scroll.scrollTop += r2.top - (box.top + box.height * 0.6);
+      }
+      fixing = false;
+    };
+
+    scroll.addEventListener('scroll', fix, { passive: true });
+    window.visualViewport?.addEventListener('resize', () => setTimeout(fix, 0));
+    this.editor.root.addEventListener('focus', () => {
+      [0, 60, 160, 350, 650].forEach(ms => setTimeout(fix, ms));
+    });
+  }
+
+  _lockWindowScroll() {
+    const reset = () => {
+      if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+      const se = document.scrollingElement;
+      if (se && (se.scrollTop || se.scrollLeft)) { se.scrollTop = 0; se.scrollLeft = 0; }
+    };
+    window.addEventListener('scroll', reset, { passive: true });
+    window.visualViewport?.addEventListener('scroll', reset);
+    window.visualViewport?.addEventListener('resize', reset);
+    document.addEventListener('focusout', () => setTimeout(reset, 50));
+  }
+}

@@ -18,6 +18,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { marked } from 'marked';
 import { GUIDE_MD } from '../src/upub/guide-content.js';
+import { GUIDE_MD as UDRAFT_GUIDE_MD } from '../src/udraft/guide-content.js';
 import { ICONS, iconSvg } from './icons.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,7 +31,7 @@ const rel = (p) => SITE.baseurl + p;
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // types.yml ids → icons.mjs keys (which are DSL ids).
-const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs' };
+const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs', udraft: 'udraft' };
 
 // Site favicon: the bare U border, phosphor green.
 const FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
@@ -132,6 +133,7 @@ function fkeyBar() {
   <a href="${rel('/posts/')}"><b>F2</b>=POSTS</a>
   <a href="${rel('/about/')}"><b>F3</b>=ABOUT</a>
   <a href="${rel('/upub/guide/')}"><b>F4</b>=UPUB GUIDE</a>
+  <a href="${rel('/udraft/guide/')}"><b>F5</b>=UDRAFT GUIDE</a>
   ${v}
 </footer>`;
 }
@@ -298,6 +300,7 @@ async function main() {
   // Synthetic page: the uPub guide is authored ONCE in src/upub/guide-content.js
   // (the app renders the same Markdown in its Guide sheet) and published here.
   pages.push({ title: 'uPub Guide', url: '/upub/guide/', body: GUIDE_MD, isHome: false, file: '(generated)' });
+  pages.push({ title: 'uDraft Guide', url: '/udraft/guide/', body: UDRAFT_GUIDE_MD, isHome: false, file: '(generated)' });
 
   // Render pages.
   for (const p of pages) {
@@ -330,7 +333,7 @@ async function main() {
 
   // Static passthrough: assets + downloads + PWAs + CNAME.
   await cp(join(DOCS, 'assets'), join(OUT, 'assets'), { recursive: true });
-  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-upub']) {
+  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-upub', 'pwa-dft']) {
     if (await exists(join(DOCS, d))) await cp(join(DOCS, d), join(OUT, d), { recursive: true });
   }
   if (await exists(join(DOCS, 'CNAME'))) await cp(join(DOCS, 'CNAME'), join(OUT, 'CNAME'));

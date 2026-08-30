@@ -57,6 +57,14 @@ const GLYPHS = {
     'M 27 53 H 42',                                       // line 3
     'M 62 25 L 69 32 L 53 59 L 44 64 L 46 54 Z',          // pencil
   ],
+  // uDraft — a floor plan: room rectangle, interior wall, door swing.
+  draft: [
+    'M 28 24 H 68 V 64 H 28 Z',                           // the plan
+    'M 48 24 V 38',                                       // interior wall (above the door)
+    'M 48 49 V 64',                                       // interior wall (below the door)
+    'M 48 38 H 59',                                       // door leaf, open 90°
+    'M 59 38 A 11 11 0 0 1 48 49',                        // swing arc
+  ],
 };
 
 // uDraw's sun is a circle, not a path — declared separately per glyph.
@@ -67,10 +75,11 @@ const CIRCLES = {
 /** Per-variant icon identity: DSL id → { codename, glyph, abbrev }.
  *  abbrev mirrors DSL_META in build.mjs (names templates/icons/<abbrev>/). */
 export const ICONS = {
-  upub:     { codename: 'uPub',  glyph: 'pub',  abbrev: 'upub' },
-  markdown: { codename: 'uDoc',  glyph: 'doc',  abbrev: 'md'   },
-  mermaid:  { codename: 'uDraw', glyph: 'draw', abbrev: 'mer'  },
-  abcjs:    { codename: 'uNote', glyph: 'note', abbrev: 'abc'  },
+  upub:     { codename: 'uPub',   glyph: 'pub',   abbrev: 'upub' },
+  markdown: { codename: 'uDoc',   glyph: 'doc',   abbrev: 'md'   },
+  mermaid:  { codename: 'uDraw',  glyph: 'draw',  abbrev: 'mer'  },
+  abcjs:    { codename: 'uNote',  glyph: 'note',  abbrev: 'abc'  },
+  udraft:   { codename: 'uDraft', glyph: 'draft', abbrev: 'dft'  },
 };
 
 /**

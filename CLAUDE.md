@@ -51,6 +51,11 @@ src/
     abcjs-piano-loader.js  CommonJS drop-in for abcjs's ./load-note (offline soundfont)
   upub/              The uPub variant's own shell (no CodeMirror — see "uPub")
     main.js, app.js, editor.js, syntax.js, epub.js, zip.js, preview.js, guide-content.js
+    (editor.js = the SHARED custom line editor: `syntax:` option plugs in a
+     classifier/renderer; uDraft reuses it — see "uDraft")
+  udraft/            The uDraft variant's own shell (see "uDraft")
+    main.js, app.js, syntax.js, guide-content.js
+  core/udraft/       uDraft's pure engine (Node-tested, no DOM): parse.js, layout.js, svg.js
   model/registry.js  Document "models" (flow | grid | spatial | timeline | graph) — chosen via front-matter `model:`
   layout/            Renderers for models + flow layouts (webpage/document/slides)
   ui/                App shell + everything DOM
@@ -74,7 +79,7 @@ build/
   render-site.mjs    No-Ruby site renderer (docs/ → docs/_site); Cloudflare's production build
   icons.mjs          The U-border icon system (single source: glyph paths + iconSvg());
                      maps each variant to its u-codename (upub=uPub, markdown=uDoc,
-                     mermaid=uDraw, abcjs=uNote)
+                     mermaid=uDraw, abcjs=uNote, udraft=uDraft)
   gen-icons.mjs      One-off: rasterize icons.mjs → templates/icons/<abbrev>/*.png via
                      headless Chromium (committed, like the soundfont — CI never needs a browser)
   gen-soundfont.mjs  One-off: fetch FluidR3 piano → src/assets/piano-soundfont.js (network!)
@@ -90,8 +95,9 @@ dist/                Build output (gitignored)
 esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 - **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
-- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
-- A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `upub` variant uses this (see "uPub" below) — no CodeMirror, no DSL registry, its own CSS.
+- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `upub` and `udraft` variants use this (see below) — no CodeMirror, no DSL registry, their own CSS.
+- `npm test` → `node --test test/**` — the uDraft core (parser/layout/SVG) unit tests; pure Node, no browser.
 - `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
 - Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model.
@@ -235,6 +241,65 @@ A dedicated **writing** variant (abbrev `upub`; formerly "Unifile Writer", abbre
 - **Shell (`upub/app.js` + `upub/slash-menu.js`)** — title bar (word count + preview + ⋯; auto-hides while editing on touch devices — `data-editing`, driven by editor focus + a visual-viewport keyboard heuristic; the header returns when the keyboard is dismissed via iOS's own accessory-bar ✓ — a floating dismiss button and a custom keyboard toolbar were both tried and scrapped as redundant with that native bar, which a web app cannot hide; the bar ALSO slides away IN STEP with scrolling down and back in with scrolling up, Safari-toolbar-style — `_bindScrollChrome` drives `--wr-hide` (0…1; the header's margin-top/opacity are calc()'d from it) from clamped scroll deltas on `#wr-scroll`/`#wr-preview`, suppresses the transition while a scroll is live (`data-scroll-tracking`) so it tracks 1:1, and snaps a partial bar to the nearer edge when scrolling idles (near the top the snap always shows; progress is also capped at scrollTop/47 so the top of the doc reveals the whole bar). `data-scroll-hidden` now only marks the fully-hidden state (pointer-events). Independent of `data-editing`, whose rule out-specifies the calc(). LANDMINE: the hide GROWS the scroller — flex column — so hiding while at the bottom clamps scrollTop and fires fake "scroll up" events that made the header bounce; an upward delta landing AT the bottom edge is the clamp's exact signature and is dropped — a real up-scroll always lands above the edge) + editor + bottom sheets (menu/history/export/settings/guide/about). **There is no toolbar**: formatting/insertion is the `/` slash menu — the editor reports a slash context (`slashContext()`: `/` at line start or after whitespace, never in code/fence/front-matter, collapsed caret; trailing word = filter query) after every edit/caret move, and the app opens `SlashMenu` at the caret (block items only when the `/` starts its line; picking removes the `/query` then runs the action; menu taps preventDefault so the iOS keyboard stays up). History UI is linear (commit + restore on `main`); branching/merge stays in the full apps. Copies the load-bearing iOS viewport handling from `ui/app.js` (`--app-height` via visualViewport, window-scroll lock — see Mobile section). **Tap-to-focus scroll guard (`_guardFocusScroll`)** — iOS/WebKit's focus-time "reveal the focused element" scroll (plus a keyboard-open scroll-anchoring bug) targets the contenteditable's TOP rect, and uPub's editor is one contenteditable spanning the whole document — so tapping to edit yanked `#wr-scroll` to the first line while the caret stayed where tapped (real bug). The guard records the scroller position at `pointerdown` and, for ~900 ms after the editor gains focus, restores it whenever a scroll leaves the caret outside the pane; a scroll that keeps the caret visible (iOS's legit lift above the keyboard) is never touched, and `touchmove`/`wheel` cancel the guard so the user's own flick wins. Exports go through the share sheet on iOS (`shareOrDownloadFile`, plus a binary Blob variant in app.js for `.epub`).
 - **Self-updating PWA (`_bindServiceWorker` in upub/app.js)** — the app registers its SW with `updateViaCache:'none'` and calls `reg.update()` at launch + on every return to foreground; since templates/sw.js self-skipWaiting()s and claims, a new build takes control as soon as it's seen, and the app's `controllerchange` listener then flushes the document to IDB and reloads ONCE (first-install claim doesn't reload). A launch-time version.json check additionally shows a tappable update toast. The manual path stays in About (version + `UNIFILE_BUILT` build stamp + Check for updates → `_applyUpdate`, which never blind-reloads on a timer).
 - **Docs** — the full user guide lives ONCE in `upub/guide-content.js` (plain-string ESM): the app renders it in the Guide sheet, and `build/render-site.mjs` imports it and emits `/upub/guide/`. Keep it current when changing uPub behaviour. Site front door: `docs/upub.md` (+ `types.yml`/`apps.yml` entries).
+
+## uDraft (`src/udraft/` + `src/core/udraft/` + `src/styles/udraft.css`)
+
+A dedicated **architectural drafting** variant (abbrev `dft`): floor plans for
+homes/buildings from a plain-text DSL — rooms in, blueprint out. Full design
+rationale in `plans/udraft-dsl.md`; user-facing reference in
+`src/udraft/guide-content.js` (rendered in-app AND emitted as `/udraft/guide/`
+— keep it current). Like uPub it ships its own shell (`DSL_META.udraft.entry`
+= `udraft/main.js`, css = `styles/udraft.css`) and reuses `core/` for
+storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
+
+- **The DSL is strictly one statement per line** (that property is what makes
+  line diffs, click-to-source, and a future direct-manipulation canvas work —
+  hold it). Room-first declarative: `room kitchen 12' x 10' east of living,
+  align north` — compass-only directions, **interior-clear dimensions**
+  (walls are implicit: derived between/around rooms), `outline E 8' S 6' …
+  close` walks for irregular shapes, `at x, y` as the absolute escape hatch.
+  Openings reference walls as `roomA/roomB` (shared) or `room side`
+  (exterior). Layout is a **deterministic single pass** in declaration order —
+  forward references are errors, never solved; diagnostics are line-mapped.
+- **Everything geometric is integer µm** (1" = 25400) — shared-wall detection
+  is exact equality of face distances (a face pair exactly `walls.interior`
+  apart with overlapping intervals = ONE shared wall), so no float epsilons.
+  LEXER LANDMINE: `"` immediately after a digit is the inch mark (`12'6"`),
+  not a string quote — label strings are the only other double-quote context.
+- **`core/udraft/` is pure** (parse.js → layout.js → svg.js, no DOM) and unit
+  tested (`npm test`, `test/udraft-core.test.mjs`). Wall rendering = ONE
+  nonzero-winding path over all wall band rects + per-corner squares (the
+  abc2svg staff-veil union trick — overlaps fill once); opening gaps are
+  paper-coloured rects punched on top, symbols draw over them. Every entity
+  carries `data-doc-from/to` (absolute char offsets of its source line) —
+  we emit the SVG ourselves, so no anno-rect archaeology.
+- **The editor is uPub's, shared not forked**: `upub/editor.js` takes a
+  `syntax:` option ({classifyDoc, renderLineHtml, lineClass}, defaulting to
+  uPub's Markdown module) + an `onCaret` callback. uDraft's `syntax.js` holds
+  the same invariant — `textContent(rendered line) === source line` — and the
+  Markdown-specific commands/swipe-indent are gated on line types uDraft never
+  emits, so they're inert. Deliberately NO parse-error underlines in the
+  editor (half-typed lines are always "wrong"); diagnostics live in the
+  preview's issue strip + the header stats button.
+- **The eye toggles the blueprint** (uPub's preview pattern): floor tabs when
+  multiple `floor` blocks exist, issue strip (tap → source line), entity
+  click → jump to the statement. **Autocomplete is a second `SlashMenu`
+  instance** (`#ud-auto`) fed context-aware candidates (keywords at line
+  start; declared room ids after `of`/`/`/`swing` and as first argument of
+  door/window/…; sides after `align/from/on/along/facing`; fixture types) —
+  same touch/keyboard machinery, the autocomplete menu gets keydown routing
+  priority over the slash menu. Slash items insert statement templates with
+  the first placeholder pre-selected.
+- **Exports**: SVG (concrete-colour `<style>` embedded — `exportStyles`), PNG
+  (canvas rasterize), and **PDF at true drawing scale** — `renderPrintBody`
+  sizes each floor's svg in real inches from `scale:` front matter (default
+  `1/4in` = 1/4":1'-0"), print window `@page { margin: 0 }` + body padding.
+  In-app the plan themes via CSS vars (`udraft.css` mirrors
+  `svg.js baseStyles` — keep the `ud-*` class lists in sync).
+- **`styles/udraft.css` `@import`s `upub.css`** (esbuild bundles it): the
+  wr-* shell rules ARE the shared shell — uPub shell changes intentionally
+  flow into uDraft. Theme attribute stays `data-wr-theme` for that reason
+  (prefs key is `udTheme`).
 
 ## Mobile / iOS (hard-won — read before touching layout)
 

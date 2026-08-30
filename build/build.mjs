@@ -204,6 +204,8 @@ const DSL_META = {
   abcjs:     { abbrev: 'abc',  plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs',    label: 'Unifile ABC'      },
   upub:      { abbrev: 'upub', plugins: [],                      defaultDslType: 'upub',     label: 'uPub',
                entry: 'upub/main.js', css: 'styles/upub.css' },
+  udraft:    { abbrev: 'dft',  plugins: [],                      defaultDslType: 'udraft',   label: 'uDraft',
+               entry: 'udraft/main.js', css: 'styles/udraft.css' },
 };
 
 if (dslArg && !DSL_META[dslArg]) {

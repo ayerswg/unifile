@@ -32,6 +32,12 @@
   pinned: true
   excerpt: Distraction-free Markdown writing with EPUB export — install or download.
 
+- title: uDraft
+  url: /udraft/
+  kind: app
+  pinned: true
+  excerpt: Architectural blueprints from plain text — install or download.
+
 # ── Direct links (searchable) ──
 - title: Markdown — download (.html)
   url: /dl/unifile.md.html
@@ -72,3 +78,13 @@
   url: /pwa-upub/
   kind: pwa
   excerpt: Install uPub as an offline writing app.
+
+- title: uDraft — download (.html)
+  url: /dl/unifile.dft.html
+  kind: download
+  excerpt: Standalone single-file blueprint drafting app.
+
+- title: uDraft — install (PWA)
+  url: /pwa-dft/
+  kind: pwa
+  excerpt: Install uDraft as an offline drafting app.

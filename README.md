@@ -2,10 +2,10 @@
 
 A single-file, fully-offline document editor with built-in version history. A
 document is plain text; its sections declare their own format via `#!shebang`
-lines. unifile ships as a **dedicated app per content type** — **Markdown**,
-**Mermaid**, and **ABC music notation** — each bundling that one format (plus a
-Markdown base for prose sections). There is no universal multi-format build and
-no runtime plugins. Everything runs in the browser — **no server, no account, no
+lines. unifile ships as a **dedicated app per content type** — **Markdown**
+(uDoc), **Mermaid** (uDraw), **ABC music notation** (uNote), the **uPub**
+writing app, and the **uDraft** blueprint drafting app — each bundling just what
+it needs. There is no universal multi-format build and no runtime plugins. Everything runs in the browser — **no server, no account, no
 network**. Your data never leaves the device.
 
 Each type ships in two shapes:
@@ -26,9 +26,12 @@ Live site: **https://unifile.app**
 ```
 src/            App source
   core/         Framework-agnostic logic: VCS, diff, storage, front-matter, sections
+                (core/udraft/ = the uDraft parser/layout/SVG engine, Node-tested)
   dsl/          One module per format (markdown, abcjs, mermaid, fountain…)
   model/ layout/  Document models + renderers
   ui/           App shell, editor, preview, topbar, transport, settings
+  upub/         uPub's own shell (custom line editor — no CodeMirror)
+  udraft/       uDraft's own shell (reuses uPub's editor with its own syntax)
   assets/       Generated piano soundfont (committed)
 build/          esbuild pipeline + site tooling
 templates/      quine.html, pwa.html, sw.js, manifest.json
@@ -42,9 +45,10 @@ Requires Node. Install deps once: `npm install`.
 
 | Command | Output |
 |---|---|
-| `npm run build` | Every dedicated variant (markdown, mermaid, abcjs): quine + PWA each |
+| `npm run build` | Every dedicated variant (markdown, mermaid, abcjs, upub, udraft): quine + PWA each |
 | `npm run build:abcjs` | Just the ABC build `dist/unifile.abc.html` + PWA (offline piano) |
-| `node build/build.mjs --dsl=<id>` | Just one `DSL_META` variant (markdown, mermaid, abcjs) |
+| `node build/build.mjs --dsl=<id>` | Just one `DSL_META` variant (markdown, mermaid, abcjs, upub, udraft) |
+| `npm test` | Node unit tests (the uDraft parser/layout/SVG core) |
 | `npm run build:dev` | Unminified + inline source maps |
 | `npm run build:site` | Build all apps + copy into `docs/` + write `docs/version.json` (release step) |
 | `npm run site:preview` | Render `docs/` → `docs/_site` (the no-Ruby renderer Cloudflare Pages runs) |

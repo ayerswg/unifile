@@ -45,6 +45,21 @@
   pwa: /pwa-upub/
   download: /dl/unifile.upub.html
 
+- id: udraft
+  title: uDraft
+  tagline: Architectural blueprints from plain text — fully offline.
+  overview: >
+    A drafting app for floor plans. Describe rooms, doors, and windows in a
+    readable text language and uDraft draws the blueprint — wall poché, door
+    swings, dimension strings — with git-style version history inside the
+    document and PDF export at true drawing scale.
+  features:
+    - Works 100% offline — no server, no account, no sync
+    - Rooms in, blueprint out — walls, swings & dimensions drawn for you
+    - PDF export at true scale (1/4" = 1'-0") + SVG/PNG
+  pwa: /pwa-dft/
+  download: /dl/unifile.dft.html
+
 - id: abc
   title: ABC Notation
   tagline: Write music, hear it, route it — offline.
