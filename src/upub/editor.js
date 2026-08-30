@@ -39,18 +39,30 @@ import { classifyDoc, renderLineHtml, lineClass } from './syntax.js';
 const UNDO_LIMIT = 500;
 const UNDO_COALESCE_MS = 900;
 
+const markdownSyntax = { classifyDoc, renderLineHtml, lineClass };
+
 export class UPubEditor {
   /**
    * @param {HTMLElement} host      element the editor mounts into
    * @param {object}   opts
    * @param {Function} [opts.onChange]  fired (debounced by caller) after any model change
+   * @param {object}   [opts.syntax]    { classifyDoc, renderLineHtml, lineClass } —
+   *   pluggable line classifier/renderer (defaults to uPub's Markdown module).
+   *   uDraft passes its own; the Markdown-specific commands and the swipe
+   *   gesture are gated on line types other syntaxes never emit, so they stay
+   *   inert.  The one invariant every syntax must hold:
+   *   textContent(renderLineHtml(line, info)) === line.
+   * @param {Function} [opts.onCaret]   fired after every edit AND caret move
+   *   (same cadence as onSlash) — uDraft's autocomplete hangs off this.
    */
   constructor(host, opts = {}) {
     this.host = host;
     this.onChange = opts.onChange || (() => {});
     this.onSlash = opts.onSlash || null;   // ctx|null → app's insertion menu
+    this.onCaret = opts.onCaret || null;
+    this.syntax = opts.syntax || markdownSyntax;
     this.lines = [''];
-    this.infos = classifyDoc(this.lines);
+    this.infos = this.syntax.classifyDoc(this.lines);
     this._cache = [];            // rendered inner HTML per line (dirty check)
     this._undo = [];
     this._redo = [];
@@ -379,6 +391,7 @@ export class UPubEditor {
 
   _notifySlash() {
     this.onSlash?.(this.slashContext());
+    this.onCaret?.();
   }
 
   /** Viewport rect of the caret (falls back to its line's rect on empty lines). */
@@ -426,7 +439,7 @@ export class UPubEditor {
    * @param {boolean} full  force a full rebuild
    */
   _render(full = false) {
-    this.infos = classifyDoc(this.lines);
+    this.infos = this.syntax.classifyDoc(this.lines);
     const kids = this.root.children;
 
     // Trim surplus line divs.
@@ -434,8 +447,8 @@ export class UPubEditor {
 
     for (let i = 0; i < this.lines.length; i++) {
       const info = this.infos[i];
-      const html = renderLineHtml(this.lines[i], info) || '<br>';
-      const cls = lineClass(info);
+      const html = this.syntax.renderLineHtml(this.lines[i], info) || '<br>';
+      const cls = this.syntax.lineClass(info);
       const hang = info.hang ? `--hang:${info.hang}ch` : '';
       const key = cls + '\u0000' + hang + '\u0000' + html;
 
@@ -645,7 +658,7 @@ export class UPubEditor {
       // Caret moves without an edit must also open/close the slash menu.
       this._notifySlash();
     });
-    this.root.addEventListener('blur', () => this.onSlash?.(null));
+    this.root.addEventListener('blur', () => { this.onSlash?.(null); this.onCaret?.(); });
     this._bindSwipe();
   }
 

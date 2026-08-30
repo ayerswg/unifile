@@ -1,0 +1,171 @@
+/**
+ * uDraft — the udraft variant's stylesheet.
+ *
+ * Imports uPub's stylesheet wholesale (esbuild bundles the @import): the two
+ * variants share the whole shell — fixed column, title bar, scroller, sheets,
+ * slash menu, history, toasts — and uPub's wr-* rules ARE that shell.  What
+ * follows only adds uDraft's own surfaces: statement token colours, the
+ * blueprint preview pane (floor tabs, issue strip, themed plan svg), and the
+ * autocomplete popup (#ud-auto, a second slash-menu instance).
+ */
+
+@import "./upub.css";
+
+/* ── Editor token colours (spans from udraft/syntax.js) ───────────────────── */
+
+.wr-line .kw   { color: var(--accent); font-weight: 600; }
+.wr-line .dir  { color: #2aa876; }
+.wr-line .len  { color: #b0762a; }
+.wr-line .id   { color: var(--fg); font-weight: 500; }
+.wr-line .fix  { color: #8e6bc8; }
+.wr-line .op   { color: var(--fg-mut); }
+.wr-line .str  { color: #2aa876; }
+.wr-line .cmt  { color: var(--dim); font-style: italic; }
+.t-comment     { color: var(--dim); font-style: italic; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-wr-theme="light"]) .wr-line .dir,
+  :root:not([data-wr-theme="light"]) .wr-line .str { color: #57c99a; }
+  :root:not([data-wr-theme="light"]) .wr-line .len { color: #d99a52; }
+  :root:not([data-wr-theme="light"]) .wr-line .fix { color: #b295e0; }
+}
+:root[data-wr-theme="dark"] .wr-line .dir,
+:root[data-wr-theme="dark"] .wr-line .str { color: #57c99a; }
+:root[data-wr-theme="dark"] .wr-line .len { color: #d99a52; }
+:root[data-wr-theme="dark"] .wr-line .fix { color: #b295e0; }
+
+/* ── Blueprint preview pane ───────────────────────────────────────────────── */
+
+#wr-preview { display: flex; flex-direction: column; padding: 0; }
+#wr-preview[hidden] { display: none; }   /* display:flex would defeat [hidden] */
+
+#ud-ptabs {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px 0;
+  overflow-x: auto;
+}
+#ud-ptabs[hidden] { display: none; }
+#ud-ptabs button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-mut);
+  font: 500 13px/1 -apple-system, system-ui, sans-serif;
+  padding: 8px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-ptabs button.active { color: var(--accent); border-color: var(--accent); }
+
+#ud-issues {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px 0;
+  max-height: 30%;
+  overflow-y: auto;
+}
+#ud-issues[hidden] { display: none; }
+.ud-issue {
+  appearance: none;
+  border: 0;
+  text-align: left;
+  background: var(--code-bg);
+  color: var(--fg-mut);
+  font: 400 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 7px 10px;
+  border-left: 3px solid var(--pending);
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ud-issue.ud-error { border-left-color: var(--danger); }
+.ud-issue b { color: var(--fg); font-weight: 600; margin-right: 6px; }
+
+#ud-plan {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px;
+}
+#ud-plan svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+}
+.ud-empty { color: var(--fg-mut); font-size: 15px; padding: 20px 8px; }
+.ud-empty code { background: var(--code-bg); border-radius: 4px; padding: 1px 5px; }
+
+/* Plan stats button flags issues. */
+#wr-count.ud-has-issues { color: var(--danger); }
+
+/* ── The plan itself (mirror of svg.js baseStyles, themed via vars) ───────── */
+
+#ud-plan .ud-walls   { fill: var(--fg); }
+#ud-plan .ud-gap     { fill: var(--bg); }
+#ud-plan .ud-paper   { fill: var(--bg); }
+#ud-plan .ud-sym     { stroke: var(--fg); stroke-width: 20; fill: none; stroke-linecap: round; }
+#ud-plan .ud-thin    { stroke: var(--fg-mut); stroke-width: 12; fill: none; }
+#ud-plan .ud-dash    { stroke-dasharray: 120 80; }
+#ud-plan .ud-arc     { stroke-width: 12; }
+#ud-plan .ud-txt     { fill: var(--fg); stroke: none; }
+#ud-plan .ud-label   { font-size: 280px; font-weight: 600; letter-spacing: 0.08em; }
+#ud-plan .ud-area    { font-size: 200px; fill: var(--fg-mut); }
+#ud-plan .ud-note    { font-size: 190px; fill: var(--fg-mut); font-style: italic; }
+#ud-plan .ud-dim-txt { font-size: 200px; fill: var(--fg-mut); }
+#ud-plan .ud-fix-txt { font-size: 170px; fill: var(--fg-mut); }
+#ud-plan .ud-stair-txt { font-size: 180px; fill: var(--fg-mut); font-weight: 600; }
+
+#ud-plan .ud-ent { cursor: pointer; }
+#ud-plan .ud-ent:hover .ud-sym,
+#ud-plan .ud-ent:hover .ud-thin { stroke: var(--accent); }
+#ud-plan .ud-ent:hover .ud-txt  { fill: var(--accent); }
+
+/* ── Autocomplete popup — same look as the slash menu ─────────────────────── */
+
+#ud-auto {
+  position: absolute;
+  z-index: 40;
+  min-width: 180px;
+  max-width: min(280px, calc(100% - 16px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  padding: 5px;
+}
+#ud-auto[hidden] { display: none; }
+#ud-auto button {
+  appearance: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: 400 14px/1.2 ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-auto button.active,
+#ud-auto button:hover { background: var(--bg-alt); }
+#ud-auto .sl-label { flex: 1; }
+#ud-auto .sl-hint {
+  flex: none;
+  color: var(--dim);
+  font: 500 11px/1 -apple-system, system-ui, sans-serif;
+}
