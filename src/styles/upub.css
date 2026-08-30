@@ -91,6 +91,12 @@ body {
 
 /* ── Top bar ──────────────────────────────────────────────────────────────── */
 
+/* The header rides `--wr-hide` (0 shown … 1 hidden, set by _bindScrollChrome)
+   so it slides away IN STEP with scrolling down and back in with scrolling up.
+   -47px = 46px height + 1px border.  While a scroll is live the app root
+   carries `data-scroll-tracking`, which kills the transition so the bar tracks
+   the finger 1:1; when scrolling idles the attribute drops and the snap to an
+   edge animates through the normal transition. */
 #wr-top {
   flex: none;
   display: flex;
@@ -100,15 +106,20 @@ body {
   padding: 0 8px 0 14px;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
+  margin-top: calc(var(--wr-hide, 0) * -47px);
+  opacity: calc(1 - var(--wr-hide, 0));
   transition: margin-top 0.22s ease, opacity 0.16s ease;
 }
 
+#unifile-app[data-scroll-tracking] #wr-top { transition: none; }
+
+/* Fully scrolled away — taps must fall through to what's underneath. */
+#unifile-app[data-scroll-hidden] #wr-top { pointer-events: none; }
+
 /* While editing on a touch device (soft keyboard up — app.js sets
-   `data-editing`) or after scrolling down (`data-scroll-hidden`, cleared by
-   scrolling back up — see _bindScrollChrome), the header slides away and its
-   space goes to the text.  -47px = 46px height + 1px border. */
-#unifile-app[data-editing] #wr-top,
-#unifile-app[data-scroll-hidden] #wr-top {
+   `data-editing`), the header slides away and its space goes to the text.
+   Out-specifies the calc() above, so it holds whatever the scroll state. */
+#unifile-app[data-editing] #wr-top {
   margin-top: -47px;
   opacity: 0;
   pointer-events: none;

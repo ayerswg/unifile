@@ -798,54 +798,68 @@ export class UPubApp {
   }
 
   /**
-   * Reading chrome — the header also gets out of the way while you SCROLL.
+   * Reading chrome — the header gets out of the way IN STEP with scrolling,
+   * the way Safari's toolbar does: each pixel scrolled down slides it one
+   * pixel up (and fades it), each pixel scrolled up slides it back.
    *
-   * Scrolling down hides the title bar (`data-scroll-hidden` → same CSS slide
-   * as `data-editing`); any scroll up brings it back, as does being near the
-   * top.  Small accumulated-travel thresholds (rather than reacting to every
-   * scroll event) keep it from flapping on iOS momentum/rubber-band jitter and
-   * on the focus-scroll guard's programmatic restores; scrollTop is clamped to
-   * the real range so overscroll bounce never reads as a direction change.
-   * A document too short to scroll never hides (no scroll events fire, and the
-   * near-top rule shows it again regardless).  Independent of `data-editing`:
-   * while editing the header stays hidden either way, and when the keyboard
-   * goes away a scrolled-down page keeps the header tucked until you scroll up.
+   * Mechanics: scroll deltas drive `--wr-hide` (0 = shown … 1 = hidden) on
+   * the app root; the header's margin-top/opacity are calc()'d from it.  While
+   * a scroll is live, `data-scroll-tracking` suppresses the header transition
+   * so it tracks 1:1; when scrolling goes idle the attribute drops and a
+   * partial header SNAPS to the nearer edge through the normal transition.
+   * Progress is additionally capped at scrollTop/47 so scrolling to the very
+   * top always reveals the whole bar (and the idle snap near the top always
+   * shows, never hides).  `data-scroll-hidden` now only marks the fully-hidden
+   * state (pointer-events).  A document too short to scroll never hides (its
+   * scrollTop can't move, so no deltas ever accumulate).  Independent of
+   * `data-editing`: that rule out-specifies the calc(), so while editing the
+   * header stays away regardless of scroll state.
    *
    * THE BOTTOM-CLAMP LOOP (real bug): the hide is not just visual — the shell
-   * is a flex column, so sliding the header away grows the scroller by 47px.
-   * With the scroller AT the bottom, that means max scrollTop shrinks and the
-   * browser clamps scrollTop down, firing scroll events for a "scroll up" the
-   * user never made → show → scroller shrinks back → the still-running fling
-   * hides again → the header bounces.  The clamp has an exact signature,
-   * though: an upward delta that ends AT the (new) bottom edge — a real
-   * up-scroll always lands above it.  Those deltas are dropped ("the floor
-   * rose, we didn't move"), which also covers the per-frame clamps during the
-   * 0.22s slide, a keyboard dismissal while scrolled to the end, and content
-   * shrinking under the caret — while a genuine reversal anywhere (bottom
-   * included) still counts from its very first pixel.  Showing never feeds
-   * back at all: it shrinks the scroller, max GROWS, nothing clamps.
+   * is a flex column, so sliding the header away grows the scroller.  With the
+   * scroller AT the bottom, that means max scrollTop shrinks and the browser
+   * clamps scrollTop down, firing scroll events for a "scroll up" the user
+   * never made → show → scroller shrinks back → the still-running fling hides
+   * again → the header bounces.  The clamp has an exact signature, though: an
+   * upward delta that ends AT the (new) bottom edge — a real up-scroll always
+   * lands above it.  Those deltas are dropped ("the floor rose, we didn't
+   * move"), which also covers the snap animation's per-frame clamps, a
+   * keyboard dismissal while scrolled to the end, and content shrinking under
+   * the caret — while a genuine reversal anywhere (bottom included) still
+   * moves the header from its very first pixel.  Showing never feeds back at
+   * all: it shrinks the scroller, max GROWS, nothing clamps.  scrollTop is
+   * clamped to the real range so iOS rubber-band never reads as travel.
    */
   _bindScrollChrome() {
     const app = document.getElementById('unifile-app');
-    const HIDE_AFTER = 24;   // px of downward travel before hiding
-    const SHOW_AFTER = 8;    // px of upward travel before showing
-    const toggle = (on) => {  // guarded — don't hammer the DOM on every event
-      if (on !== app.hasAttribute('data-scroll-hidden')) app.toggleAttribute('data-scroll-hidden', on);
+    const H = 47;            // header height + border — the full slide distance
+    let p = 0;               // hide progress: 0 shown … 1 hidden
+    let lastTop = 0;         // clamped scrollTop of the most recent event
+    let snapTimer = null;
+    const apply = () => {
+      app.style.setProperty('--wr-hide', String(p));
+      app.toggleAttribute('data-scroll-hidden', p >= 1);
+    };
+    const snap = () => {
+      app.removeAttribute('data-scroll-tracking');   // transitions back on
+      const target = (lastTop <= H || p < 0.5) ? 0 : 1;
+      if (target !== p) { p = target; apply(); }
     };
     const watch = (el) => {
       let last = el.scrollTop;
-      let acc = 0;           // accumulated travel in the current direction (+down / -up)
       el.addEventListener('scroll', () => {
         const max = Math.max(0, el.scrollHeight - el.clientHeight);
         const top = Math.min(Math.max(0, el.scrollTop), max);
         const d = top - last;
         last = top;
-        if (top <= 46 || max <= 0) { acc = 0; toggle(false); return; }
         if (d === 0) return;
-        if (d < 0 && top >= max - 1) { acc = 0; return; }  // bottom-edge clamp, not the user (see above)
-        acc = (d > 0) === (acc > 0) ? acc + d : d;   // direction change resets
-        if (acc > HIDE_AFTER) toggle(true);
-        else if (acc < -SHOW_AFTER) toggle(false);
+        if (d < 0 && top >= max - 1) return;  // bottom-edge clamp, not the user (see above)
+        lastTop = top;
+        app.setAttribute('data-scroll-tracking', '');
+        p = Math.min(Math.max(p + d / H, 0), 1, top / H);
+        apply();
+        clearTimeout(snapTimer);
+        snapTimer = setTimeout(snap, 140);
       }, { passive: true });
     };
     watch(document.getElementById('wr-scroll'));
