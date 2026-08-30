@@ -37,9 +37,10 @@ indents. \`/indent\` and \`/outdent\` in the / menu do the same thing.
 
 While you write on a phone, the title bar slides away so its space goes to
 your text; dismissing the keyboard (the **✓** on iOS's keyboard bar)
-brings it back, along with its menu. The title bar also tucks away when
-you scroll down through the document — scroll up a little (or return to
-the top) and it reappears.
+brings it back, along with its menu. The title bar also slides away in
+step with your scrolling — scrolling down tucks it away at the rate you
+scroll, and scrolling up (or returning to the top) slides it back the
+same way.
 
 ## The / menu
 
