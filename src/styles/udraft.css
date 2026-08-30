@@ -90,15 +90,18 @@
 #ud-plan {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;       /* zoom/pan owns this surface — no native scroll */
+  touch-action: none;     /* one finger pans, two pinch (app.js _bindZoom) */
   padding: 14px;
+  cursor: grab;
 }
+#ud-plan:active { cursor: grabbing; }
+/* The svg fills the pane and the VIEWBOX is the zoom window (crisp at any
+   depth — CSS-transform scaling would rasterize and blur). */
 #ud-plan svg {
   display: block;
   width: 100%;
-  height: auto;
-  max-height: 100%;
+  height: 100%;
 }
 .ud-empty { color: var(--fg-mut); font-size: 15px; padding: 20px 8px; }
 .ud-empty code { background: var(--code-bg); border-radius: 4px; padding: 1px 5px; }
@@ -124,9 +127,40 @@
 #ud-plan .ud-stair-txt { font-size: 180px; fill: var(--fg-mut); font-weight: 600; }
 
 #ud-plan .ud-ent { cursor: pointer; }
+#ud-plan .ud-hit { pointer-events: all; }
 #ud-plan .ud-ent:hover .ud-sym,
 #ud-plan .ud-ent:hover .ud-thin { stroke: var(--accent); }
 #ud-plan .ud-ent:hover .ud-txt  { fill: var(--accent); }
+/* Hovering a room's interior shouldn't light the label if the label is its
+   own target (a `label` statement) — the inner group re-scopes the hover. */
+#ud-plan .ud-ent.ud-roomlabel:hover .ud-txt { fill: var(--accent); }
+
+/* ── Zoom controls (bottom-right of the preview) ──────────────────────────── */
+
+#ud-zoomctl {
+  position: absolute;
+  right: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  display: flex;
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--line);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+#ud-zoomctl button {
+  appearance: none;
+  border: 0;
+  width: 42px;
+  height: 40px;
+  background: var(--bg-elev);
+  color: var(--fg-mut);
+  font: 500 18px/1 -apple-system, system-ui, sans-serif;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-zoomctl button:active { background: var(--bg-alt); color: var(--accent); }
 
 /* ── Autocomplete popup — same look as the slash menu ─────────────────────── */
 

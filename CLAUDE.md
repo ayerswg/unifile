@@ -281,9 +281,26 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
   emits, so they're inert. Deliberately NO parse-error underlines in the
   editor (half-typed lines are always "wrong"); diagnostics live in the
   preview's issue strip + the header stats button.
+- **Floors**: `floor <n> "Title"` blocks; **room ids are scoped per floor**
+  (each storey can have its own `bath`; openings resolve within their floor).
+  All floors share one origin, so identical relative placements stack rooms —
+  that's how stair shafts align. Preview tabs sort by floor number (basement
+  `0`/negative left). `crossFloorStairsCheck` warns when an `up`/`down`
+  flight has no stairs overlapping its footprint on the adjacent floor.
 - **The eye toggles the blueprint** (uPub's preview pattern): floor tabs when
   multiple `floor` blocks exist, issue strip (tap → source line), entity
-  click → jump to the statement. **Autocomplete is a second `SlashMenu`
+  click → jump to the statement. **Every entity is a real click target** —
+  thin strokes are hopeless taps, so interactive renders add invisible
+  `ud-hit` rects per entity (transparent fill still hit-tests); a room's
+  label block targets its `label` statement when one exists (innermost
+  data-doc-from wins), the interior targets the `room` line; exports carry
+  none of it. **Zoom/pan rewrites the svg VIEWBOX, not a CSS transform**
+  (transform-scaled svg rasterizes at layout size and blurs; a narrowed
+  viewBox stays vector-crisp): wheel zooms at the cursor, one pointer pans,
+  two pinch, −/⛶/+ buttons (`_bindZoom`; `this._view` survives live
+  re-renders while typing, resets on floor switch, ⛶ = fit). A drag sets
+  `_planDragged` so the trailing click doesn't jump to source.
+  **Autocomplete is a second `SlashMenu`
   instance** (`#ud-auto`) fed context-aware candidates (keywords at line
   start; declared room ids after `of`/`/`/`swing` and as first argument of
   door/window/…; sides after `align/from/on/along/facing`; fixture types) —

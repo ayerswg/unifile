@@ -212,7 +212,33 @@ export function layoutDocument(parsed) {
   const { meta } = parsed;
   const issues = [...parsed.issues];
   const floors = parsed.floors.map(f => layoutFloor(f, meta, issues));
+  crossFloorStairsCheck(floors, issues);
   return { meta, floors, issues };
+}
+
+/**
+ * Stairs must land somewhere: an `up` flight on a numbered floor should have
+ * stairs at an overlapping footprint on the next floor up (any direction —
+ * a stacked shaft's DN flight, or the arriving UP), and `down` likewise on
+ * the next floor below.  Floors share the origin, so "overlapping footprint"
+ * is a plain rect intersection.  Warnings, not errors — a single-floor
+ * document's `up` to an undrawn storey is fine.
+ */
+function crossFloorStairsCheck(floors, issues) {
+  const byNum = floors.filter(f => f.num != null).sort((a, b) => a.num - b.num);
+  if (byNum.length < 2) return;
+  for (let i = 0; i < byNum.length; i++) {
+    for (const st of byNum[i].stairs) {
+      const neighbor = st.dir === 'up' ? byNum[i + 1] : byNum[i - 1];
+      if (!neighbor) continue;
+      const hit = neighbor.stairs.some(o => rectsOverlap(st.rect, o.rect));
+      if (!hit) {
+        const name = neighbor.title || `floor ${neighbor.num}`;
+        issues.push({ line: st.line, col: 0, from: st.from, to: st.to, severity: 'warning',
+          message: `stairs go ${st.dir} but ${name} has no stairs over this spot — flights in one shaft should stack` });
+      }
+    }
+  }
 }
 
 function err(issues, stmt, message, severity = 'error') {

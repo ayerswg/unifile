@@ -10,6 +10,9 @@ blueprint. You write statements — one per line — and the plan draws itself:
 walls, door swings, window symbols, dimension strings, room labels with areas.
 
 Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
+On the drawing: **scroll or pinch to zoom, drag to pan** (the −/⛶/+ buttons
+do the same; ⛶ fits the whole floor), and **tap anything** — a room, a door,
+a sink, a dimension — to jump to the line that drew it.
 
 ## Rooms — the spine
 
@@ -81,9 +84,34 @@ floor 2 "Second Floor"
   **note** adds a small parenthetical under the label.
 - **dim** adds an explicit dimension line on one side of a room. Overall
   building dimensions are automatic (\`dims: off\` in front matter disables).
-- **floor** starts a new storey; everything after it belongs to that floor.
-  The preview shows one floor at a time.
 - \`#\` starts a comment (at a line start or after a space).
+
+## Floors & stairs
+
+\`floor <number> "Title"\` starts a storey; everything after it belongs to
+that floor (use \`0\` or a negative number for a basement). The preview shows
+one floor at a time — the tabs are ordered by floor number. Room names are
+per-floor, so every storey can have its own \`bath\`.
+
+**All floors share one origin**, so the same relative placements stack rooms
+exactly on top of each other — the easiest way to align a stair shaft:
+
+\`\`\`
+floor 1 "Main Floor"
+room living 16' x 13'
+room hall   5' x 9'   south of living, align west
+stairs hall 3' x 9' up, along west
+
+floor 2 "Second Floor"
+room bedroom 16' x 13'
+room landing 5' x 9'  south of bedroom, align west   # lands over the hall
+stairs landing 3' x 9' down, along west              # same shaft
+\`\`\`
+
+Each floor's \`stairs\` statement draws the flight you see on that floor
+(\`up\` or \`down\` labels the arrow). uDraft checks that flights stack: an
+\`up\` with no stairs over the same spot on the floor above gets a warning
+in the issue strip.
 
 ## Front matter
 

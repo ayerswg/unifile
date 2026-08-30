@@ -50,6 +50,18 @@ function docAttrs(ent, interactive) {
   return ` data-doc-from="${ent.from}" data-doc-to="${ent.to}"`;
 }
 
+/**
+ * Invisible hit target (interactive renders only).  Thin strokes are hopeless
+ * tap targets, so every entity group gets one of these covering its footprint
+ * (padded a little); transparent fill still counts as "painted" for SVG
+ * pointer-events, and the group's data-doc-from does the rest.
+ */
+function hitRect(x, y, w, h, interactive, pad = 60 * MM) {
+  if (!interactive) return '';
+  return `<rect class="ud-hit" x="${mm(x - pad)}" y="${mm(y - pad)}"`
+    + ` width="${mm(w + 2 * pad)}" height="${mm(h + 2 * pad)}" fill="transparent"/>`;
+}
+
 // ---------------------------------------------------------------------------
 // Pieces
 // ---------------------------------------------------------------------------
@@ -94,7 +106,19 @@ function openingMarkup(o, interactive) {
     // Door: leaf + quarter-circle swing arc from the hinge jamb.
     body = jamb(o.lo) + jamb(o.hi) + doorSwing(o);
   }
-  return `<g class="ud-ent ud-${o.kind}"${docAttrs(o, interactive)}>${gap}${body}</g>`;
+  // Hit target: the gap band (doors additionally get their swing quadrant).
+  let hit;
+  if (o.kind === 'door') {
+    const w = o.hi - o.lo;
+    const x0 = vertical ? (o.openDir === 'w' ? b0 - w : b0) : o.lo;
+    const y0 = vertical ? o.lo : (o.openDir === 'n' ? b0 - w : b0);
+    hit = hitRect(x0, y0, vertical ? (b1 - b0) + w : w, vertical ? w : (b1 - b0) + w, interactive);
+  } else {
+    hit = vertical
+      ? hitRect(b0, o.lo, b1 - b0, o.hi - o.lo, interactive)
+      : hitRect(o.lo, b0, o.hi - o.lo, b1 - b0, interactive);
+  }
+  return `<g class="ud-ent ud-${o.kind}"${docAttrs(o, interactive)}>${gap}${body}${hit}</g>`;
 }
 
 function doorSwing(o) {
@@ -147,6 +171,7 @@ function stairsMarkup(st, interactive) {
     out.push(arrowHead(x + w - 150 * MM, cy, 'e'));
     out.push(text(x + 120 * MM, cy + S.stairText * MM / 3, st.dir === 'up' ? 'UP' : 'DN', 'ud-txt ud-stair-txt'));
   }
+  out.push(hitRect(x, y, w, h, interactive, 0));
   return `<g class="ud-ent ud-stairs"${docAttrs(st, interactive)}>${out.join('')}</g>`;
 }
 
@@ -212,7 +237,8 @@ function fixtureMarkup(f, interactive) {
   else if (f.side === 's') tf = `translate(${mm(x + rw)} ${mm(y + rh)}) rotate(180)`;
   else if (f.side === 'w') tf = `translate(${mm(x)} ${mm(y + rh)}) rotate(-90)`;
   else tf = `translate(${mm(x + rw)} ${mm(y)}) rotate(90)`;
-  return `<g class="ud-ent ud-fixture" transform="${tf}"${docAttrs(f, interactive)}>${fixtureLocal(f.type, w, d)}</g>`;
+  return `<g class="ud-ent ud-fixture" transform="${tf}"${docAttrs(f, interactive)}>`
+    + `${fixtureLocal(f.type, w, d)}${hitRect(0, 0, w, d, interactive)}</g>`;
 }
 
 function dimMarkup(dim, meta, interactive) {
@@ -238,6 +264,10 @@ function dimMarkup(dim, meta, interactive) {
     out.push(text(x - 90 * MM, (dim.u0 + dim.u1) / 2, t, 'ud-txt ud-dim-txt',
       ` text-anchor="middle" transform="rotate(-90 ${mm(x - 90 * MM)} ${mm((dim.u0 + dim.u1) / 2)})"`));
   }
+  const band = (S.dimText + 180) * MM;                   // line + ticks + text
+  out.push(dim.axis === 'h'
+    ? hitRect(dim.u0, dim.pos - band, dim.u1 - dim.u0, band + 180 * MM, interactive)
+    : hitRect(dim.pos - band, dim.u0, band + 180 * MM, dim.u1 - dim.u0, interactive));
   return `<g class="ud-ent ud-dim"${docAttrs(dim, interactive)}>${out.join('')}</g>`;
 }
 
@@ -255,8 +285,22 @@ function roomMarkup(room, meta, interactive) {
     text(cx, cy, room.label.toUpperCase(), 'ud-txt ud-label', ' text-anchor="middle"'),
     text(cx, cy + S.areaText * MM * 1.35, formatArea(room.areaUm2, meta.units), 'ud-txt ud-area', ' text-anchor="middle"'),
   ];
-  if (room.note) lines.push(text(cx, cy + S.areaText * MM * 1.35 + S.noteText * MM * 1.35, `(${room.note})`, 'ud-txt ud-note', ' text-anchor="middle"'));
-  return `<g class="ud-ent ud-room"${docAttrs(room, interactive)}>${hit}${lines.join('')}</g>`;
+  let noteH = 0;
+  if (room.note) {
+    lines.push(text(cx, cy + S.areaText * MM * 1.35 + S.noteText * MM * 1.35, `(${room.note})`, 'ud-txt ud-note', ' text-anchor="middle"'));
+    noteH = S.noteText * MM * 1.35;
+  }
+  // The label block is its own click target: when a `label` statement renamed
+  // the room it jumps THERE (closest data-doc wins), else it falls through to
+  // the room group.  Sized from the monospace-ish label width estimate.
+  const labelW = Math.max(room.label.length * S.labelText * 0.62, 8 * S.labelText) * MM;
+  const labelTop = cy - S.labelText * MM;
+  const labelH = S.labelText * MM + S.areaText * MM * 1.35 + noteH + 120 * MM;
+  const labelHit = hitRect(cx - labelW / 2, labelTop, labelW, labelH, interactive, 0);
+  const labelGroup = room.labelStmt
+    ? `<g class="ud-ent ud-roomlabel"${docAttrs(room.labelStmt, interactive)}>${lines.join('')}${labelHit}</g>`
+    : `<g class="ud-roomlabel">${lines.join('')}${labelHit}</g>`;
+  return `<g class="ud-ent ud-room"${docAttrs(room, interactive)}>${hit}${labelGroup}</g>`;
 }
 
 // ---------------------------------------------------------------------------
