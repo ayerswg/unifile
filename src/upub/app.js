@@ -1,12 +1,12 @@
 /**
- * Unifile Writer — app shell.
+ * uPub — app shell.
  *
- * A deliberately minimal, mobile-first shell around WriterEditor (editor.js):
+ * A deliberately minimal, mobile-first shell around UPubEditor (editor.js):
  * one editing surface, a thin title bar, and bottom sheets for everything
  * else (menu, history, export, settings, guide, about).  Reuses unifile's core: VCS history (core/vcs.js)
  * and storage (core/storage.js — IndexedDB in PWA mode, quine regeneration in
  * single-file mode).  Data shape is the standard unifile document object, so a
- * Writer .unifile.json round-trips like any other unifile document.
+ * uPub .unifile.json round-trips like any other unifile document.
  *
  * iOS layout rules (see CLAUDE.md "Mobile / iOS" — hard-won, do not simplify):
  * the shell is position:fixed, sized by --app-height (measured from
@@ -24,7 +24,7 @@ import {
 } from '../core/storage.js';
 import { VCS } from '../core/vcs.js';
 import { shortHash } from '../core/hash.js';
-import { WriterEditor } from './editor.js';
+import { UPubEditor } from './editor.js';
 import { SlashMenu } from './slash-menu.js';
 import { renderDocument, renderMarkdown } from './preview.js';
 import { buildEpub, slugify } from './epub.js';
@@ -34,14 +34,14 @@ const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.
 const BUILT = (typeof UNIFILE_BUILT !== 'undefined') ? UNIFILE_BUILT : 'dev';
 const COMMIT = (typeof UNIFILE_COMMIT !== 'undefined') ? UNIFILE_COMMIT : '';
 const COMMIT_AT = (typeof UNIFILE_COMMIT_AT !== 'undefined') ? UNIFILE_COMMIT_AT : '';
-const DOC_ID = 'writer';
+const DOC_ID = 'upub';
 
 const SEED = `---
 title: Untitled
 author:
 ---
 
-# Welcome to Writer
+# Welcome to uPub
 
 A quiet place to write — plain **Markdown**, saved on your device, with
 version history built in.
@@ -63,7 +63,7 @@ function esc(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-export class WriterApp {
+export class UPubApp {
   async init() {
     this.version = VERSION;
     this.build = BUILT;
@@ -99,7 +99,7 @@ export class WriterApp {
     this._trackViewportHeight();
     this._lockWindowScroll();
 
-    this.editor = new WriterEditor(document.getElementById('wr-sheet'), {
+    this.editor = new UPubEditor(document.getElementById('wr-sheet'), {
       onChange: () => this._onEdit(),
       onSlash: (ctx) => this._onSlashCtx(ctx),
     });
@@ -108,6 +108,7 @@ export class WriterApp {
     this._refreshCount();
     this._bindSlashMenu();
     this._bindEditingChrome();
+    this._bindScrollChrome();
     this._guardFocusScroll();
 
     if (!IS_QUINE && 'serviceWorker' in navigator) {
@@ -317,7 +318,7 @@ export class WriterApp {
 
   _bindSlashMenu() {
     this.slash = new SlashMenu(document.getElementById('wr-main'), {
-      items: WriterApp.SLASH_ITEMS,
+      items: UPubApp.SLASH_ITEMS,
       onPick: (item, ctx) => {
         // Delete the typed `/query` (unrecorded — see _applyEdit 'none': one
         // undo step per pick, and the Undo action can't resurrect the query),
@@ -388,7 +389,7 @@ export class WriterApp {
       ...this.vcs.serialize(),
       version: VERSION,
       title: this.title,
-      dslType: 'writer',
+      dslType: 'upub',
       currentContent: this.content,
     };
   }
@@ -666,7 +667,7 @@ export class WriterApp {
     if (!confirm('Start a new document? The current document and its history will be replaced'
       + (IS_QUINE ? '.' : ' (export a data file first if you want to keep it).'))) return;
     this.data = {
-      version: VERSION, title: 'Untitled', dslType: 'writer',
+      version: VERSION, title: 'Untitled', dslType: 'upub',
       currentBranch: 'main', branches: { main: { name: 'main', head: null } },
       commits: {}, comments: {}, password: null,
     };
@@ -729,7 +730,7 @@ export class WriterApp {
     const modal = this._openSheet(`
       <div class="wr-sheet-head">About</div>
       <div class="wr-sheet-body">
-        <p><b>Unifile Writer</b> v${esc(VERSION)}
+        <p><b>uPub</b> v${esc(VERSION)}
           <span class="wr-mut">· build ${esc(BUILT)}${COMMIT
             ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(COMMIT_AT.slice(0, 16).replace('T', ' '))}Z)` : ''}` : ''}</span></p>
         <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'
@@ -794,6 +795,43 @@ export class WriterApp {
     const kb = window.visualViewport ? !!this._kbOpen : true;
     const editing = !!(focused && kb && window.matchMedia('(pointer: coarse)').matches);
     document.getElementById('unifile-app').toggleAttribute('data-editing', editing);
+  }
+
+  /**
+   * Reading chrome — the header also gets out of the way while you SCROLL.
+   *
+   * Scrolling down hides the title bar (`data-scroll-hidden` → same CSS slide
+   * as `data-editing`); any scroll up brings it back, as does being near the
+   * top.  Small accumulated-travel thresholds (rather than reacting to every
+   * scroll event) keep it from flapping on iOS momentum/rubber-band jitter and
+   * on the focus-scroll guard's programmatic restores; scrollTop is clamped to
+   * the real range so overscroll bounce never reads as a direction change.
+   * A document too short to scroll never hides (no scroll events fire, and the
+   * near-top rule shows it again regardless).  Independent of `data-editing`:
+   * while editing the header stays hidden either way, and when the keyboard
+   * goes away a scrolled-down page keeps the header tucked until you scroll up.
+   */
+  _bindScrollChrome() {
+    const app = document.getElementById('unifile-app');
+    const HIDE_AFTER = 24;   // px of downward travel before hiding
+    const SHOW_AFTER = 8;    // px of upward travel before showing
+    const watch = (el) => {
+      let last = el.scrollTop;
+      let acc = 0;           // accumulated travel in the current direction (+down / -up)
+      el.addEventListener('scroll', () => {
+        const max = Math.max(0, el.scrollHeight - el.clientHeight);
+        const top = Math.min(Math.max(0, el.scrollTop), max);
+        const d = top - last;
+        last = top;
+        if (top <= 46 || max <= 0) { acc = 0; app.removeAttribute('data-scroll-hidden'); return; }
+        if (d === 0) return;
+        acc = (d > 0) === (acc > 0) ? acc + d : d;   // direction change resets
+        if (acc > HIDE_AFTER) app.setAttribute('data-scroll-hidden', '');
+        else if (acc < -SHOW_AFTER) app.removeAttribute('data-scroll-hidden');
+      }, { passive: true });
+    };
+    watch(document.getElementById('wr-scroll'));
+    watch(document.getElementById('wr-preview'));
   }
 
   // -------------------------------------------------------------------------

@@ -1,16 +1,16 @@
 /**
- * Unifile Writer — the full user guide, as Markdown.
+ * uPub — the full user guide, as Markdown.
  *
  * Single source of truth for the documentation: rendered in-app (Guide sheet,
  * via marked) AND published on the website (build/render-site.mjs imports this
- * module and emits /writer/guide/).  Keep it dependency-free plain ESM so Node
+ * module and emits /upub/guide/).  Keep it dependency-free plain ESM so Node
  * can import it during the site build.
  */
 
-export const GUIDE_TITLE = 'Unifile Writer — Guide';
+export const GUIDE_TITLE = 'uPub — Guide';
 
 export const GUIDE_MD = `
-Unifile Writer is a distraction-free Markdown writing app with two things
+uPub is a distraction-free Markdown writing app with two things
 most writing apps don't have: **built-in git-style version history** and
 **EPUB export** — and it runs **fully offline**. Nothing ever leaves your device: no server, no account, no sync,
 no telemetry.
@@ -37,7 +37,9 @@ indents. \`/indent\` and \`/outdent\` in the / menu do the same thing.
 
 While you write on a phone, the title bar slides away so its space goes to
 your text; dismissing the keyboard (the **✓** on iOS's keyboard bar)
-brings it back, along with its menu.
+brings it back, along with its menu. The title bar also tucks away when
+you scroll down through the document — scroll up a little (or return to
+the top) and it reappears.
 
 ## The / menu
 
@@ -65,7 +67,7 @@ the list.
 
 ## Markdown reference
 
-Writer supports the CommonMark + GFM constructs that map cleanly onto an
+uPub supports the CommonMark + GFM constructs that map cleanly onto an
 EPUB. This is the complete list — everything here survives the round trip
 into an e-book:
 
@@ -178,7 +180,7 @@ is never locked in.
 
 ## Version history
 
-Writer keeps a git-style history *inside* the document. Open **⋯ menu →
+uPub keeps a git-style history *inside* the document. Open **⋯ menu →
 History**:
 
 - **Commit** snapshots the current text (a message is optional). Commits
@@ -205,7 +207,7 @@ pressure — export a data file (or an EPUB) for anything you care about.
 
 ## iOS install
 
-Open the Writer page in Safari → Share → **Add to Home Screen**. The app
+Open the uPub page in Safari → Share → **Add to Home Screen**. The app
 then launches full-screen, works completely offline, and keeps your
 documents on the device. The share sheet is used for all exports, so you
 can save straight to Files, Books, or any app.

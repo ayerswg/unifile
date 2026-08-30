@@ -106,21 +106,22 @@ function detectCommit() {
 }
 
 const FILES = [
-  ['unifile.md.html',  'dl/unifile.md.html'],
-  ['unifile.mer.html', 'dl/unifile.mer.html'],
-  ['unifile.abc.html', 'dl/unifile.abc.html'],
-  ['unifile.wr.html',  'dl/unifile.wr.html'],
+  ['unifile.md.html',   'dl/unifile.md.html'],
+  ['unifile.mer.html',  'dl/unifile.mer.html'],
+  ['unifile.abc.html',  'dl/unifile.abc.html'],
+  ['unifile.upub.html', 'dl/unifile.upub.html'],
 ];
 const DIRS = [
-  ['pwa-md',  'pwa-md'],
-  ['pwa-mer', 'pwa-mer'],
-  ['pwa-abc', 'pwa-abc'],
-  ['pwa-wr',  'pwa-wr'],
+  ['pwa-md',   'pwa-md'],
+  ['pwa-mer',  'pwa-mer'],
+  ['pwa-abc',  'pwa-abc'],
+  ['pwa-upub', 'pwa-upub'],
 ];
 
-// Stale universal artifacts to delete from docs/ (the universal build is gone).
-const REMOVE_FILES = ['dl/unifile.html'];
-const REMOVE_DIRS  = ['pwa'];
+// Stale artifacts to delete from docs/ (the universal multi-DSL build is gone,
+// and the writer→uPub rename retired the wr-named outputs).
+const REMOVE_FILES = ['dl/unifile.html', 'dl/unifile.wr.html'];
+const REMOVE_DIRS  = ['pwa', 'pwa-wr'];
 
 async function exists(p) {
   try { await access(p); return true; } catch { return false; }

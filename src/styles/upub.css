@@ -1,6 +1,7 @@
 /**
- * Unifile Writer — the writer variant's complete stylesheet.
- * (The writer build does NOT use app.css — this file is its whole design.)
+ * uPub — the upub variant's complete stylesheet.
+ * (The upub build does NOT use app.css — this file is its whole design.
+ *  DOM ids and class names keep the historical `wr-` prefix.)
  *
  * Aesthetic: quiet and book-like.  Monospaced writing surface (the `ch`-exact font
  * is what makes the hanging list indent work — see editor.js), near-blank
@@ -103,9 +104,11 @@ body {
 }
 
 /* While editing on a touch device (soft keyboard up — app.js sets
-   `data-editing`), the header slides away and its space goes to the text.
-   -47px = 46px height + 1px border. */
-#unifile-app[data-editing] #wr-top {
+   `data-editing`) or after scrolling down (`data-scroll-hidden`, cleared by
+   scrolling back up — see _bindScrollChrome), the header slides away and its
+   space goes to the text.  -47px = 46px height + 1px border. */
+#unifile-app[data-editing] #wr-top,
+#unifile-app[data-scroll-hidden] #wr-top {
   margin-top: -47px;
   opacity: 0;
   pointer-events: none;

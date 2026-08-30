@@ -1,5 +1,5 @@
 /**
- * Writer preview — Markdown → sanitized HTML for the in-app preview pane,
+ * uPub preview — Markdown → sanitized HTML for the in-app preview pane,
  * the guide sheet, and the quine's no-JS fallback.
  */
 

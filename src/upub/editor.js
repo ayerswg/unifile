@@ -1,5 +1,5 @@
 /**
- * WriterEditor — the custom distraction-free plain-text Markdown editor.
+ * UPubEditor — the custom distraction-free plain-text Markdown editor.
  *
  * NOT CodeMirror, on purpose: the defining feature is that a wrapped list item
  * indents its continuation lines to align after the bullet marker ("bullet
@@ -39,7 +39,7 @@ import { classifyDoc, renderLineHtml, lineClass } from './syntax.js';
 const UNDO_LIMIT = 500;
 const UNDO_COALESCE_MS = 900;
 
-export class WriterEditor {
+export class UPubEditor {
   /**
    * @param {HTMLElement} host      element the editor mounts into
    * @param {object}   opts

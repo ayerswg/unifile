@@ -16,7 +16,7 @@
  *   dist/unifile.<abbrev>.html   standalone quine for each DSL
  *   dist/pwa-<abbrev>/            installable PWA for each DSL
  *
- *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | writer)
+ *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | upub)
  *     e.g. `node build/build.mjs --dsl=abcjs` → dist/unifile.abc.html (offline piano)
  *
  * npm scripts
@@ -77,7 +77,7 @@ function detectVersion() {
 }
 export const APP_VERSION = detectVersion();
 
-// Build timestamp — stamped alongside the version (shown in Writer's About) so
+// Build timestamp — stamped alongside the version (shown in uPub's About) so
 // two builds of the SAME version are distinguishable when debugging caching.
 export const APP_BUILT = new Date().toISOString().slice(0, 19) + 'Z';
 
@@ -196,14 +196,14 @@ const DEFAULT_DSL_TYPE = 'markdown';
 //
 // A variant may instead ship its OWN shell: `entry` (relative to src/) replaces
 // the generated ui/app.js entry module, and `css` (relative to src/) replaces
-// styles/app.css.  The `writer` variant uses this — it has no CodeMirror and no
-// DSL registry (see src/writer/).
+// styles/app.css.  The `upub` variant uses this — it has no CodeMirror and no
+// DSL registry (see src/upub/).
 const DSL_META = {
-  markdown:  { abbrev: 'md',  plugins: ['markdown'],            defaultDslType: 'markdown', label: 'Unifile Markdown' },
-  mermaid:   { abbrev: 'mer', plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid',  label: 'Unifile Mermaid'  },
-  abcjs:     { abbrev: 'abc', plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs',    label: 'Unifile ABC'      },
-  writer:    { abbrev: 'wr',  plugins: [],                      defaultDslType: 'writer',   label: 'Unifile Writer',
-               entry: 'writer/main.js', css: 'styles/writer.css' },
+  markdown:  { abbrev: 'md',   plugins: ['markdown'],            defaultDslType: 'markdown', label: 'Unifile Markdown' },
+  mermaid:   { abbrev: 'mer',  plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid',  label: 'Unifile Mermaid'  },
+  abcjs:     { abbrev: 'abc',  plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs',    label: 'Unifile ABC'      },
+  upub:      { abbrev: 'upub', plugins: [],                      defaultDslType: 'upub',     label: 'uPub',
+               entry: 'upub/main.js', css: 'styles/upub.css' },
 };
 
 if (dslArg && !DSL_META[dslArg]) {

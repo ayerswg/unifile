@@ -1,5 +1,5 @@
 /**
- * Writer syntax engine — per-line Markdown classification + inline rendering.
+ * uPub syntax engine — per-line Markdown classification + inline rendering.
  *
  * The editor (editor.js) keeps the document as plain text and renders one DOM
  * block per source line.  This module decides, for each line, WHAT it is
