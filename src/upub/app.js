@@ -810,11 +810,28 @@ export class UPubApp {
    * near-top rule shows it again regardless).  Independent of `data-editing`:
    * while editing the header stays hidden either way, and when the keyboard
    * goes away a scrolled-down page keeps the header tucked until you scroll up.
+   *
+   * THE BOTTOM-CLAMP LOOP (real bug): the hide is not just visual — the shell
+   * is a flex column, so sliding the header away grows the scroller by 47px.
+   * With the scroller AT the bottom, that means max scrollTop shrinks and the
+   * browser clamps scrollTop down, firing scroll events for a "scroll up" the
+   * user never made → show → scroller shrinks back → the still-running fling
+   * hides again → the header bounces.  The clamp has an exact signature,
+   * though: an upward delta that ends AT the (new) bottom edge — a real
+   * up-scroll always lands above it.  Those deltas are dropped ("the floor
+   * rose, we didn't move"), which also covers the per-frame clamps during the
+   * 0.22s slide, a keyboard dismissal while scrolled to the end, and content
+   * shrinking under the caret — while a genuine reversal anywhere (bottom
+   * included) still counts from its very first pixel.  Showing never feeds
+   * back at all: it shrinks the scroller, max GROWS, nothing clamps.
    */
   _bindScrollChrome() {
     const app = document.getElementById('unifile-app');
     const HIDE_AFTER = 24;   // px of downward travel before hiding
     const SHOW_AFTER = 8;    // px of upward travel before showing
+    const toggle = (on) => {  // guarded — don't hammer the DOM on every event
+      if (on !== app.hasAttribute('data-scroll-hidden')) app.toggleAttribute('data-scroll-hidden', on);
+    };
     const watch = (el) => {
       let last = el.scrollTop;
       let acc = 0;           // accumulated travel in the current direction (+down / -up)
@@ -823,11 +840,12 @@ export class UPubApp {
         const top = Math.min(Math.max(0, el.scrollTop), max);
         const d = top - last;
         last = top;
-        if (top <= 46 || max <= 0) { acc = 0; app.removeAttribute('data-scroll-hidden'); return; }
+        if (top <= 46 || max <= 0) { acc = 0; toggle(false); return; }
         if (d === 0) return;
+        if (d < 0 && top >= max - 1) { acc = 0; return; }  // bottom-edge clamp, not the user (see above)
         acc = (d > 0) === (acc > 0) ? acc + d : d;   // direction change resets
-        if (acc > HIDE_AFTER) app.setAttribute('data-scroll-hidden', '');
-        else if (acc < -SHOW_AFTER) app.removeAttribute('data-scroll-hidden');
+        if (acc > HIDE_AFTER) toggle(true);
+        else if (acc < -SHOW_AFTER) toggle(false);
       }, { passive: true });
     };
     watch(document.getElementById('wr-scroll'));
