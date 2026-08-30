@@ -73,7 +73,7 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--bg-elev);
-  min-height: 44px;
+  min-height: 40px;
 }
 #ud-ctxbar[hidden] { display: none; }
 #ud-ctxbar button {
@@ -121,13 +121,7 @@
 }
 .ud-crumb-btn:active { background: var(--bg-alt); }
 .ud-crumb-sep { color: var(--dim); padding: 0 1px; }
-#ud-ctx-text .ud-spec {
-  display: block;
-  color: var(--fg-mut);
-  font: 400 12.5px/1.3 ui-monospace, "SF Mono", Menlo, monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+
 
 #ud-issues {
   flex: none;
@@ -235,6 +229,12 @@
   font-weight: 600;
 }
 
+/* Neighbour arrows — the isolation view's wayfinding (tappable). */
+#ud-plan .ud-nbr-ln { stroke: var(--fg-mut); stroke-width: 16; fill: none; }
+#ud-plan .ud-nbr .ud-nbr-txt { fill: var(--fg-mut); font-size: 200px; font-weight: 600; letter-spacing: 0.06em; }
+#ud-plan .ud-nbr:hover .ud-nbr-ln { stroke: var(--accent); }
+#ud-plan .ud-nbr:hover .ud-nbr-txt { fill: var(--accent); }
+
 /* ── Scope editor — bottom collapse/expand bar for the scoped statement ───── */
 
 #ud-edit {
@@ -269,18 +269,25 @@
   white-space: nowrap;
 }
 .ud-edit-pencil { flex: none; color: var(--fg-mut); font-size: 13px; }
-#ud-edit-body { display: flex; gap: 8px; }
+#ud-edit-body { display: flex; gap: 8px; align-items: flex-start; }
 #ud-edit-body[hidden] { display: none; }
-#ud-edit-input {
+/* The scope editor is a second instance of the shared line editor — same
+   classes, same syntax colours; just boxed, capped and scrollable here. */
+#ud-edit-host {
   flex: 1;
   min-width: 0;
-  font: 400 16px/1.3 ui-monospace, "SF Mono", Menlo, monospace;  /* ≥16px stops iOS focus-zoom */
-  color: var(--fg);
+  max-height: 30vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   background: var(--bg);
   border: 1px solid var(--accent);
   border-radius: 10px;
-  padding: 9px 12px;
-  outline: none;
+  padding: 8px 12px;
+}
+#ud-edit-host .wr-editor {
+  font-size: 16px;   /* ≥16px stops iOS focus-zoom */
+  line-height: 1.55;
 }
 #ud-edit-close {
   appearance: none;
@@ -295,10 +302,12 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* The zoom pad rides above the scope editor when it is showing. */
+/* The zoom pad rides above the collapsed scope editor, and gets out of the
+   way entirely while the pane is expanded (its height is content-driven). */
 #wr-preview:has(#ud-edit:not([hidden])) #ud-zoomctl {
   bottom: calc(72px + env(safe-area-inset-bottom));
 }
+#wr-preview:has(#ud-edit-body:not([hidden])) #ud-zoomctl { display: none; }
 
 /* ── Zoom controls (bottom-right of the preview) ──────────────────────────── */
 

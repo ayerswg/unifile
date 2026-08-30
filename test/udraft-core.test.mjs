@@ -385,3 +385,26 @@ test('scope: object annotations show width + position; extents include swing', a
   assert.match(svg, /ud-anno/);
   assert.doesNotMatch(renderExportSvg(scene, 0), /ud-anno/);
 });
+
+test('scope: isolation renders one room + neighbour arrows, dims outside', () => {
+  const scene = layoutDocument(parseDocument(HOUSE));
+  const floor = scene.floors[0];
+  const { svg } = renderFloorSvg(floor, scene.meta, {
+    interactive: true, isolate: 'living', scope: { roomId: 'living' },
+  });
+  // Only the living room's furniture: the kitchen sink must NOT render.
+  assert.doesNotMatch(svg, /ud-fixture/);
+  // No room labels, no floor dims in isolation.
+  assert.doesNotMatch(svg, /ud-roomlabel/);
+  assert.doesNotMatch(svg, /class="ud-ent ud-dim"/);
+  // Neighbour arrows to kitchen + hall, tappable as rooms.
+  assert.match(svg, /ud-nbr[\s\S]*KITCHEN/);
+  assert.match(svg, /ud-nbr[\s\S]*HALL/);
+  assert.match(svg, /data-ent="room" data-room-id="kitchen"/);
+  // Openings on the room's walls still draw (door to kitchen, front door, arch).
+  assert.equal((svg.match(/ud-ent ud-door/g) || []).length, 2);
+  // Exterior dims (scope annotations) are outside the north wall: the h-dim's
+  // y must be less than the interior top (0).
+  const dimLine = /<g class="ud-anno">.*?y1="(-[\d.]+)"/s.exec(svg);
+  assert.ok(dimLine && parseFloat(dimLine[1]) < 0, 'room dims drawn outside');
+});

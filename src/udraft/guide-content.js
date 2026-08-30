@@ -13,21 +13,23 @@ Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
 
 The drawing is navigated hierarchically — floor › room › object:
 
-- **Tap a room** (anywhere in it) to step into it: the view zooms to the
-  room, its name moves up into the breadcrumb bar, and its interior
-  dimensions draw onto the plan like a real drawing.
+- **Tap a room** to step into it: the room is drawn **in isolation** — just
+  its walls, openings and fixtures, its dimensions written outside the
+  walls, and labelled **arrows to the adjoining rooms** (tap an arrow to
+  walk into that room).
 - **Inside a room, tap an object** — a door, a sink, a stair — to select
-  it: the view zooms to it, its own measurements (width, position, depth)
-  draw next to it, and the bar shows its specifics.
-- **The breadcrumbs** (Main Floor › KITCHEN › SINK) are buttons — tap any
-  level to go back up. Tapping empty space or ‹ steps up one level.
-- **The bar at the bottom** shows the DSL statement for whatever you're
-  looking at — tap it to expand and **edit it live**: every keystroke
-  redraws the plan.
+  it: the view zooms to it and its own measurements (width, position,
+  depth) draw beside it.
+- **The breadcrumbs** across the top (Main Floor › KITCHEN › SINK) are
+  buttons — tap any level to go back up. Tapping empty space or ‹ steps up
+  one level.
+- **Long-press a room or object to edit it**: a syntax-highlighted pane
+  opens at the bottom with the DSL statements for that scope — the whole
+  room's lines, or the one object's — and **every keystroke redraws the
+  plan live**. The collapsed chip at the bottom reopens it; Esc or ⌄
+  closes it.
 - **Scroll or pinch to zoom, drag to pan** anytime (−/⛶/+ do the same;
-  ⛶ fits the floor).
-- **Long-press anything** (or tap **‹/›** in the bar) to jump to that line
-  in the full editor.
+  ⛶ re-fits the current scope).
 
 ## Rooms — the spine
 

@@ -291,23 +291,30 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
   multiple `floor` blocks exist, issue strip (tap → source line). Plan
   interaction is STRICTLY HIERARCHICAL (`_bindPlanNav`, one setter
   `_setScope(roomId, from)`): at floor level every tap resolves to a ROOM
-  (tapping a door first enters the room it belongs to — `_roomOfRec`); inside
-  a room, tapping its objects selects them. Each drill-down re-renders the
-  plan with the scope's LIVE DIMENSION ANNOTATIONS drawn on the blueprint
-  (`annotationMarkup` in svg.js — room = interior clear dims, object =
-  width/position/depth; class `ud-anno`, accent-themed, never in exports) and
-  animates the view to `scopeExtent` (bbox + swing/offset + margin). The
-  context bar `#ud-ctxbar` is a BREADCRUMB (Floor › ROOM › OBJECT — upper
-  levels are buttons back up) + inspector line (`_entInfo`); the bar's ‹/›
-  and a LONG-PRESS (550 ms, <8 px) jump to the DSL line. The bottom
-  `#ud-edit` bar is the SCOPE EDITOR: collapsed it chips the scoped
-  statement, expanded it live-edits that line (`_replaceLineNoCaret` —
-  selection-free like uPub's indentLines, so focus stays in the input; undo
-  coalesces as typing; the line-start offset anchor survives same-line
-  edits, and scope state is NOT dropped while the input is focused, so a
-  half-typed statement doesn't collapse the view). State survives live
-  re-renders via `_entIndex` (records keyed by statement offset) and drops
-  when the statement no longer resolves.
+  (tapping a door first enters the room it belongs to — `_roomOfRec`).
+  Entering a room renders it in ISOLATION (`opts.isolate` in
+  `renderFloorSvg`): only that room's walls (wallRects carry `rooms:` owner
+  ids for the filter), openings and fixtures — no labels, no floor dims —
+  its interior dims drawn OUTSIDE the walls (`annotationMarkup`), plus
+  labelled NEIGHBOUR ARROWS (`neighborMarkup`, placed at the connecting
+  opening when one exists) that are themselves room tap targets, so rooms
+  chain. Inside a room, tapping its objects selects them: zoom to
+  `scopeExtent` + the object's width/position/depth annotated beside it
+  (`ud-anno`, accent, never in exports). The top bar `#ud-ctxbar` is
+  BREADCRUMBS ONLY (Floor › ROOM › OBJECT — upper levels are buttons back
+  up); dimensions are drawn, not written in the bar. **LONG-PRESS (550 ms,
+  <8 px) = EDIT**: it focuses the pressed thing and opens the SCOPE EDITOR
+  `#ud-edit` — a SECOND UPubEditor instance (multi-line, uDraft syntax
+  highlighting) holding the scope's statements (object → its line; room →
+  its `room` line + every statement referencing the room). Each keystroke
+  reconciles pane rows back into the doc by prefix/suffix diff
+  (`_paneChanged` — rows are anchored to doc line indexes, so scattered
+  source lines edit in place; Enter inserts a doc line after its pane
+  predecessor, joins delete); undo coalesces as typing, and scope state is
+  NOT dropped while the pane has focus, so a half-typed statement doesn't
+  collapse the view. There is deliberately no jump-to-full-DSL from the
+  plan (the issue strip still jumps). State survives live re-renders via
+  `_entIndex` (records keyed by statement offset).
   **Every entity is a real tap target** — thin strokes are hopeless taps, so
   interactive renders add invisible `ud-hit` rects per entity (transparent
   fill still hit-tests); exports carry none of it. **LAYERING IS LOAD-BEARING**:
