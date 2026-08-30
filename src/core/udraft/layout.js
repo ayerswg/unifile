@@ -103,6 +103,21 @@ function rectsOverlap(a, b) {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
+/**
+ * Is `rect` fully inside the room's interior?  Exact for L-shapes: the room's
+ * decomposed band rects are disjoint, so summed intersection area equalling
+ * the rect's own area means full coverage (all integer µm — no epsilons).
+ */
+function rectInsideRoom(rect, room) {
+  let covered = 0;
+  for (const r of room.rects) {
+    const w = Math.min(rect.x + rect.w, r.x + r.w) - Math.max(rect.x, r.x);
+    const h = Math.min(rect.y + rect.h, r.y + r.h) - Math.max(rect.y, r.y);
+    if (w > 0 && h > 0) covered += w * h;
+  }
+  return covered >= rect.w * rect.h;
+}
+
 /** Do two axis-aligned closed polylines (as rect lists) overlap with area? */
 function roomsOverlap(a, b) {
   if (!rectsOverlap(a.bbox, b.bbox)) return false;
@@ -211,9 +226,10 @@ function polyEdges(poly) {
 export function layoutDocument(parsed) {
   const { meta } = parsed;
   const issues = [...parsed.issues];
-  const floors = parsed.floors.map(f => layoutFloor(f, meta, issues));
+  const defines = parsed.defines ?? new Map();
+  const floors = parsed.floors.map(f => layoutFloor(f, meta, issues, defines));
   crossFloorStairsCheck(floors, issues);
-  return { meta, floors, issues };
+  return { meta, floors, issues, defines };
 }
 
 /**
@@ -245,7 +261,7 @@ function err(issues, stmt, message, severity = 'error') {
   issues.push({ line: stmt.line, col: 0, from: stmt.from, to: stmt.to, severity, message });
 }
 
-function layoutFloor(floorStmts, meta, issues) {
+function layoutFloor(floorStmts, meta, issues, defines = new Map()) {
   const tInt = meta.wallInt;
   const tExt = meta.wallExt;
   const rooms = [];
@@ -453,10 +469,32 @@ function layoutFloor(floorStmts, meta, issues) {
         break;
       }
       case 'fixture': {
-        const spec = FIXTURES[stmt.type];
+        const def = FIXTURES[stmt.type] ? null : defines.get(stmt.type);
+        const spec = FIXTURES[stmt.type] ?? def;
         const w = stmt.w ?? spec.w;
-        const d = spec.d;
+        const d = stmt.d ?? spec.d;
         const bb = room.bbox;
+        const defRec = def ? { label: def.label ?? defaultLabel(stmt.type) } : null;
+        if (stmt.place) {
+          // Free-standing: the object's front faces `facing` (default south);
+          // its back is the opposite side, which is also the renderer's
+          // rotation key (a wall fixture's back sits on its wall).
+          const facing = stmt.facing ?? 's';
+          const back = opposite[facing];
+          const turned = facing === 'e' || facing === 'w';
+          const rw = turned ? d : w;
+          const rh = turned ? w : d;
+          let x, y;
+          if (stmt.place === 'centered') { x = bb.x + (bb.w - rw) / 2; y = bb.y + (bb.h - rh) / 2; }
+          else { x = bb.x + stmt.place.x; y = bb.y + stmt.place.y; }
+          const rect = { x: Math.round(x), y: Math.round(y), w: Math.round(rw), h: Math.round(rh) };
+          if (!rectInsideRoom(rect, room)) {
+            err(issues, stmt, `${stmt.type} does not fit inside "${room.id}" there`); break;
+          }
+          fixtures.push({ type: stmt.type, rect, side: back, facing, free: true, def: defRec,
+            roomId: room.id, line: stmt.line, from: stmt.from, to: stmt.to });
+          break;
+        }
         const horiz = stmt.side === 'n' || stmt.side === 's';
         const runLo = horiz ? bb.x : bb.y;
         const runHi = horiz ? bb.x + bb.w : bb.y + bb.h;
@@ -471,7 +509,7 @@ function layoutFloor(floorStmts, meta, issues) {
         else if (stmt.side === 'w') rect = { x: bb.x, y: near, w: d, h: w };
         else rect = { x: bb.x + bb.w - d, y: near, w: d, h: w };
         rect = { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
-        fixtures.push({ type: stmt.type, rect, side: stmt.side, facing: stmt.facing,
+        fixtures.push({ type: stmt.type, rect, side: stmt.side, facing: stmt.facing, def: defRec,
           roomId: room.id, line: stmt.line, from: stmt.from, to: stmt.to });
         break;
       }

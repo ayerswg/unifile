@@ -186,7 +186,7 @@ function arrowHead(x, y, dir) {
 
 // ── Fixtures — drawn in a local w×d box with the wall along y=0, rotated in ──
 
-function fixtureLocal(type, w, d) {
+function fixtureLocal(type, w, d, def) {
   const r = (x, y, ww, hh, extra = '') =>
     `<rect class="ud-sym" fill="none" x="${mm(x)}" y="${mm(y)}" width="${mm(ww)}" height="${mm(hh)}"${extra}/>`;
   const c = (x, y, rad) => `<circle class="ud-sym" fill="none" cx="${mm(x)}" cy="${mm(y)}" r="${mm(rad)}"/>`;
@@ -218,12 +218,18 @@ function fixtureLocal(type, w, d) {
       return c(w / 2, d / 2, Math.min(w, d) / 2) + lbl('WH');
     case 'counter':
       return r(0, 0, w, d);
+    case 'island':
+      // Countertop outline + an inset line suggesting the cabinet under the
+      // overhang — reads as an island wherever it stands.
+      return r(0, 0, w, d) + r(1.5 * IN, 1.5 * IN, w - 3 * IN, d - 3 * IN);
     case 'bed':
       return r(0, 0, w, d) + line(0, 10 * IN, w, 10 * IN, 'ud-sym');
     case 'table':
       return r(0, 0, w, d, ` rx="${mm(2 * IN)}"`);
     default:
-      return r(0, 0, w, d);
+      // Custom objects (`define`): their outline with the label centered.
+      return r(0, 0, w, d, ` rx="${mm(1.5 * IN)}"`)
+        + (def?.label ? lbl(esc(def.label)) : '');
   }
 }
 
@@ -238,7 +244,7 @@ function fixtureMarkup(f, interactive) {
   else if (f.side === 'w') tf = `translate(${mm(x)} ${mm(y + rh)}) rotate(-90)`;
   else tf = `translate(${mm(x + rw)} ${mm(y)}) rotate(90)`;
   return `<g class="ud-ent ud-fixture" data-ent="fixture" transform="${tf}"${docAttrs(f, interactive)}>`
-    + `${fixtureLocal(f.type, w, d)}${hitRect(0, 0, w, d, interactive)}</g>`;
+    + `${fixtureLocal(f.type, w, d, f.def)}${hitRect(0, 0, w, d, interactive)}</g>`;
 }
 
 function dimMarkup(dim, meta, interactive) {
@@ -290,12 +296,32 @@ function roomHitMarkup(room, interactive) {
  * (data-ent="room"); its doc offsets point at the `label` statement when one
  * renamed the room, else at the `room` line (what long-press jumps to).
  */
-function roomLabelMarkup(room, meta, interactive) {
+function roomLabelMarkup(room, meta, interactive, obstacles = []) {
   // Label at the centre of the room's largest decomposed rect (good for L-shapes).
   let best = room.rects[0] || room.bbox;
   for (const r of room.rects) if (r.w * r.h > best.w * best.h) best = r;
   const cx = best.x + best.w / 2;
-  const cy = best.y + best.h / 2;
+  let cy = best.y + best.h / 2;
+  // Dodge the room's fixtures: a `centered` island or piano sits exactly where
+  // the label goes.  If the text block would land on one, re-centre it in the
+  // larger clear band above/below the in-the-way rects — but only when a band
+  // actually fits the block (a stair-filled hall keeps today's centred label).
+  {
+    const noteH = room.note ? S.noteText * MM * 1.35 : 0;
+    const blockH = S.labelText * MM + S.areaText * MM * 1.35 + noteH + 120 * MM;
+    const halfW = Math.max(room.label.length * S.labelText * 0.62, 8 * S.labelText) * MM / 2;
+    const inWay = obstacles.filter(o => o.x < cx + halfW && o.x + o.w > cx - halfW);
+    if (inWay.some(o => o.y < cy + blockH - S.labelText * MM && o.y + o.h > cy - S.labelText * MM)) {
+      const top = Math.min(...inWay.map(o => o.y));
+      const bot = Math.max(...inWay.map(o => o.y + o.h));
+      const above = top - best.y;
+      const below = best.y + best.h - bot;
+      const cand = [];
+      if (below >= blockH) cand.push({ h: below, cy: bot + (below - blockH) / 2 + S.labelText * MM });
+      if (above >= blockH) cand.push({ h: above, cy: best.y + (above - blockH) / 2 + S.labelText * MM });
+      if (cand.length) cy = cand.sort((a, b) => b.h - a.h)[0].cy;
+    }
+  }
   const lines = [
     text(cx, cy, room.label.toUpperCase(), 'ud-txt ud-label', ' text-anchor="middle"'),
     text(cx, cy + S.areaText * MM * 1.35, formatArea(room.areaUm2, meta.units), 'ud-txt ud-area', ' text-anchor="middle"'),
@@ -562,7 +588,10 @@ export function renderFloorSvg(floor, meta, opts = {}) {
   for (const f of floor.fixtures) { if (inIso(f)) parts.push(fixtureMarkup(f, interactive)); }
   if (!iso) {
     for (const d of floor.dims) parts.push(dimMarkup(d, meta, interactive));
-    for (const room of floor.rooms) parts.push(roomLabelMarkup(room, meta, interactive));
+    for (const room of floor.rooms) {
+      parts.push(roomLabelMarkup(room, meta, interactive,
+        floor.fixtures.filter(f => f.roomId === room.id).map(f => f.rect)));
+    }
   } else {
     parts.push(neighborMarkup(floor, iso.id, interactive));
   }
