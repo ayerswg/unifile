@@ -148,12 +148,20 @@ stairs  hall  3' x 9'  up, along east      # tread lines + arrow + "UP"
 fixture kitchen sink   30" on north at 4'
 fixture kitchen range  30" on north at 8'
 fixture kitchen fridge 36" on east
+fixture kitchen island 6' x 3'  centered   # free-standing — no wall
 fixture bath   toilet      on south at 1'
 fixture bath   tub     60" on north
 
-#   fixture <room> <type> [<width>] on <side> [at <len>] [facing <dir>]
+define  piano  5' x 6'6" "Baby Grand"      # custom object: define once (document-
+fixture living piano at 9', 6" facing west # global), place on any floor
+
+#   fixture <room> <type> [<w> [x <d>]]
+#           ( on <side> [at <len>] | at <x>, <y> | centered ) [facing <dir>]
+#   free placement: at x, y from the room's NW interior corner; facing turns
+#   the object (front faces that side, south by default)
+#   define  <id> <w> x <d> ["Label"]       # reusable custom object type
 #   v1 symbol library: sink, range, fridge, dishwasher, toilet, tub, shower,
-#   washer, dryer, water-heater, counter, closet-rod
+#   washer, dryer, water-heater, counter, island, bed, table
 
 # --- annotation ----------------------------------------------------------
 label living "Living Room"                 # default label = id, title-cased

@@ -95,13 +95,53 @@ floor 2 "Second Floor"
 
 - **stairs**: width × run, \`up\` or \`down\`, flush \`along\` a side.
 - **fixture** types: sink, range, fridge, dishwasher, toilet, tub, shower,
-  washer, dryer, water-heater, counter, bed, table. Width is optional
-  (each type has a standard size); \`at 4'\` positions along the wall.
+  washer, dryer, water-heater, counter, island, bed, table. Size is optional
+  (each type has a standard footprint) — override it with \`30"\` (width) or
+  \`6' x 3'\` (width × depth); \`at 4'\` positions along the wall.
 - **label** renames a room on the plan (the default is its id, title-cased);
   **note** adds a small parenthetical under the label.
 - **dim** adds an explicit dimension line on one side of a room. Overall
   building dimensions are automatic (\`dims: off\` in front matter disables).
 - \`#\` starts a comment (at a line start or after a space).
+
+## Islands & free-standing objects
+
+A fixture doesn't have to sit on a wall — drop \`on <side>\` and place it
+freely inside the room. That's how a kitchen island stands:
+
+\`\`\`
+fixture kitchen island 6' x 3'  centered
+fixture kitchen island 6' x 3'  at 2'6", 4'6"
+fixture living  piano  at 9', 6" facing west
+\`\`\`
+
+- \`centered\` puts it in the middle of the room; \`at x, y\` measures from
+  the room's **north-west interior corner** (x east, y south).
+- \`facing\` turns the object so its front faces that side (south when
+  omitted). Wherever it lands, it must fit inside the room — an object
+  poking into a wall is an error.
+
+## Custom objects — define once, place anywhere
+
+\`define\` teaches the document a new object type — its footprint and a
+label — and \`fixture\` then places it like any built-in, **on any floor**,
+without repeating the dimensions:
+
+\`\`\`
+define piano 5' x 6'6" "Baby Grand"
+
+floor 1 "Main Floor"
+…
+fixture living piano at 9', 6" facing west
+
+floor 0 "Basement"
+…
+fixture rec piano centered
+\`\`\`
+
+Define an object above its first use — the top of the document, before the
+first \`floor\`, is the natural spot. Custom objects draw as their outline
+with the label centered; they work \`on\` walls and free-standing alike.
 
 ## Floors & stairs
 

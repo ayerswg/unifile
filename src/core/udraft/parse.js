@@ -93,7 +93,7 @@ export const SIDE_NAMES = { n: 'north', s: 'south', e: 'east', w: 'west' };
 
 export const STATEMENT_KEYWORDS = [
   'floor', 'room', 'door', 'window', 'opening', 'stairs', 'fixture',
-  'label', 'note', 'dim',
+  'define', 'label', 'note', 'dim',
 ];
 
 /** v1 fixture symbol library: type → default {w, d} (µm; plan-view width × depth). */
@@ -109,6 +109,7 @@ export const FIXTURES = {
   dryer:         { w: 27 * UM_PER_INCH, d: 27 * UM_PER_INCH },
   'water-heater': { w: 24 * UM_PER_INCH, d: 24 * UM_PER_INCH },
   counter:       { w: 48 * UM_PER_INCH, d: 24 * UM_PER_INCH },
+  island:        { w: 78 * UM_PER_INCH, d: 42 * UM_PER_INCH },
   bed:           { w: 60 * UM_PER_INCH, d: 80 * UM_PER_INCH },
   table:         { w: 60 * UM_PER_INCH, d: 36 * UM_PER_INCH },
 };
@@ -315,27 +316,67 @@ const STMT_PARSERS = {
     return { kind: 'stairs', room, w, h, dir, along };
   },
 
-  fixture(cur, units) {
+  fixture(cur, units, ctx) {
     const room = cur.ident('a room name');
     const typeTok = cur.peek();
     const type = cur.ident('a fixture type');
-    if (!FIXTURES[type]) {
-      throw new ParseError(`unknown fixture "${type}" — one of: ${Object.keys(FIXTURES).join(', ')}`,
+    if (!FIXTURES[type] && !ctx?.defines?.has(type)) {
+      const known = [...Object.keys(FIXTURES), ...(ctx?.defines?.keys() ?? [])];
+      throw new ParseError(`unknown fixture "${type}" — one of: ${known.join(', ')}`
+        + ` (or define it above this line: define ${type} 5' x 4')`,
         typeTok ? typeTok.col : 0);
     }
-    let w = null;
+    let w = null, d = null;
     const t = cur.peek();
-    if (t && (t.t === 'len' || t.t === 'num')) w = cur.length(units, 'a width');
-    cur.expectWord('"on <side>"', 'on');
-    const side = cur.side('a side after "on"');
-    let at = null, facing = null;
-    while (!cur.done()) {
-      if (cur.word('at')) { at = cur.length(units, 'a distance after "at"'); continue; }
-      if (cur.word('facing')) { facing = cur.side('a side after "facing"'); continue; }
-      break;
+    if (t && (t.t === 'len' || t.t === 'num')) {
+      w = cur.length(units, 'a width');
+      if (cur.word('x')) d = cur.length(units, 'a depth after "x"');
+      if (w <= 0 || (d != null && d <= 0)) cur.fail('fixture dimensions must be positive');
     }
+    if (cur.word('on')) {
+      const side = cur.side('a side after "on"');
+      let at = null, facing = null;
+      while (!cur.done()) {
+        if (cur.word('at')) { at = cur.length(units, 'a distance after "at"'); continue; }
+        if (cur.word('facing')) { facing = cur.side('a side after "facing"'); continue; }
+        break;
+      }
+      cur.endOrFail();
+      return { kind: 'fixture', room, type, w, d, side, at, facing };
+    }
+    // Free-standing (an island, a piano …): `centered` in the room, or
+    // `at <x>, <y>` from the room's north-west interior corner.  `facing`
+    // turns the object — its front faces that side (south when omitted).
+    let place = null;
+    if (cur.word('centered', 'center', 'centred')) place = 'centered';
+    else if (cur.word('at')) {
+      const x = cur.length(units, 'an x offset after "at"');
+      const y = cur.length(units, 'a y offset');
+      place = { x, y };
+    } else {
+      cur.fail('expected "on <side>", "at <x>, <y>" or "centered"');
+    }
+    let facing = null;
+    if (cur.word('facing')) facing = cur.side('a side after "facing"');
     cur.endOrFail();
-    return { kind: 'fixture', room, type, w, side, at, facing };
+    return { kind: 'fixture', room, type, w, d, place, facing };
+  },
+
+  define(cur, units) {
+    const idTok = cur.peek();
+    const id = cur.ident('a name for the object');
+    if (FIXTURES[id]) {
+      throw new ParseError(`"${id}" is a built-in fixture type — pick another name`,
+        idTok ? idTok.col : 0);
+    }
+    const w = cur.length(units, `a width (e.g. 5')`);
+    cur.expectWord('"x" between width and depth', 'x');
+    const d = cur.length(units, 'a depth after "x"');
+    if (w <= 0 || d <= 0) cur.fail('object dimensions must be positive');
+    let label = null;
+    if (cur.peek() && cur.peek().t === 'str') label = cur.string();
+    cur.endOrFail();
+    return { kind: 'define', id, w, d, label };
   },
 
   label(cur) {
@@ -432,6 +473,7 @@ export function parseScale(str) {
  *   floors: Array<{num:number|null, title:string|null, line:number|null, statements:object[]}>,
  *   issues: Array<{line:number, col:number, from:number, to:number, message:string, severity:string}>,
  *   roomIds: string[],
+ *   defines: Map<string, {w:number, d:number, label:string|null, line:number, from:number, to:number}>,
  * }}
  * Every statement carries { line, from, to } — 0-based line index and absolute
  * char offsets of its source line (the click-to-source map).
@@ -443,6 +485,10 @@ export function parseDocument(text) {
   const issues = [];
   const floors = [];
   const roomIds = [];
+  // Custom object types (`define`) are DOCUMENT-global — defined once, placed
+  // on any floor — but still define-before-use (the map fills in line order,
+  // matching the room forward-reference rule).
+  const defines = new Map();
   let floor = null;
 
   const openFloor = (num, title, line) => {
@@ -475,10 +521,21 @@ export function parseDocument(text) {
     }
     const cur = new Cur(tokens.slice(1), line);
     try {
-      const stmt = parser(cur, meta.units);
+      const stmt = parser(cur, meta.units, { defines });
       stmt.line = li; stmt.from = from; stmt.to = to;
       if (stmt.kind === 'floor') {
         openFloor(stmt.num, stmt.title, li);
+        continue;
+      }
+      if (stmt.kind === 'define') {
+        // Document-level, like `floor` — never opens an implicit floor.
+        if (defines.has(stmt.id)) {
+          issues.push({ line: li, col: head.col, from, to, severity: 'error',
+            message: `object "${stmt.id}" is already defined` });
+          continue;
+        }
+        defines.set(stmt.id, { w: stmt.w, d: stmt.d, label: stmt.label,
+          line: li, from, to });
         continue;
       }
       if (!floor) openFloor(null, null, null);             // implicit single floor
@@ -502,5 +559,5 @@ export function parseDocument(text) {
   }
 
   if (!floors.length) openFloor(null, null, null);
-  return { meta, floors, issues, roomIds };
+  return { meta, floors, issues, roomIds, defines };
 }

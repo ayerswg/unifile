@@ -54,6 +54,9 @@ units: imperial
 # Three floors share one origin, so the same relative placements stack the
 # stair shaft (hall → landing → stairwell) exactly on top of itself.
 
+# Custom objects: define once, place with "fixture" on any floor below.
+define piano 5' x 6'6" "Baby Grand"
+
 floor 1 "Main Floor"
 
 room living    16' x 13'
@@ -80,6 +83,8 @@ window bath east       2'    centered
 fixture kitchen sink   30" on north at 2'
 fixture kitchen range  30" on north at 6'
 fixture kitchen fridge on east at 6"
+fixture kitchen island 6' x 3'  at 2'6", 4'6"           # freestanding — x, y from the NW corner
+fixture living  piano  at 9', 6" facing west
 fixture bath  toilet   on west at 1'
 fixture bath  tub      on south
 
@@ -124,6 +129,7 @@ door    stairwell/utility 2'6" centered, swing utility north
 fixture utility washer       on south at 1'
 fixture utility dryer        on south at 4'
 fixture utility water-heater on east
+fixture rec     piano        centered               # same object — defined once, up top
 
 label rec "Rec Room"
 note  rec "below grade"
@@ -573,7 +579,11 @@ export class UDraftApp {
     if (!floor) return [];
     if (this._selFrom != null) {
       const rec = this._entIndex?.get(this._selFrom);
-      return rec ? [rec.line] : [];
+      if (!rec) return [];
+      // A custom object's `define` travels with its placement — long-press
+      // edits both the footprint and where it stands.
+      const def = rec.kind === 'fixture' ? this.scene.defines?.get(rec.type) : null;
+      return def ? [def.line, rec.line] : [rec.line];
     }
     const room = this._ctxRoom();
     if (!room) return [];
@@ -858,6 +868,10 @@ export class UDraftApp {
       tpl: "stairs room 3' x 9' up, along west", ph: 'room' },
     { id: 'fixture', label: 'Fixture',        hint: 'sink…',     block: true, keywords: 'sink range fridge toilet tub shower appliance',
       tpl: 'fixture room sink on north', ph: 'room' },
+    { id: 'island',  label: 'Island',         hint: 'freestanding', block: true, keywords: 'kitchen counter freestanding middle centered',
+      tpl: "fixture room island 6' x 3' centered", ph: 'room' },
+    { id: 'define',  label: 'Custom object',  hint: 'define once', block: true, keywords: 'object piano furniture reusable define custom',
+      tpl: `define name 5' x 4' "Label"`, ph: 'name' },
     { id: 'label',   label: 'Label',          hint: '"…"',       block: true, keywords: 'name rename title',
       tpl: 'label room "Text"', ph: 'room' },
     { id: 'note',    label: 'Note',           hint: '(…)',       block: true, keywords: 'annotation remark',
@@ -998,7 +1012,13 @@ export class UDraftApp {
       else if (lw === 'of') items = roomItems();
       else if (lw === 'swing') items = [...roomItems(), item('in', 'inward'), item('out', 'outward')];
       else if (lw === 'align' || lw === 'from' || lw === 'on' || lw === 'along' || lw === 'facing') items = sideItems();
-      else if (kw === 'fixture' && toks.length === 2) items = Object.keys(FIXTURES).map(t => item(t, 'fixture', t + ' '));
+      else if (kw === 'fixture' && toks.length === 2) {
+        // Built-in types plus the document's own `define`d objects.
+        items = [
+          ...Object.keys(FIXTURES).map(t => item(t, 'fixture', t + ' ')),
+          ...[...(this.scene?.defines?.keys() ?? [])].map(t => item(t, 'object', t + ' ')),
+        ];
+      }
       else if (toks.length === 1 && ['door', 'window', 'opening', 'stairs', 'fixture', 'label', 'note', 'dim'].includes(kw)) {
         items = roomItems();
       }

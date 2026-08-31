@@ -261,6 +261,17 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
   Openings reference walls as `roomA/roomB` (shared) or `room side`
   (exterior). Layout is a **deterministic single pass** in declaration order —
   forward references are errors, never solved; diagnostics are line-mapped.
+  `fixture` places symbols on a wall (`on north at 2'`) or **free-standing**
+  (`centered`, or `at x, y` from the room's NW interior corner; `facing`
+  turns it, front south by default — that's how a kitchen `island` stands;
+  `w x d` overrides any type's footprint). `define <id> <w> x <d> ["Label"]`
+  declares a **document-global reusable object type** (a piano defined once
+  places on every floor) — handled at document level like `floor` (never
+  opens an implicit floor), define-before-use enforced at parse exactly like
+  room refs, and the scene carries `defines` (autocomplete + the scope
+  editor, which pulls a custom object's define line in beside its placement).
+  Room labels dodge the room's fixture rects when a clear band fits the text
+  block (a `centered` island sits exactly where the label goes).
 - **Everything geometric is integer µm** (1" = 25400) — shared-wall detection
   is exact equality of face distances (a face pair exactly `walls.interior`
   apart with overlapping intervals = ONE shared wall), so no float epsilons.

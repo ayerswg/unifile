@@ -330,6 +330,112 @@ test('floors: an up flight with nothing above it warns', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Free-standing fixtures (islands) + custom objects (define)
+// ---------------------------------------------------------------------------
+
+const OBJECTS = `define piano 5' x 6'6" "Baby Grand"
+floor 1 "Main"
+room kitchen 12' x 10'
+room living 16' x 13' east of kitchen, align north
+fixture kitchen island 6' x 3' at 2', 4'
+fixture living piano at 9', 6" facing west
+floor 0 "Basement"
+room rec 16' x 13'
+fixture rec piano centered
+`;
+
+test('parse: define is document-global and define-before-use', () => {
+  const p = parseDocument(OBJECTS);
+  assert.equal(p.issues.length, 0, JSON.stringify(p.issues));
+  const def = p.defines.get('piano');
+  assert.equal(def.w, 5 * FT);
+  assert.equal(def.d, 6 * FT + 6 * IN);
+  assert.equal(def.label, 'Baby Grand');
+  // The define is document-level: it opens no implicit floor and belongs to none.
+  assert.equal(p.floors.length, 2);
+  assert.ok(p.floors.every(f => f.statements.every(s => s.kind !== 'define')));
+
+  // Use before define errors like a room forward reference.
+  const fwd = parseDocument(`room a 10' x 10'\nfixture a piano centered\ndefine piano 5' x 6'\n`);
+  assert.ok(fwd.issues.some(i => /unknown fixture "piano".*define it above/.test(i.message)));
+  // Duplicate + built-in-name defines are errors.
+  const dup = parseDocument(`define piano 5' x 6'\ndefine piano 4' x 4'\n`);
+  assert.ok(dup.issues.some(i => /already defined/.test(i.message)));
+  const clash = parseDocument(`define sink 5' x 6'\n`);
+  assert.ok(clash.issues.some(i => /built-in fixture type/.test(i.message)));
+});
+
+test('layout: free placement — at x,y, centered, and facing rotation', () => {
+  const scene = layoutDocument(parseDocument(OBJECTS));
+  assert.equal(scene.issues.length, 0, JSON.stringify(scene.issues));
+  const [main, basement] = scene.floors;
+  const kitchen = main.rooms[0];
+  const island = main.fixtures.find(f => f.type === 'island');
+  // at 2', 4' from the kitchen's NW interior corner, default facing south.
+  assert.deepEqual(island.rect, {
+    x: kitchen.bbox.x + 2 * FT, y: kitchen.bbox.y + 4 * FT, w: 6 * FT, h: 3 * FT,
+  });
+  assert.equal(island.free, true);
+  assert.equal(island.side, 'n');                              // back opposite the facing
+  // facing west turns the piano: depth runs east–west.
+  const piano = main.fixtures.find(f => f.type === 'piano');
+  assert.equal(piano.rect.w, 6 * FT + 6 * IN);
+  assert.equal(piano.rect.h, 5 * FT);
+  assert.equal(piano.side, 'e');
+  assert.deepEqual(piano.def, { label: 'Baby Grand' });
+  // centered in the basement rec room — the same define, no re-declaration.
+  const rec = basement.rooms[0];
+  const piano2 = basement.fixtures.find(f => f.type === 'piano');
+  assert.equal(piano2.rect.x, rec.bbox.x + Math.round((rec.bbox.w - 5 * FT) / 2));
+  assert.equal(piano2.rect.y, rec.bbox.y + Math.round((rec.bbox.h - (6 * FT + 6 * IN)) / 2));
+});
+
+test('layout: a free fixture must fit inside the room (L-shape notch counts)', () => {
+  const out = layoutDocument(parseDocument(
+    `room a 10' x 8'\nfixture a island 6' x 3' at 6', 6'\n`));
+  assert.ok(out.issues.some(i => /island does not fit inside "a"/.test(i.message)));
+  // Inside the bbox but over an L-shape's notch is still outside the room.
+  const notch = layoutDocument(parseDocument(
+    `room l outline e 12' s 8' w 4' s 4' w 8' close\nfixture l island 6' x 3' at 5', 9'\n`));
+  assert.ok(notch.issues.some(i => /island does not fit inside "l"/.test(i.message)));
+  const ok = layoutDocument(parseDocument(
+    `room l outline e 12' s 8' w 4' s 4' w 8' close\nfixture l island 6' x 3' at 1', 2'\n`));
+  assert.equal(ok.issues.length, 0, JSON.stringify(ok.issues));
+});
+
+test('layout: wall fixtures take a w x d size override', () => {
+  const scene = layoutDocument(parseDocument(
+    `room k 12' x 10'\nfixture k counter 8' x 30" on south\n`));
+  assert.equal(scene.issues.length, 0, JSON.stringify(scene.issues));
+  const c = scene.floors[0].fixtures[0];
+  assert.equal(c.rect.w, 8 * FT);
+  assert.equal(c.rect.h, 30 * IN);
+});
+
+test('svg: a room label dodges a centered free-standing object', () => {
+  const scene = layoutDocument(parseDocument(OBJECTS));
+  const basement = scene.floors[1];
+  const piano = basement.fixtures[0];
+  const { svg } = renderFloorSvg(basement, scene.meta, {});
+  const m = /<text[^>]*y="([\d.]+)"[^>]*>REC<\/text>/.exec(svg);
+  assert.ok(m, 'room label rendered');
+  // The label re-centres in the clear band below the piano, never on top of it.
+  assert.ok(parseFloat(m[1]) > (piano.rect.y + piano.rect.h) / 1000,
+    `label y ${m[1]} should clear the piano bottom ${(piano.rect.y + piano.rect.h) / 1000}`);
+});
+
+test('svg: island and custom objects render (label centered, rotates with the group)', () => {
+  const scene = layoutDocument(parseDocument(OBJECTS));
+  const { svg } = renderFloorSvg(scene.floors[0], scene.meta, { interactive: true });
+  assert.match(svg, /Baby Grand/);
+  const fixtures = (svg.match(/ud-ent ud-fixture/g) || []).length;
+  assert.equal(fixtures, 2);                                   // island + piano
+  // The piano's fixture line is its click target.
+  const m = new RegExp(`data-doc-from="(\\d+)"[^>]*>[^<]*<rect[^>]*rx=`).exec(svg);
+  assert.ok(m, 'custom object draws a rounded outline');
+});
+
+// ---------------------------------------------------------------------------
 // Click targets: every entity gets a hit area; labels jump to their statement
 // ---------------------------------------------------------------------------
 
