@@ -10,6 +10,9 @@ blueprint. You write statements — one per line — and the plan draws itself:
 walls, door swings, window symbols, dimension strings, room labels with areas.
 
 Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
+**Example plan** in the ⋯ menu loads a complete three-floor cottage —
+stacked stairwell, kitchen island, a \`define\`d piano placed on two
+floors — to explore and pull apart.
 
 The drawing is navigated hierarchically — floor › room › object:
 

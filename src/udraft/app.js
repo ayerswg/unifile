@@ -1159,7 +1159,7 @@ export class UDraftApp {
     const floor = floors[this.activeFloor];
     const plan = document.getElementById('ud-plan');
     if (!floor || !floor.rooms.length) {
-      plan.innerHTML = '<p class="ud-empty">Declare a room to start drawing — try <code>room living 16\' x 13\'</code>, or type <code>/</code>.</p>';
+      plan.innerHTML = '<p class="ud-empty">Declare a room to start drawing — try <code>room living 16\' x 13\'</code>, or type <code>/</code>. Or load the <b>Example plan</b> from the ⋯ menu.</p>';
       this._ctxRoomId = null;
       this._selFrom = null;
       this._entIndex = new Map();
@@ -1248,6 +1248,7 @@ export class UDraftApp {
         <button data-act="import">Import data file…</button>
         <button data-act="new">New document</button>
         <hr>
+        <button data-act="example">Example plan</button>
         <button data-act="guide">Guide</button>
         <button data-act="settings">Settings</button>
         <button data-act="about">About</button>
@@ -1262,6 +1263,7 @@ export class UDraftApp {
         export: () => this._openExport(),
         import: () => this._importData(),
         new: () => this._newDocument(),
+        example: () => this._loadExample(),
         guide: () => this._openGuide(),
         settings: () => this._openSettings(),
         about: () => this._openAbout(),
@@ -1464,6 +1466,30 @@ export class UDraftApp {
     document.title = this.title;
     this.setContent('');
     this._persistNow();
+  }
+
+  /**
+   * Load the Lakeside Cottage example (the fresh-document seed) into the
+   * editor and open the blueprint — the tour of everything the DSL does:
+   * three floors, a stacked stair shaft, an island, a `define`d piano placed
+   * on two floors.  Restore-style semantics: only the working text is
+   * replaced (history stays; commit first to keep the current text).
+   */
+  _loadExample() {
+    if (this.content.trim() && this.content !== SEED) {
+      if (!confirm('Load the example plan (Lakeside Cottage) into the editor?'
+        + ' Your current text stays in history only if committed.')) return;
+    }
+    this.title = 'Lakeside Cottage';
+    document.getElementById('wr-title').value = this.title;
+    document.title = this.title;
+    this.activeFloor = 0;
+    this._view = null;
+    this._ctxRoomId = null;
+    this._selFrom = null;
+    this.setContent(SEED);
+    this.togglePreview(true);
+    this._toast('Example loaded — the eye toggles back to the source');
   }
 
   // ── Guide / Settings / About ─────────────────────────────────────────────
