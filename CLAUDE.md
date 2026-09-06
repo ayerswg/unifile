@@ -270,8 +270,18 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
   opens an implicit floor), define-before-use enforced at parse exactly like
   room refs, and the scene carries `defines` (autocomplete + the scope
   editor, which pulls a custom object's define line in beside its placement).
-  Room labels dodge the room's fixture rects when a clear band fits the text
-  block (a `centered` island sits exactly where the label goes).
+  **Custom shapes** on `define` (2026-09): `shape <name>` borrows any built-in
+  symbol (`grand-piano`, `upright-piano`, `sofa`, `chair`, `tub`, … — the
+  `SHAPE_NAMES` list, plus `round`/`box`); `outline <walk> close` replaces
+  `w x d` with the room walk grammar (footprint = the walk's bbox); `path M/L/H/V/C/Q/Z …`
+  is the SVG-style escape hatch in the object's own lengths. All three end
+  up as a `def.path` command list (or `def.shape` name) NORMALIZED to the
+  unit box, so a `fixture` size override scales the drawing — the furniture
+  built-ins are `UNIT_SHAPES` in svg.js drawn the same way (`scalePath`),
+  which is what lets `shape` reuse them. Fixture label text counter-rotates
+  by the group angle so it reads upright (a south-wall REF, a west-facing
+  piano). Room labels dodge the room's fixture rects when a clear band fits
+  the text block (a `centered` island sits exactly where the label goes).
 - **Everything geometric is integer µm** (1" = 25400) — shared-wall detection
   is exact equality of face distances (a face pair exactly `walls.interior`
   apart with overlapping intervals = ONE shared wall), so no float epsilons.
@@ -357,7 +367,12 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
 - **`styles/udraft.css` `@import`s `upub.css`** (esbuild bundles it): the
   wr-* shell rules ARE the shared shell — uPub shell changes intentionally
   flow into uDraft. Theme attribute stays `data-wr-theme` for that reason
-  (prefs key is `udTheme`).
+  (prefs key is `udTheme`). **Desktop editor (≥700px, uDraft only)**: the
+  70ch prose measure is lifted (`#wr-sheet { max-width:none }`) and a line
+  number gutter appears — CSS counters in `.wr-line::before` (NOT DOM text,
+  so the editor's textContent invariant, copy/paste and caret placement are
+  untouched), scoped to `#wr-scroll` so the scope editor's scattered rows
+  stay unnumbered. Phones keep uPub's plain surface.
 
 ## Mobile / iOS (hard-won — read before touching layout)
 

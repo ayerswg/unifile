@@ -382,7 +382,7 @@ test('layout: free placement — at x,y, centered, and facing rotation', () => {
   assert.equal(piano.rect.w, 6 * FT + 6 * IN);
   assert.equal(piano.rect.h, 5 * FT);
   assert.equal(piano.side, 'e');
-  assert.deepEqual(piano.def, { label: 'Baby Grand' });
+  assert.deepEqual(piano.def, { label: 'Baby Grand', shape: null, path: null });
   // centered in the basement rec room — the same define, no re-declaration.
   const rec = basement.rooms[0];
   const piano2 = basement.fixtures.find(f => f.type === 'piano');
@@ -424,7 +424,7 @@ test('svg: a room label dodges a centered free-standing object', () => {
     `label y ${m[1]} should clear the piano bottom ${(piano.rect.y + piano.rect.h) / 1000}`);
 });
 
-test('svg: island and custom objects render (label centered, rotates with the group)', () => {
+test('svg: island and custom objects render (label centered, stays upright)', () => {
   const scene = layoutDocument(parseDocument(OBJECTS));
   const { svg } = renderFloorSvg(scene.floors[0], scene.meta, { interactive: true });
   assert.match(svg, /Baby Grand/);
@@ -513,4 +513,112 @@ test('scope: isolation renders one room + neighbour arrows, dims outside', () =>
   // y must be less than the interior top (0).
   const dimLine = /<g class="ud-anno">.*?y1="(-[\d.]+)"/s.exec(svg);
   assert.ok(dimLine && parseFloat(dimLine[1]) < 0, 'room dims drawn outside');
+});
+
+// ---------------------------------------------------------------------------
+// Custom object shapes: `shape <name>`, `outline … close`, `path …`
+// ---------------------------------------------------------------------------
+
+test('parse: define shape borrows a built-in symbol; unknown names error', () => {
+  const p = parseDocument(`define piano 5' x 6'6" "Baby Grand" shape grand-piano\n`);
+  assert.equal(p.issues.length, 0, JSON.stringify(p.issues));
+  const def = p.defines.get('piano');
+  assert.equal(def.shape, 'grand-piano');
+  assert.equal(def.path, null);
+  assert.equal(def.label, 'Baby Grand');
+  // Label may follow the clause too.
+  const p2 = parseDocument(`define tbl 4' x 4' shape round "Café"\n`);
+  assert.equal(p2.defines.get('tbl').label, 'Café');
+  assert.equal(p2.defines.get('tbl').shape, 'round');
+  const bad = parseDocument(`define x 4' x 4' shape hexagon\n`);
+  assert.ok(bad.issues.some(i => /unknown shape "hexagon".*grand-piano/.test(i.message)));
+  const both = parseDocument(`define x 4' x 4' shape round path M 0 0 L 4' 4'\n`);
+  assert.ok(both.issues.some(i => /alternatives/.test(i.message)));
+});
+
+test('parse: define outline — footprint is the walk bbox, path is the walk', () => {
+  const p = parseDocument(`define desk outline E 6' S 2' W 3'6" S 2'6" W 2'6" close "Desk"\n`);
+  assert.equal(p.issues.length, 0, JSON.stringify(p.issues));
+  const def = p.defines.get('desk');
+  assert.equal(def.w, 6 * FT);
+  assert.equal(def.d, 4 * FT + 6 * IN);
+  assert.equal(def.label, 'Desk');
+  assert.equal(def.path[0].c, 'M');
+  assert.deepEqual(def.path[0].p, [0, 0]);
+  assert.equal(def.path.at(-1).c, 'Z');
+  assert.equal(def.path.length, 7);                              // 6 corners (M + 5 L) + Z
+  // The return leg lands at x = 2'6" of 6', y = 4'6" of 4'6".
+  const corner = def.path[4].p;
+  assert.ok(Math.abs(corner[0] - 2.5 / 6) < 1e-9 && Math.abs(corner[1] - 1) < 1e-9);
+  // Non-closing / degenerate walks are errors.
+  assert.ok(parseDocument(`define a outline E 6' S 2' W 3' close\n`).issues
+    .some(i => /does not close/.test(i.message)));
+  assert.ok(parseDocument(`define a outline E 6' W 6' close\n`).issues
+    .some(i => /enclose an area|four corners/.test(i.message)));
+});
+
+test('parse: define path — absolute M/L/H/V/C/Q/Z in object lengths, normalized', () => {
+  const p = parseDocument(`define soaker 5' x 2'6" path M 0 0 H 5' V 2'6" H 0 Z M 6" 4" h 4'6" v 2'2" C 4' 2'6" 1' 2'6" 6" 2'2" z\n`);
+  assert.equal(p.issues.length, 0, JSON.stringify(p.issues));
+  const cmds = p.defines.get('soaker').path;
+  assert.deepEqual(cmds.map(c => c.c), ['M', 'L', 'L', 'L', 'Z', 'M', 'L', 'L', 'C', 'Z']);
+  assert.deepEqual(cmds[1].p, [1, 0]);                           // H 5' keeps y
+  assert.deepEqual(cmds[2].p, [1, 1]);                           // V 2'6" keeps x
+  assert.deepEqual(cmds[6].p, [0.9, 4 / 30]);                    // h is case-insensitive
+  assert.equal(cmds[8].p.length, 6);
+  assert.ok(parseDocument(`define a 4' x 4' path L 1' 1'\n`).issues.some(i => /starts with "M/.test(i.message)));
+  assert.ok(parseDocument(`define a 4' x 4' path M 0 0 X 1'\n`).issues.some(i => /path command/.test(i.message)));
+  assert.ok(parseDocument(`define a 4' x 4' path M 0 0 C 1' 1'\n`).issues.some(i => /6 coordinates/.test(i.message)));
+});
+
+test('svg: custom shapes draw as paths; size overrides scale them', () => {
+  const doc = `define piano 5' x 6'6" "Baby Grand" shape grand-piano
+define desk outline E 6' S 2' W 3'6" S 2'6" W 2'6" close "Desk"
+define disc 4' x 4' shape round
+define wh 3' x 3' "Boiler" shape water-heater
+room a 20' x 20'
+fixture a piano at 1', 1'
+fixture a desk on north at 8'
+fixture a disc at 12', 12'
+fixture a wh on south at 1'
+fixture a grand-piano 10' x 13' at 8', 1'
+fixture a sofa on east
+`;
+  const scene = layoutDocument(parseDocument(doc));
+  assert.equal(scene.issues.length, 0, JSON.stringify(scene.issues));
+  const floor = scene.floors[0];
+  const desk = floor.fixtures.find(f => f.type === 'desk');
+  assert.equal(desk.rect.w, 6 * FT);
+  assert.equal(desk.rect.h, 4 * FT + 6 * IN);
+  const { svg } = renderFloorSvg(floor, scene.meta, {});
+  const groups = svg.match(/<g class="ud-ent ud-fixture"[\s\S]*?<\/g>/g);
+  assert.equal(groups.length, 6);
+  const pianoG = groups[0];
+  assert.match(pianoG, /<path class="ud-sym"[^>]*d="M0 1981.2 L1524 1981.2/);   // 5' × 6'6" unit box
+  assert.match(pianoG, /Baby Grand/);
+  assert.match(groups[1], /<path class="ud-sym"[^>]*d="M0 0 L1828.8 0 L1828.8 609.6 L762 609.6/);
+  assert.match(groups[1], />Desk</);
+  assert.match(groups[2], /<ellipse[^>]*rx="609.6" ry="609.6"/);
+  // A borrowed built-in keeps its symbol but drops its own text for the label.
+  assert.match(groups[3], /<circle/);
+  assert.match(groups[3], />Boiler</);
+  assert.doesNotMatch(groups[3], />WH</);
+  // The built-in grand-piano at a 10' × 13' override draws twice the size.
+  assert.match(groups[4], /d="M0 3962.4 L3048 3962.4/);
+  assert.match(groups[5], /M0 256.03 L2133.6 256.03/);                       // sofa back rail (0.28 × 36")
+  // Exports carry the same paths and no hit rects.
+  const out = renderExportSvg(scene, 0);
+  assert.match(out, /Baby Grand/);
+  assert.doesNotMatch(out, /ud-hit/);
+});
+
+test('svg: fixture labels counter-rotate so they read upright', () => {
+  const scene = layoutDocument(parseDocument(
+    `define piano 5' x 6'6" "Baby Grand" shape grand-piano\nroom a 20' x 20'\nfixture a fridge on south\nfixture a piano at 1', 1' facing west\nfixture a fridge on north\n`));
+  const { svg } = renderFloorSvg(scene.floors[0], scene.meta, {});
+  const texts = svg.match(/<text class="ud-txt ud-fix-txt"[^>]*>/g);
+  assert.equal(texts.length, 3);
+  assert.match(texts[0], /rotate\(-180 /);                     // south wall
+  assert.match(texts[1], /rotate\(-90 /);                      // facing west = back east = +90
+  assert.doesNotMatch(texts[2], /rotate/);                     // north wall: none needed
 });

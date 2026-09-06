@@ -112,7 +112,22 @@ export const FIXTURES = {
   island:        { w: 78 * UM_PER_INCH, d: 42 * UM_PER_INCH },
   bed:           { w: 60 * UM_PER_INCH, d: 80 * UM_PER_INCH },
   table:         { w: 60 * UM_PER_INCH, d: 36 * UM_PER_INCH },
+  // Furniture symbols (drawn from unit-box paths in svg.js, so they scale to
+  // any footprint — `define` can borrow them via `shape <name>`).
+  'grand-piano':   { w: 60 * UM_PER_INCH, d: 78 * UM_PER_INCH },
+  'upright-piano': { w: 58 * UM_PER_INCH, d: 24 * UM_PER_INCH },
+  sofa:          { w: 84 * UM_PER_INCH, d: 36 * UM_PER_INCH },
+  chair:         { w: 30 * UM_PER_INCH, d: 30 * UM_PER_INCH },
 };
+
+/**
+ * Names a `define … shape <name>` clause accepts: the two primitives plus
+ * every built-in symbol (a custom object can wear any of them at its own size).
+ */
+export const SHAPE_NAMES = ['box', 'round', ...Object.keys(FIXTURES)];
+
+/** Path commands a `define … path …` clause accepts (absolute; case-insensitive). */
+const PATH_CMDS = { m: 2, l: 2, h: 1, v: 1, c: 6, q: 4, z: 0 };
 
 // ---------------------------------------------------------------------------
 // Tokenizer (per line)
@@ -235,6 +250,105 @@ function parsePlacement(cur, units) {
   return null;
 }
 
+/** `<side> <len> … close` — the legs of an orthogonal walk (rooms and defines). */
+function parseOutlineLegs(cur, units) {
+  const legs = [];
+  for (;;) {
+    if (cur.word('close')) break;
+    const t = cur.peek();
+    if (t && t.t === 'word' && SIDE[t.v.toLowerCase()]) {
+      const dir = cur.side();
+      const len = cur.length(units, `a length after "${SIDE_NAMES[dir]}"`);
+      if (len <= 0) cur.fail('outline legs must be positive lengths');
+      legs.push({ dir, len });
+      continue;
+    }
+    cur.fail('expected an outline leg (e.g. "E 8\'") or "close"');
+  }
+  if (legs.length < 2) cur.fail('an outline needs at least two legs');
+  return legs;
+}
+
+const LEG_DELTA = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
+
+/**
+ * A define's outline walk → its bounding box (w, d) and a closed polygon path
+ * in unit-box coordinates.  Unlike rooms (layout.js does the wall geometry),
+ * an object silhouette is only ever drawn, so it needs no rectangle split —
+ * just a closed walk.
+ */
+function outlineToPath(legs) {
+  let x = 0, y = 0;
+  const pts = [[0, 0]];
+  for (const { dir, len } of legs) {
+    const [dx, dy] = LEG_DELTA[dir];
+    x += dx * len; y += dy * len;
+    pts.push([x, y]);
+  }
+  if (x !== 0 && y !== 0) return { error: 'outline does not close onto an axis — add a leg before "close"' };
+  if (x === 0 && y === 0) pts.pop();                       // walked back onto the start
+  if (pts.length < 4) return { error: 'outline needs at least four corners' };
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [px, py] of pts) {
+    x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py);
+  }
+  const w = x1 - x0, d = y1 - y0;
+  if (!w || !d) return { error: 'outline must enclose an area' };
+  const cmds = pts.map(([px, py], i) => ({ c: i ? 'L' : 'M', p: [(px - x0) / w, (py - y0) / d] }));
+  cmds.push({ c: 'Z', p: [] });
+  return { w, d, path: cmds };
+}
+
+/**
+ * `path M 0 0 L 5' 0 C … Z` — an SVG-style path in the object's own
+ * coordinates (lengths from its north-west corner; x east, y south, the
+ * FRONT of the object along y = depth).  Commands are absolute and
+ * case-insensitive: M L H V C Q Z.  Stored normalized to the w × d box so a
+ * `fixture` size override scales the drawing with the footprint.
+ */
+function parsePathCmds(cur, units, w, d) {
+  const cmds = [];
+  let cx = 0, cy = 0;
+  const nx = (um) => um / w, ny = (um) => um / d;
+  while (!cur.done()) {
+    const t = cur.peek();
+    const c = t.t === 'word' ? t.v.toLowerCase() : null;
+    if (c == null || !(c in PATH_CMDS)) cur.fail('expected a path command (M, L, H, V, C, Q or Z)');
+    cur.next();
+    const argc = PATH_CMDS[c];
+    const args = [];
+    for (let i = 0; i < argc; i++) args.push(cur.length(units, `${argc} coordinate${argc > 1 ? 's' : ''} after "${c.toUpperCase()}"`));
+    switch (c) {
+      case 'm': case 'l':
+        [cx, cy] = args;
+        cmds.push({ c: c.toUpperCase(), p: [nx(cx), ny(cy)] });
+        break;
+      case 'h':
+        cx = args[0];
+        cmds.push({ c: 'L', p: [nx(cx), ny(cy)] });
+        break;
+      case 'v':
+        cy = args[0];
+        cmds.push({ c: 'L', p: [nx(cx), ny(cy)] });
+        break;
+      case 'c':
+        cx = args[4]; cy = args[5];
+        cmds.push({ c: 'C', p: [nx(args[0]), ny(args[1]), nx(args[2]), ny(args[3]), nx(cx), ny(cy)] });
+        break;
+      case 'q':
+        cx = args[2]; cy = args[3];
+        cmds.push({ c: 'Q', p: [nx(args[0]), ny(args[1]), nx(cx), ny(cy)] });
+        break;
+      case 'z':
+        cmds.push({ c: 'Z', p: [] });
+        break;
+    }
+  }
+  if (!cmds.length || cmds[0].c !== 'M') cur.fail('a path starts with "M <x> <y>"');
+  if (cmds.length < 2) cur.fail('a path needs at least one drawing command after "M"');
+  return cmds;
+}
+
 /** `<id>/<id>` (shared wall) or `<id> <side>` (a room's exterior wall). */
 function parseWallRef(cur) {
   const a = cur.ident('a room name');
@@ -273,20 +387,7 @@ const STMT_PARSERS = {
   room(cur, units) {
     const id = cur.ident('a room name');
     if (cur.word('outline')) {
-      const legs = [];
-      for (;;) {
-        if (cur.word('close')) break;
-        const t = cur.peek();
-        if (t && t.t === 'word' && SIDE[t.v.toLowerCase()]) {
-          const dir = cur.side();
-          const len = cur.length(units, `a length after "${SIDE_NAMES[dir]}"`);
-          if (len <= 0) cur.fail('outline legs must be positive lengths');
-          legs.push({ dir, len });
-          continue;
-        }
-        cur.fail('expected an outline leg (e.g. "E 8\'") or "close"');
-      }
-      if (legs.length < 2) cur.fail('an outline needs at least two legs');
+      const legs = parseOutlineLegs(cur, units);
       const placement = parsePlacement(cur, units);
       cur.endOrFail();
       return { kind: 'room', id, outline: legs, ...placement };
@@ -369,14 +470,44 @@ const STMT_PARSERS = {
       throw new ParseError(`"${id}" is a built-in fixture type — pick another name`,
         idTok ? idTok.col : 0);
     }
-    const w = cur.length(units, `a width (e.g. 5')`);
-    cur.expectWord('"x" between width and depth', 'x');
-    const d = cur.length(units, 'a depth after "x"');
-    if (w <= 0 || d <= 0) cur.fail('object dimensions must be positive');
-    let label = null;
-    if (cur.peek() && cur.peek().t === 'str') label = cur.string();
-    cur.endOrFail();
-    return { kind: 'define', id, w, d, label };
+    let w, d, path = null, shape = null, label = null;
+    if (cur.word('outline')) {
+      // Orthogonal silhouette — the room walk grammar (an L-shaped desk, a
+      // sectional).  The footprint is the walk's bounding box; the walk
+      // becomes the object's path, normalized to that box.
+      const legs = parseOutlineLegs(cur, units);
+      const o = outlineToPath(legs);
+      if (o.error) cur.fail(o.error);
+      ({ w, d, path } = o);
+    } else {
+      w = cur.length(units, `a width (e.g. 5')`);
+      cur.expectWord('"x" between width and depth', 'x');
+      d = cur.length(units, 'a depth after "x"');
+      if (w <= 0 || d <= 0) cur.fail('object dimensions must be positive');
+    }
+    while (!cur.done()) {
+      const t = cur.peek();
+      if (t.t === 'str') { label = cur.string(); continue; }
+      if (cur.word('shape')) {
+        if (path) cur.fail('an outline already gives the object its shape');
+        const nameTok = cur.peek();
+        const name = cur.ident('a shape name after "shape"');
+        if (!SHAPE_NAMES.includes(name)) {
+          throw new ParseError(`unknown shape "${name}" — one of: ${SHAPE_NAMES.join(', ')}`,
+            nameTok ? nameTok.col : 0);
+        }
+        shape = name;
+        continue;
+      }
+      if (cur.word('path')) {
+        if (path) cur.fail('an outline already gives the object its shape');
+        if (shape) cur.fail('"shape" and "path" are alternatives — use one');
+        path = parsePathCmds(cur, units, w, d);
+        continue;
+      }
+      cur.fail('expected a "Label", "shape <name>" or "path …"');
+    }
+    return { kind: 'define', id, w, d, label, shape, path };
   },
 
   label(cur) {
@@ -473,7 +604,8 @@ export function parseScale(str) {
  *   floors: Array<{num:number|null, title:string|null, line:number|null, statements:object[]}>,
  *   issues: Array<{line:number, col:number, from:number, to:number, message:string, severity:string}>,
  *   roomIds: string[],
- *   defines: Map<string, {w:number, d:number, label:string|null, line:number, from:number, to:number}>,
+ *   defines: Map<string, {w:number, d:number, label:string|null, shape:string|null,
+ *            path:Array<{c:string, p:number[]}>|null, line:number, from:number, to:number}>,
  * }}
  * Every statement carries { line, from, to } — 0-based line index and absolute
  * char offsets of its source line (the click-to-source map).
@@ -535,7 +667,7 @@ export function parseDocument(text) {
           continue;
         }
         defines.set(stmt.id, { w: stmt.w, d: stmt.d, label: stmt.label,
-          line: li, from, to });
+          shape: stmt.shape, path: stmt.path, line: li, from, to });
         continue;
       }
       if (!floor) openFloor(null, null, null);             // implicit single floor

@@ -474,7 +474,9 @@ function layoutFloor(floorStmts, meta, issues, defines = new Map()) {
         const w = stmt.w ?? spec.w;
         const d = stmt.d ?? spec.d;
         const bb = room.bbox;
-        const defRec = def ? { label: def.label ?? defaultLabel(stmt.type) } : null;
+        const defRec = def
+          ? { label: def.label ?? defaultLabel(stmt.type), shape: def.shape ?? null, path: def.path ?? null }
+          : null;
         if (stmt.place) {
           // Free-standing: the object's front faces `facing` (default south);
           // its back is the opposite side, which is also the renderer's

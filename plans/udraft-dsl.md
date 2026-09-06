@@ -159,7 +159,10 @@ fixture living piano at 9', 6" facing west # global), place on any floor
 #           ( on <side> [at <len>] | at <x>, <y> | centered ) [facing <dir>]
 #   free placement: at x, y from the room's NW interior corner; facing turns
 #   the object (front faces that side, south by default)
-#   define  <id> <w> x <d> ["Label"]       # reusable custom object type
+#   define  <id> <w> x <d> ["Label"] [shape <name> | path <M/L/H/V/C/Q/Z …>]
+#   define  <id> outline <walk> close ["Label"]   # reusable custom object type
+#           (shape = any built-in symbol / round / box, scaled to the footprint;
+#            outline = orthogonal silhouette; path = SVG-style, in object lengths)
 #   v1 symbol library: sink, range, fridge, dishwasher, toilet, tub, shower,
 #   washer, dryer, water-heater, counter, island, bed, table
 

@@ -377,3 +377,44 @@
   color: var(--dim);
   font: 500 11px/1 -apple-system, system-ui, sans-serif;
 }
+
+/* ── Desktop editor: full-width DSL column + line numbers ─────────────────── */
+
+/* uPub's 70ch measure is a prose choice; a plan's statements are code and a
+   desktop window has the room, so above phone width the column runs the full
+   pane and a numbered gutter appears.  Numbers are CSS counters in ::before
+   pseudo-elements — NOT DOM text — so the editor's invariant
+   (textContent(line div) === source line) holds, copy/paste never picks
+   them up, and the caret can't land in them.  Scoped to #wr-scroll: the
+   scope editor (#ud-edit) shows scattered doc lines, where 1..n would lie.
+   Phones (< 700px) keep the plain, unnumbered surface. */
+@media (min-width: 700px) {
+  #wr-sheet {
+    max-width: none;
+    padding-left: 12px;
+    padding-right: 24px;
+  }
+  #wr-scroll .wr-editor {
+    counter-reset: ud-line;
+    padding-left: 4.5ch;
+  }
+  #wr-scroll .wr-line {
+    position: relative;
+    counter-increment: ud-line;
+  }
+  #wr-scroll .wr-line::before {
+    content: counter(ud-line);
+    position: absolute;
+    left: -4.5ch;
+    top: 0;
+    width: 3.5ch;
+    text-align: right;
+    text-indent: 0;
+    color: var(--dim);
+    font-size: 0.85em;
+    line-height: inherit;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
+  }
+}

@@ -186,13 +186,83 @@ function arrowHead(x, y, dir) {
 
 // ── Fixtures — drawn in a local w×d box with the wall along y=0, rotated in ──
 
-function fixtureLocal(type, w, d, def) {
+/**
+ * Unit-box symbol paths: every coordinate is a fraction of the object's
+ * w (x, 0 = west edge) × d (y, 0 = back/wall side, 1 = front).  One shape
+ * fits any footprint, which is what lets `define … shape <name>` reuse them.
+ * A string is an SVG path with unit coordinates; `scalePath` turns it into
+ * a model-space `d`.  (Custom `define … path` shapes arrive as parsed
+ * command lists in the same unit space — `cmdsPath` handles those.)
+ */
+const UNIT_SHAPES = {
+  // Baby grand, keyboard along the front (y=1): the bass side (x=0) runs
+  // straight the full depth, the treble side stops short and bends inward at
+  // the waist, and the tail rounds off behind the bass side.
+  'grand-piano': [
+    'M0 1 L1 1 L1 0.7 C1 0.58 0.8 0.56 0.68 0.5 C0.6 0.45 0.58 0.38 0.58 0.32'
+      + ' C0.58 0.14 0.45 0 0.29 0 C0.13 0 0 0.13 0 0.3 Z',
+    'M0 0.86 L1 0.86',                                   // fallboard edge
+    'M0.05 0.93 L0.95 0.93',                             // key strip
+  ],
+  // Upright: the case with the keybed stepping forward of it.
+  'upright-piano': [
+    'M0 0 L1 0 L1 0.6 L0.95 0.6 L0.95 1 L0.05 1 L0.05 0.6 L0 0.6 Z',
+    'M0.05 0.6 L0.95 0.6',
+    'M0.08 0.8 L0.92 0.8',
+  ],
+  // Sofa: back rail, two arms, three seat cushions.
+  sofa: [
+    'M0 0 L1 0 L1 1 L0 1 Z',
+    'M0 0.28 L1 0.28',
+    'M0.12 0.28 L0.12 1 M0.88 0.28 L0.88 1',
+    'M0.373 0.28 L0.373 1 M0.627 0.28 L0.627 1',
+  ],
+  chair: [
+    'M0 0 L1 0 L1 1 L0 1 Z',
+    'M0 0.25 L1 0.25',
+    'M0.18 0.25 L0.18 1 M0.82 0.25 L0.82 1',
+  ],
+};
+
+/** A unit-space path string → model-space `d` (numbers scaled by w/d). */
+function scalePath(unit, w, d) {
+  let axis = 0;                                          // alternates x, y
+  return unit.replace(/[A-Za-z]|-?\d*\.?\d+/g, (tok) => {
+    if (/[A-Za-z]/.test(tok)) { axis = 0; return tok; }
+    const v = parseFloat(tok) * (axis ? d : w);
+    axis ^= 1;
+    return String(mm(v));
+  });
+}
+
+/** Parsed unit-space commands ({c, p}) → model-space `d`. */
+function cmdsPath(cmds, w, d) {
+  return cmds.map(({ c, p }) =>
+    c + p.map((v, i) => mm(v * (i % 2 ? d : w))).join(' ')).join(' ');
+}
+
+const unitPaths = (paths, w, d) =>
+  paths.map(u => `<path class="ud-sym" fill="none" d="${scalePath(u, w, d)}"/>`).join('');
+
+/**
+ * @param {string} type  built-in fixture type, or a `define`d id
+ * @param {object} [def] the define record ({label, shape, path}) for custom ids
+ * @param {boolean} [quiet]  suppress the built-in's own text (REF/DW/…) — a
+ *   custom object wearing that shape draws its own label instead
+ * @param {number} [angle]  the group's rotation; text counter-rotates about
+ *   its centre so a label stays upright (a south-wall fridge's REF would
+ *   otherwise read upside down, a west-facing piano's label sideways)
+ */
+function fixtureLocal(type, w, d, def, quiet = false, angle = 0) {
   const r = (x, y, ww, hh, extra = '') =>
     `<rect class="ud-sym" fill="none" x="${mm(x)}" y="${mm(y)}" width="${mm(ww)}" height="${mm(hh)}"${extra}/>`;
   const c = (x, y, rad) => `<circle class="ud-sym" fill="none" cx="${mm(x)}" cy="${mm(y)}" r="${mm(rad)}"/>`;
   const el = (x, y, rx, ry) => `<ellipse class="ud-sym" fill="none" cx="${mm(x)}" cy="${mm(y)}" rx="${mm(rx)}" ry="${mm(ry)}"/>`;
   const IN = 25400;
-  const lbl = (s) => `<text class="ud-txt ud-fix-txt" x="${mm(w / 2)}" y="${mm(d / 2 + S.fixText * MM / 3)}" text-anchor="middle">${s}</text>`;
+  const upright = angle ? ` transform="rotate(${-angle} ${mm(w / 2)} ${mm(d / 2)})"` : '';
+  const lbl = (s) => quiet ? ''
+    : `<text class="ud-txt ud-fix-txt" x="${mm(w / 2)}" y="${mm(d / 2 + S.fixText * MM / 3)}" text-anchor="middle"${upright}>${s}</text>`;
+  if (UNIT_SHAPES[type]) return unitPaths(UNIT_SHAPES[type], w, d);
   switch (type) {
     case 'sink':
       return r(0, 0, w, d) + r(3 * IN, 3 * IN, w - 6 * IN, d - 6 * IN, ` rx="${mm(2 * IN)}"`) + c(w / 2, 2 * IN, 0.8 * IN);
@@ -226,10 +296,17 @@ function fixtureLocal(type, w, d, def) {
       return r(0, 0, w, d) + line(0, 10 * IN, w, 10 * IN, 'ud-sym');
     case 'table':
       return r(0, 0, w, d, ` rx="${mm(2 * IN)}"`);
-    default:
-      // Custom objects (`define`): their outline with the label centered.
-      return r(0, 0, w, d, ` rx="${mm(1.5 * IN)}"`)
-        + (def?.label ? lbl(esc(def.label)) : '');
+    default: {
+      // Custom objects (`define`): a `path`/`outline` silhouette, a borrowed
+      // built-in symbol (`shape sofa`), `round`, or the default box — with
+      // the object's label centered on it.
+      let body;
+      if (def?.path) body = `<path class="ud-sym" fill="none" d="${cmdsPath(def.path, w, d)}"/>`;
+      else if (def?.shape === 'round') body = el(w / 2, d / 2, w / 2, d / 2);
+      else if (def?.shape && def.shape !== 'box') body = fixtureLocal(def.shape, w, d, null, !!def.label, angle);
+      else body = r(0, 0, w, d, ` rx="${mm(1.5 * IN)}"`);
+      return body + (def?.label ? lbl(esc(def.label)) : '');
+    }
   }
 }
 
@@ -238,13 +315,13 @@ function fixtureMarkup(f, interactive) {
   // Local box (w along the wall × d deep), wall at local y=0; rotate per side.
   const w = (f.side === 'n' || f.side === 's') ? rw : rh;
   const d = (f.side === 'n' || f.side === 's') ? rh : rw;
-  let tf;
-  if (f.side === 'n') tf = `translate(${mm(x)} ${mm(y)})`;
-  else if (f.side === 's') tf = `translate(${mm(x + rw)} ${mm(y + rh)}) rotate(180)`;
-  else if (f.side === 'w') tf = `translate(${mm(x)} ${mm(y + rh)}) rotate(-90)`;
-  else tf = `translate(${mm(x + rw)} ${mm(y)}) rotate(90)`;
+  let tf, angle;
+  if (f.side === 'n') { tf = `translate(${mm(x)} ${mm(y)})`; angle = 0; }
+  else if (f.side === 's') { tf = `translate(${mm(x + rw)} ${mm(y + rh)}) rotate(180)`; angle = 180; }
+  else if (f.side === 'w') { tf = `translate(${mm(x)} ${mm(y + rh)}) rotate(-90)`; angle = -90; }
+  else { tf = `translate(${mm(x + rw)} ${mm(y)}) rotate(90)`; angle = 90; }
   return `<g class="ud-ent ud-fixture" data-ent="fixture" transform="${tf}"${docAttrs(f, interactive)}>`
-    + `${fixtureLocal(f.type, w, d, f.def)}${hitRect(0, 0, w, d, interactive)}</g>`;
+    + `${fixtureLocal(f.type, w, d, f.def, false, angle)}${hitRect(0, 0, w, d, interactive)}</g>`;
 }
 
 function dimMarkup(dim, meta, interactive) {

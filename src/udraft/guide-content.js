@@ -11,8 +11,8 @@ walls, door swings, window symbols, dimension strings, room labels with areas.
 
 Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
 **Example plan** in the ⋯ menu loads a complete three-floor cottage —
-stacked stairwell, kitchen island, a \`define\`d piano placed on two
-floors — to explore and pull apart.
+stacked stairwell, kitchen island, a \`define\`d baby grand placed on two
+floors, an L-shaped desk — to explore and pull apart.
 
 The drawing is navigated hierarchically — floor › room › object:
 
@@ -98,7 +98,8 @@ floor 2 "Second Floor"
 
 - **stairs**: width × run, \`up\` or \`down\`, flush \`along\` a side.
 - **fixture** types: sink, range, fridge, dishwasher, toilet, tub, shower,
-  washer, dryer, water-heater, counter, island, bed, table. Size is optional
+  washer, dryer, water-heater, counter, island, bed, table, grand-piano,
+  upright-piano, sofa, chair. Size is optional
   (each type has a standard footprint) — override it with \`30"\` (width) or
   \`6' x 3'\` (width × depth); \`at 4'\` positions along the wall.
 - **label** renames a room on the plan (the default is its id, title-cased);
@@ -143,8 +144,29 @@ fixture rec piano centered
 \`\`\`
 
 Define an object above its first use — the top of the document, before the
-first \`floor\`, is the natural spot. Custom objects draw as their outline
-with the label centered; they work \`on\` walls and free-standing alike.
+first \`floor\`, is the natural spot. Custom objects work \`on\` walls and
+free-standing alike. By default one draws as a plain box with its label
+centered — three clauses give it a real shape:
+
+- **\`shape <name>\`** borrows a built-in symbol, scaled to the object's
+  footprint: any fixture type (\`grand-piano\`, \`upright-piano\`, \`sofa\`,
+  \`chair\`, \`tub\`, …) plus \`round\` (an ellipse filling the box) and
+  \`box\`. So \`define piano 5' x 6'6" "Baby Grand" shape grand-piano\`
+  draws a baby grand — keyboard along the front, curved tail behind.
+- **\`outline <walk> close\`** replaces the \`w x d\` with the same
+  compass walk rooms use, for orthogonal silhouettes — an L-shaped desk, a
+  sectional. The footprint is the walk's bounding box:
+  \`define desk outline E 6' S 2' W 3'6" S 2'6" W 2'6" close "Desk"\`.
+- **\`path …\`** draws anything, SVG-style, in the object's own coordinates
+  (from its north-west corner, x east and y south, the **front** along
+  y = depth). Commands are absolute: \`M\` move, \`L\` line, \`H\`/\`V\`
+  horizontal/vertical line, \`C\` cubic and \`Q\` quadratic curves, \`Z\`
+  close. Several subpaths are fine (start each with \`M\`):
+  \`define bath 5' x 2'6" path M 0 0 H 5' V 2'6" H 0 Z M 6" 4" H 4'6" V 2'2" H 6" Z\`.
+
+Whatever the shape, \`facing\` turns the whole drawing (a \`grand-piano\`
+facing west has its keyboard to the west), and a size on the \`fixture\`
+line stretches it to that footprint.
 
 ## Floors & stairs
 

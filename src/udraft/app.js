@@ -35,7 +35,7 @@ import { UPubEditor } from '../upub/editor.js';
 import { SlashMenu } from '../upub/slash-menu.js';
 import { renderMarkdown } from '../upub/preview.js';
 import * as udSyntax from './syntax.js';
-import { parseDocument, formatArea, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES } from '../core/udraft/parse.js';
+import { parseDocument, formatArea, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SHAPE_NAMES } from '../core/udraft/parse.js';
 import { layoutDocument } from '../core/udraft/layout.js';
 import { renderFloorSvg, renderExportSvg, renderPrintBody, exportStyles, scopeExtent } from '../core/udraft/svg.js';
 import { GUIDE_MD } from './guide-content.js';
@@ -55,7 +55,9 @@ units: imperial
 # stair shaft (hall → landing → stairwell) exactly on top of itself.
 
 # Custom objects: define once, place with "fixture" on any floor below.
-define piano 5' x 6'6" "Baby Grand"
+# "shape" borrows a built-in symbol; "outline"/"path" draw your own.
+define piano 5' x 6'6" "Baby Grand" shape grand-piano
+define desk  outline E 6' S 2' W 3'6" S 2'6" W 2'6" close "Desk"
 
 floor 1 "Main Floor"
 
@@ -85,6 +87,7 @@ fixture kitchen range  30" on north at 6'
 fixture kitchen fridge on east at 6"
 fixture kitchen island 6' x 3'  at 2'6", 4'6"           # freestanding — x, y from the NW corner
 fixture living  piano  at 9', 6" facing west
+fixture living  sofa   on west at 4'
 fixture bath  toilet   on west at 1'
 fixture bath  tub      on south
 
@@ -111,7 +114,7 @@ window bath east       2'    centered
 fixture bedroom bed    on west at 3'
 fixture bath  toilet   on west at 1'
 fixture bath  shower   on south
-fixture office table   on north
+fixture office desk    on east at 3'
 
 label bedroom "Primary Bedroom"
 
@@ -870,8 +873,10 @@ export class UDraftApp {
       tpl: 'fixture room sink on north', ph: 'room' },
     { id: 'island',  label: 'Island',         hint: 'freestanding', block: true, keywords: 'kitchen counter freestanding middle centered',
       tpl: "fixture room island 6' x 3' centered", ph: 'room' },
-    { id: 'define',  label: 'Custom object',  hint: 'define once', block: true, keywords: 'object piano furniture reusable define custom',
-      tpl: `define name 5' x 4' "Label"`, ph: 'name' },
+    { id: 'define',  label: 'Custom object',  hint: 'define once', block: true, keywords: 'object piano furniture reusable define custom shape',
+      tpl: `define name 5' x 4' "Label" shape box`, ph: 'name' },
+    { id: 'outline', label: 'Custom outline', hint: 'define …',  block: true, keywords: 'object shape silhouette walk define custom L-shaped',
+      tpl: `define name outline E 6' S 2' W 3' S 2' W 3' close "Label"`, ph: 'name' },
     { id: 'label',   label: 'Label',          hint: '"…"',       block: true, keywords: 'name rename title',
       tpl: 'label room "Text"', ph: 'room' },
     { id: 'note',    label: 'Note',           hint: '(…)',       block: true, keywords: 'annotation remark',
@@ -1012,6 +1017,7 @@ export class UDraftApp {
       else if (lw === 'of') items = roomItems();
       else if (lw === 'swing') items = [...roomItems(), item('in', 'inward'), item('out', 'outward')];
       else if (lw === 'align' || lw === 'from' || lw === 'on' || lw === 'along' || lw === 'facing') items = sideItems();
+      else if (kw === 'define' && lw === 'shape') items = SHAPE_NAMES.map(s => item(s, 'shape'));
       else if (kw === 'fixture' && toks.length === 2) {
         // Built-in types plus the document's own `define`d objects.
         items = [

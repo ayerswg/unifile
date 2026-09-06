@@ -19,16 +19,19 @@
  * diagnostics live in the preview's issue strip).
  */
 
-import { tokenizeLine, STATEMENT_KEYWORDS, FIXTURES } from '../core/udraft/parse.js';
+import { tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SHAPE_NAMES } from '../core/udraft/parse.js';
 
 const KEYWORDS = new Set(STATEMENT_KEYWORDS);
 const SIDES = new Set(['north', 'south', 'east', 'west', 'n', 's', 'e', 'w']);
 const CONNECTIVES = new Set([
   'of', 'align', 'offset', 'at', 'from', 'centered', 'center', 'centred',
   'swing', 'on', 'along', 'facing', 'x', 'outline', 'close', 'up', 'down',
-  'in', 'out',
+  'in', 'out', 'shape', 'path',
 ]);
 const FIXTURE_TYPES = new Set(Object.keys(FIXTURES));
+const SHAPES = new Set(SHAPE_NAMES);
+// `define … path M 0 0 L 5' 0 …` — the path letters read as operators.
+const PATH_LETTERS = new Set(['m', 'l', 'h', 'v', 'c', 'q', 'z']);
 
 // ---------------------------------------------------------------------------
 // Classification
@@ -119,6 +122,7 @@ function renderStmt(line, info) {
   let out = '';
   let pos = 0;
   let first = true;
+  let inPath = false;
   for (const t of tokens) {
     if (t.col > pos) out += esc(code.slice(pos, t.col));
     // The string token's raw text includes its quotes.
@@ -130,9 +134,11 @@ function renderStmt(line, info) {
     else if (t.t === 'word') {
       const w = t.v.toLowerCase();
       if (first) cls = KEYWORDS.has(w) ? 'kw' : null;
+      else if (inPath && PATH_LETTERS.has(w)) cls = 'op';
       else if (SIDES.has(w)) cls = 'dir';
-      else if (CONNECTIVES.has(w)) cls = 'op';
+      else if (CONNECTIVES.has(w)) { cls = 'op'; if (info.kw === 'define' && w === 'path') inPath = true; }
       else if (info.kw === 'fixture' && FIXTURE_TYPES.has(w)) cls = 'fix';
+      else if (info.kw === 'define' && SHAPES.has(w)) cls = 'fix';
       else cls = 'id';
     }
     out += cls ? span(cls, raw) : esc(raw);
