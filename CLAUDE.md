@@ -364,6 +364,54 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
   `1/4in` = 1/4":1'-0"), print window `@page { margin: 0 }` + body padding.
   In-app the plan themes via CSS vars (`udraft.css` mirrors
   `svg.js baseStyles` — keep the `ud-*` class lists in sync).
+- **Site plans (2026-09) — `site` sheets** beside the floors (same `floors[]`
+  array, `kind:'site'`; every floor consumer sees empty `rooms/walls/…` and
+  stays oblivious). Parsed like `floor` blocks (`site ["Title"] [scale 1"=30' |
+  1:500 | 30] [north up|left|right|down|<deg>]`); a site statement outside a
+  site opens an implicit site, a floor statement inside one opens an implicit
+  floor. Statements: `lot [id] ["Label"] [at x,y | from <lot> corner n] [courses…]`
+  + `course <bearing> <dist> ["monument"]` (metes and bounds, clockwise from
+  the point of beginning = the site origin, x east / y south), `setback <d>
+  [course n]`, `contour <elev> [index] <pts…>`, `line ["Label"] [dashed]
+  [smooth] <pts…>`, `building [id] (<w> x <d> | from floor [n|"Title"]) at x,y
+  [rotate deg] ["Label"]`, `road "Name" along course n [width d] ["sub"]`,
+  `driveway <w> from x,y to x,y…`, `feature <type|define-id> [w x d] at x,y
+  [rotate] ["Label"]` (every `SITE_FEATURES` type — well, septic, drainfield,
+  shed… — also works as a bare keyword: `well at …`), `tree [caliper] ["sp"]
+  at x,y [canopy d]`, `note at x,y "text"`. **Bearing tokens** (`N 87°35'24" E`,
+  `N87-35-24E`, `N 87d35m24s E`, `N 87.59 E`) lex ONLY on `lot`/`course` lines
+  (`tokenizeLine(line, {bearings:true})`; syntax.js does the same by `info.kw`)
+  — elsewhere `N 8 E 6` must stay an outline walk. `layoutSite` is FLOAT
+  geometry rounded to integer µm per construction (courses run at any angle;
+  nothing needs the walls' exact-equality tests): the figure always closes
+  visually on the origin, a closure miss > 0.5' is a WARNING with the
+  distance; setbacks = `offsetPolygon` (per-edge inward offset, consecutive
+  offset lines intersected); a building whose rotated corners leave the lot or
+  cross the setback polygon warns (`pointInPoly`). **Floors lay out first,
+  sites after** so `building from floor N` can stamp the laid-out floor's
+  `wallRects` + room polys onto the lot (translate NW wall corner → `at`,
+  rotate about it). Rendering (`renderSiteSvg`): the sheet has ITS OWN SCALE
+  (`floor.ratio`, model mm per paper mm; default 1"=20'), so every pen weight /
+  text size is a PAPER-mm spec × ratio emitted as SVG ATTRIBUTES — the
+  stylesheet's `ud-s-*` rules only colour (a CSS stroke-width would override
+  the attribute; keep it that way). The whole drawing sits in
+  `<g class="ud-site" transform="rotate(θ)">`; `stext()` handles orientation:
+  upright text counter-rotates, along-line text (bearings, contours) is
+  normalised so it never reads upside down after the rotation, and offsets are
+  SCREEN-space (`down()` / `lift`) — a model +y offset becomes a sideways shift
+  once the sheet rotates (real bug). Contours are Catmull-Rom smoothed and
+  labelled at both ends; driveways = a wide fg stroke under a paper-coloured
+  stroke (two edge lines on any curve; the lot line draws after them so it
+  survives the crossing). North arrow + graphic scale bar are drawn in screen
+  space outside the rotated group. `scopeExtent` returns SCREEN-space boxes for
+  site records (`rotatedBox`); `annotationMarkup` is empty for sites. App: site
+  sheets are FLAT (no room level — `_tapEnt`/long-press select the record
+  outright); `_entIndex` = `siteRecords()` (courses first so a lot with inline
+  courses on the same line wins); the scope editor for a lot = its line + every
+  course/setback line. Print/PDF sizes a site sheet by its own ratio
+  (`siteScaleLabel`). **Headless-Chromium screenshot landmine:** the viewport
+  is ~90 px shorter than `--window-size`, so the bottom of a tall sheet (the
+  scale bar) is cut off in screenshots — it is not a rendering bug.
 - **`styles/udraft.css` `@import`s `upub.css`** (esbuild bundles it): the
   wr-* shell rules ARE the shared shell — uPub shell changes intentionally
   flow into uDraft. Theme attribute stays `data-wr-theme` for that reason

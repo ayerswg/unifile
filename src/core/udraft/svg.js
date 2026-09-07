@@ -18,7 +18,10 @@
  *     offsets of their source line) — the click-to-source map.
  */
 
-import { formatLength, formatArea, parseScale } from './parse.js';
+import {
+  formatLength, formatArea, parseScale, formatBearing, formatSurveyLength,
+  formatElevation, formatLotArea, UM_PER_FOOT, UM_PER_M,
+} from './parse.js';
 
 const MM = 1000;                       // µm per svg user unit
 
@@ -449,7 +452,7 @@ function annoDim(axis, u0, u1, pos, um, meta) {
  * @returns {string} svg markup (empty when the scope doesn't resolve)
  */
 export function annotationMarkup(floor, meta, scope) {
-  if (!scope) return '';
+  if (!scope || floor.kind === 'site') return '';
   const D = 420 * MM;                                    // offset from what's measured
   if (scope.entFrom == null) {
     const room = floor.rooms.find(r => r.id === scope.roomId);
@@ -515,6 +518,16 @@ export function annotationMarkup(floor, meta, scope) {
 export function scopeExtent(floor, scope) {
   if (!scope) return null;
   const pad = (r, p) => ({ x: r.x - p, y: r.y - p, w: r.w + 2 * p, h: r.h + 2 * p });
+  if (floor.kind === 'site') {
+    // Site entities carry a model bbox; the sheet may be rotated (`north
+    // left`), so frame the bbox's rotated corners in screen space.
+    if (scope.entFrom == null) return null;
+    const rec = siteRecords(floor).find(e => e.from === scope.entFrom);
+    if (!rec) return null;
+    const p = 4 * floor.ratio * MM;                        // 4 paper mm
+    const b = pad(rec.bbox, p);
+    return rotatedBox(b, floor.rotation);
+  }
   if (scope.entFrom == null) {
     const room = floor.rooms.find(r => r.id === scope.roomId);
     return room ? room.bbox : null;
@@ -637,6 +650,7 @@ function floorBounds(floor) {
  * @returns {{ svg: string, viewBox: {x,y,w,h}, widthMm: number, heightMm: number }}
  */
 export function renderFloorSvg(floor, meta, opts = {}) {
+  if (floor.kind === 'site') return renderSiteSvg(floor, meta, opts);
   const interactive = !!opts.interactive;
   const iso = opts.isolate ? floor.rooms.find(r => r.id === opts.isolate) : null;
   const inIso = (rec) => !iso
@@ -681,6 +695,524 @@ export function renderFloorSvg(floor, meta, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Site plan → SVG
+//
+// A site sheet has its own scale (1" = 30' rather than 1/4" = 1'-0"), so
+// every pen weight, text size and symbol here is specified in PAPER
+// millimetres and multiplied out by the sheet's ratio (`P()`), and travels as
+// presentation attributes rather than CSS (the stylesheet only colours).
+// The whole drawing sits in one `<g transform="rotate(θ)">` so `north left`
+// turns the plan; labels that must read upright counter-rotate, labels that
+// run along a line (bearings, contours) are flipped so they never read
+// upside down on screen.
+// ---------------------------------------------------------------------------
+
+/** All site entity records, flattened (for scope lookups). */
+export function siteRecords(site) {
+  return [
+    ...site.lots, ...site.contours, ...site.lines, ...site.buildings, ...site.roads,
+    ...site.driveways, ...site.features, ...site.trees, ...site.notes,
+    ...site.lots.flatMap(l => l.courses),
+    ...site.lots.flatMap(l => l.setbacks.filter(sb => sb.bbox)),
+  ];
+}
+
+/** Screen-space bbox of a model bbox after the sheet rotation. */
+function rotatedBox(b, deg) {
+  if (!deg) return b;
+  const c = Math.cos(deg * Math.PI / 180), s = Math.sin(deg * Math.PI / 180);
+  const pts = [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]]
+    .map(([x, y]) => [x * c - y * s, x * s + y * c]);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** Catmull-Rom spline through the points → an SVG path `d` (cubic beziers). */
+function smoothPathD(pts) {
+  const p = (q) => `${mm(q[0])} ${mm(q[1])}`;
+  if (pts.length < 2) return '';
+  if (pts.length === 2) return `M${p(pts[0])}L${p(pts[1])}`;
+  let d = `M${p(pts[0])}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(i - 1, 0)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(i + 2, pts.length - 1)];
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += `C${p(c1)} ${p(c2)} ${p(p2)}`;
+  }
+  return d;
+}
+
+function polyPathD(pts, close = false) {
+  return 'M' + pts.map(q => `${mm(q[0])} ${mm(q[1])}`).join('L') + (close ? 'Z' : '');
+}
+
+/** Midpoint of a polyline (by arc length) and the tangent angle there (deg). */
+function polylineMid(pts) {
+  let total = 0;
+  const segs = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const L = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    segs.push(L); total += L;
+  }
+  let acc = 0;
+  for (let i = 0; i < segs.length; i++) {
+    if (acc + segs[i] >= total / 2 || i === segs.length - 1) {
+      const t = segs[i] ? (total / 2 - acc) / segs[i] : 0;
+      const a = pts[i], b = pts[i + 1];
+      return { x: a[0] + (b[0] - a[0]) * t, y: a[1] + (b[1] - a[1]) * t,
+        angle: Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI };
+    }
+    acc += segs[i];
+  }
+  return { x: pts[0][0], y: pts[0][1], angle: 0 };
+}
+
+export function renderSiteSvg(site, meta, opts = {}) {
+  const interactive = !!opts.interactive;
+  const units = meta.units;
+  const k = site.ratio;                                    // model mm per paper mm
+  const P = (paperMm) => paperMm * k * MM;                 // paper mm → µm
+  const rot = site.rotation || 0;
+  const sw = (paperMm) => ` stroke-width="${mm(P(paperMm))}"`;
+  const dash = (on, off) => ` stroke-dasharray="${mm(P(on))} ${mm(P(off))}"`;
+  const hit = (b, padMm = 1.5) => hitRect(b.x, b.y, b.w, b.h, interactive, P(padMm));
+  const ent = (rec, cls, body, extra = '') =>
+    `<g class="ud-ent ud-s-${cls}" data-ent="${cls}"${docAttrs(rec, interactive)}${extra}>${body}</g>`;
+
+  // Screen-space helpers: the sheet may be rotated, so "below this label"
+  // means screen-down, not model +y.  A screen vector (u, v) is the model
+  // vector R(-rot)·(u, v).
+  const rc = Math.cos(rot * Math.PI / 180), rs = Math.sin(rot * Math.PI / 180);
+  const down = (x, y, dist) => [x + dist * rs, y + dist * rc];
+
+  /**
+   * Text at (x,y).  `angle` = the direction to run along (model degrees) —
+   * normalised so the glyphs never read upside down after the sheet
+   * rotation; omit it for upright text (counter-rotated).  `dy` shifts
+   * upright text screen-down; `lift` shifts along-line text toward its own
+   * "above" side (perpendicular, in screen terms) — both in µm.
+   */
+  const stext = (x, y, str, { size = 2.4, cls = '', angle = null, anchor = 'middle', halo = false, dy = 0, lift = 0 } = {}) => {
+    let local;
+    if (angle == null) {
+      local = -rot;
+      if (dy) [x, y] = down(x, y, dy);
+    } else {
+      let final = ((angle + rot) % 360 + 360) % 360;
+      if (final > 90 && final <= 270) final -= 180;      // keep it readable
+      local = final - rot;
+      if (lift) {
+        // Screen "above the text" = the text direction turned -90°.
+        const f = final * Math.PI / 180;
+        const ux = Math.sin(f), uy = -Math.cos(f);       // screen up-perpendicular
+        const mx = ux * rc + uy * rs, my = -ux * rs + uy * rc;   // → model
+        x += mx * lift; y += my * lift;
+      }
+    }
+    const tf = local ? ` transform="rotate(${Math.round(local * 100) / 100} ${mm(x)} ${mm(y)})"` : '';
+    const h = halo ? ` stroke-width="${mm(P(size * 0.35))}"` : '';
+    return `<text class="ud-s-txt${halo ? ' ud-s-halo' : ''} ${cls}" x="${mm(x)}" y="${mm(y)}"`
+      + ` font-size="${mm(P(size))}" text-anchor="${anchor}" dominant-baseline="middle"${tf}${h}>${esc(str)}</text>`;
+  };
+
+  const parts = [];
+
+  // ── Contours (under everything) ────────────────────────────────────────
+  for (const c of site.contours) {
+    const w = c.index ? 0.35 : 0.18;
+    let body = `<path class="ud-s-ln${c.index ? '' : ' ud-s-mut'}" d="${smoothPathD(c.pts)}"${sw(w)}/>`;
+    // Elevation at both ends (where topo lines leave the sheet), inset a little.
+    const lbl = formatElevation(c.elev, units);
+    for (const [a, b] of [[c.pts[0], c.pts[1]], [c.pts[c.pts.length - 1], c.pts[c.pts.length - 2]]]) {
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const L = Math.hypot(dx, dy) || 1;
+      const inset = Math.min(P(2.2 + lbl.length * 0.7), L / 2);
+      body += stext(a[0] + dx / L * inset, a[1] + dy / L * inset, lbl,
+        { size: 2.0, angle: Math.atan2(dy, dx) * 180 / Math.PI, halo: true, cls: c.index ? '' : 'ud-s-mut' });
+    }
+    parts.push(ent(c, 'contour', body + hit(c.bbox)));
+  }
+
+  // ── Lines (shorelines, fences, pipes) ──────────────────────────────────
+  for (const l of site.lines) {
+    const mid = polylineMid(l.pts);
+    const d = l.smooth ? smoothPathD(l.pts) : polyPathD(l.pts);
+    let body = `<path class="ud-s-ln" d="${d}"${sw(0.3)}${l.dashed ? dash(3, 1.5) : ''}/>`;
+    if (l.label) body += stext(mid.x, mid.y, l.label, { size: 2.0, angle: mid.angle, halo: true, lift: P(1.8) });
+    parts.push(ent(l, 'line', body + hit(l.bbox)));
+  }
+
+  // ── Setbacks ───────────────────────────────────────────────────────────
+  for (const lot of site.lots) {
+    if (!lot.setbackPoly) continue;
+    let body = `<path class="ud-s-ln ud-s-mut" d="${polyPathD(lot.setbackPoly, true)}"${sw(0.22)}${dash(4, 2)}/>`;
+    const n = lot.setbackPoly.length;
+    for (let i = 0; i < n; i++) {
+      const dst = lot.setbackDists[i];
+      if (!dst) continue;
+      const a = lot.setbackPoly[i], b = lot.setbackPoly[(i + 1) % n];
+      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+      body += stext((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `${formatSurveyLength(dst, units)} SETBACK`,
+        { size: 1.7, angle: ang, cls: 'ud-s-mut', halo: true, lift: P(1.6) });
+    }
+    const sb = lot.setbacks[0];
+    parts.push(ent(sb, 'setback', body + (interactive
+      ? `<path class="ud-hit" d="${polyPathD(lot.setbackPoly, true)}" fill="none" stroke="transparent"${sw(3)}/>` : '')));
+  }
+
+  // ── Driveways: a paper-coloured band with two edge lines (any curve) ───
+  for (const dr of site.driveways) {
+    const d = smoothPathD(dr.pts);
+    let body = `<path class="ud-s-ln" d="${d}" stroke-width="${mm(dr.width + 2 * P(0.3))}"/>`
+      + `<path class="ud-s-ln ud-s-paper" d="${d}" stroke-width="${mm(dr.width)}"/>`;
+    if (dr.label) {
+      const mid = polylineMid(dr.pts);
+      body += stext(mid.x, mid.y, dr.label, { size: 1.9, angle: mid.angle });
+    }
+    parts.push(ent(dr, 'driveway', body + (interactive
+      ? `<path class="ud-hit" d="${d}" fill="none" stroke="transparent" stroke-width="${mm(dr.width + P(3))}"/>` : '')));
+  }
+
+  // ── Roads: right-of-way beyond a course ────────────────────────────────
+  for (const r of site.roads) {
+    const [nx, ny] = r.normal;
+    const line2 = (a, b, cls, extra = '') =>
+      `<line class="${cls}" x1="${mm(a[0])}" y1="${mm(a[1])}" x2="${mm(b[0])}" y2="${mm(b[1])}"${extra}/>`;
+    let body = line2(r.far[0], r.far[1], 'ud-s-ln', sw(0.35))
+      + line2(r.mid[0], r.mid[1], 'ud-s-ln ud-s-mut', sw(0.2) + dash(6, 2));
+    const cx = (r.mid[0][0] + r.mid[1][0]) / 2, cy = (r.mid[0][1] + r.mid[1][1]) / 2;
+    const ang = Math.atan2(r.mid[1][1] - r.mid[0][1], r.mid[1][0] - r.mid[0][0]) * 180 / Math.PI;
+    // Name above the centre line (toward the far edge), subtitle below.
+    const off = P(2.6);
+    body += stext(cx + nx * off, cy + ny * off, r.name.toUpperCase(), { size: 2.8, angle: ang, cls: 'ud-s-bold', halo: true });
+    if (r.sub) body += stext(cx - nx * off, cy - ny * off, r.sub, { size: 1.9, angle: ang, halo: true });
+    parts.push(ent(r, 'road', body + hit(r.bbox)));
+  }
+
+  // ── Lots: boundary, corner monuments, bearing/distance per course ──────
+  for (const lot of site.lots) {
+    const sign = lot.courses.length && shoelaceSign(lot.pts);
+    let body = `<path class="ud-s-ln" d="${polyPathD(lot.pts, true)}"${sw(0.5)}/>`;
+    const courseParts = [];
+    for (const c of lot.courses) {
+      const dx = c.x1 - c.x0, dy = c.y1 - c.y0;
+      const L = Math.hypot(dx, dy) || 1;
+      const ox = -sign * (-dy / L), oy = -sign * (dx / L);           // outward normal
+      const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+      const mx = (c.x0 + c.x1) / 2, my = (c.y0 + c.y1) / 2;
+      const off = P(3.2);
+      let cb = stext(mx + ox * off, my + oy * off, formatBearing(c.az), { size: 2.1, angle: ang, halo: true })
+        + stext(mx - ox * off, my - oy * off, formatSurveyLength(c.len, units), { size: 2.1, angle: ang, halo: true });
+      // Monument at the course END (the corner it runs to).
+      const r = P(0.9);
+      cb += `<circle class="ud-s-ln" cx="${mm(c.x1)}" cy="${mm(c.y1)}" r="${mm(r)}"${sw(0.3)}/>`;
+      if (c.monument) {
+        cb += stext(c.x1 + ox * P(2.2) + (dx / L) * P(2.2), c.y1 + oy * P(2.2) + (dy / L) * P(2.2), c.monument,
+          { size: 1.7, cls: 'ud-s-mut', halo: true });
+      }
+      const cb2 = { x: Math.min(c.x0, c.x1), y: Math.min(c.y0, c.y1), w: Math.abs(dx), h: Math.abs(dy) };
+      courseParts.push(ent(c, 'course', cb + (interactive
+        ? `<line class="ud-hit" x1="${mm(c.x0)}" y1="${mm(c.y0)}" x2="${mm(c.x1)}" y2="${mm(c.y1)}" stroke="transparent"${sw(5)}/>` : ''),
+        ` data-course="${c.i}"`));
+      void cb2;
+    }
+    // Label + area at the centroid (upright) — nudged off anything drawn
+    // there (the house usually sits in the middle of a small lot).
+    const lblHalfW = Math.max(P(14), (lot.label ?? '').length * P(0.95));
+    const [cx, cy] = lotLabelSpot(lot, [...site.buildings, ...site.features, ...site.trees].map(o => o.bbox), lblHalfW, P(5), rot);
+    let lb = '';
+    if (lot.label) {
+      lb += stext(cx, cy, lot.label, { size: 2.8, cls: 'ud-s-bold', halo: true, dy: -P(1.7) });
+      lb += stext(cx, cy, formatLotArea(lot.areaUm2, units), { size: 2.2, cls: 'ud-s-mut', halo: true, dy: P(1.7) });
+    } else {
+      lb += stext(cx, cy, formatLotArea(lot.areaUm2, units), { size: 2.2, cls: 'ud-s-mut', halo: true });
+    }
+    const lotHit = interactive
+      ? `<path class="ud-hit" d="${polyPathD(lot.pts, true)}" fill="none" stroke="transparent"${sw(4)}/>` : '';
+    parts.push(ent(lot, 'lot', body + lotHit));
+    parts.push(...courseParts);
+    // The label block is its own tap target (the boundary hit is a thin band).
+    const lblBox = uprightBox(cx, cy, P(14), P(4.5), rot);
+    parts.push(ent(lot, 'lot', lb + hitRect(lblBox.x, lblBox.y, lblBox.w, lblBox.h, interactive, 0), ' data-lot-label="1"'));
+  }
+
+  // ── Buildings ──────────────────────────────────────────────────────────
+  for (const b of site.buildings) {
+    const tf = ` transform="rotate(${b.angle} ${mm(b.x)} ${mm(b.y)})"`;
+    let body;
+    if (b.floor) {
+      // The floor's actual walls, translated so its NW wall corner lands on `at`.
+      const ob = b.floor.outerBbox;
+      const inner = ` transform="translate(${mm(b.x - ob.x)} ${mm(b.y - ob.y)})"`;
+      const rooms = b.floor.rooms.map(poly => `<path class="ud-s-fill" d="${polyPathD(poly, true)}"/>`).join('');
+      const walls = b.floor.wallRects.map(r => `M${mm(r.x)} ${mm(r.y)}h${mm(r.w)}v${mm(r.h)}h${-mm(r.w)}Z`).join('');
+      body = `<g${tf}><g${inner}>${rooms}<path class="ud-walls" fill-rule="nonzero" d="${walls}"/></g></g>`;
+    } else {
+      body = `<g${tf}><rect class="ud-s-fill" x="${mm(b.x)}" y="${mm(b.y)}" width="${mm(b.w)}" height="${mm(b.d)}"/>`
+        + `<rect class="ud-s-ln" x="${mm(b.x)}" y="${mm(b.y)}" width="${mm(b.w)}" height="${mm(b.d)}"${sw(0.5)}/></g>`;
+    }
+    const [cx, cy] = [b.bbox.x + b.bbox.w / 2, b.bbox.y + b.bbox.h / 2];
+    body += stext(cx, cy, b.label.toUpperCase(), { size: 2.2, cls: 'ud-s-bold', halo: true });
+    parts.push(ent(b, 'building', body + hit(b.bbox, 0.5)));
+  }
+
+  // ── Features ───────────────────────────────────────────────────────────
+  for (const f of site.features) {
+    parts.push(ent(f, 'feature', siteFeatureMarkup(f, P, sw, dash, stext, rot) + hit(f.bbox)));
+  }
+
+  // ── Trees: scalloped canopy + trunk dot ────────────────────────────────
+  for (const t of site.trees) {
+    const R = t.canopy / 2;
+    const lobes = Math.max(8, Math.round(R / P(3)));
+    let d = '';
+    for (let i = 0; i < lobes; i++) {
+      const a0 = (i / lobes) * 2 * Math.PI, a1 = ((i + 1) / lobes) * 2 * Math.PI;
+      const p0 = [t.x + R * Math.cos(a0), t.y + R * Math.sin(a0)];
+      const p1 = [t.x + R * Math.cos(a1), t.y + R * Math.sin(a1)];
+      const am = (a0 + a1) / 2;
+      const c = [t.x + R * 1.18 * Math.cos(am), t.y + R * 1.18 * Math.sin(am)];
+      d += (i ? '' : `M${mm(p0[0])} ${mm(p0[1])}`) + `Q${mm(c[0])} ${mm(c[1])} ${mm(p1[0])} ${mm(p1[1])}`;
+    }
+    let body = `<path class="ud-s-ln ud-s-mut" d="${d}Z"${sw(0.2)}/>`
+      + `<circle class="ud-s-ln" cx="${mm(t.x)}" cy="${mm(t.y)}" r="${mm(P(0.5))}"${sw(0.4)}/>`;
+    const cap = t.caliper != null ? (units === 'metric' ? `${Math.round(t.caliper / 10000) / 100} m` : `${Math.round(t.caliper / 25400)}"`) : '';
+    const txt = [cap, t.label].filter(Boolean).join(' ');
+    if (txt) body += stext(t.x, t.y, txt, { size: 1.8, halo: true, dy: P(2.6) });
+    parts.push(ent(t, 'tree', body + hit(t.bbox, 0)));
+  }
+
+  // ── Notes ──────────────────────────────────────────────────────────────
+  for (const n of site.notes) {
+    const body = stext(n.x, n.y, n.text, { size: 2.0, anchor: 'start', halo: true });
+    const w = n.text.length * P(1.3);
+    parts.push(ent(n, 'note', body + hitRect(n.x - P(1), n.y - P(1.5), w + P(2), P(3), interactive, 0)));
+  }
+
+  // ── Frame: SCREEN-space content bounds + margin, north arrow, scale bar ─
+  // Each record's box is rotated on its own (lot corners individually), so a
+  // turned sheet is framed tight — the model bbox's rotated box would pad a
+  // 76°-turned lot with empty corners.
+  const rb = screenBounds(site, rot);
+  const M = P(14);
+  const pad = P(9);
+  const vb = { x: rb.x - pad - M, y: rb.y - pad - M, w: rb.w + 2 * (pad + M), h: rb.h + 2 * (pad + M) };
+
+  const furniture = [];
+  {
+    // North arrow, top-right, pointing where north falls after the rotation.
+    const cx = vb.x + vb.w - P(11), cy = vb.y + P(11), r = P(5);
+    furniture.push(`<g class="ud-s-north" transform="translate(${mm(cx)} ${mm(cy)}) rotate(${rot})">`
+      + `<circle class="ud-s-ln" r="${mm(r)}"${sw(0.3)}/>`
+      + `<path class="ud-s-ln" d="M0 ${mm(r * 0.8)}L0 ${mm(-r * 0.8)}M${mm(-r * 0.35)} ${mm(-r * 0.3)}L0 ${mm(-r * 0.8)}L${mm(r * 0.35)} ${mm(-r * 0.3)}"${sw(0.45)}/>`
+      + `</g>`);
+    {
+      // The N sits past the arrow tip, upright whatever the rotation.
+      const a = rot * Math.PI / 180, R = r + P(2.4);
+      const nx = cx + R * Math.sin(a), ny = cy - R * Math.cos(a);
+      furniture.push(`<text class="ud-s-txt ud-s-bold" x="${mm(nx)}" y="${mm(ny)}" font-size="${mm(P(2.6))}" text-anchor="middle" dominant-baseline="middle">N</text>`);
+    }
+    // Graphic scale bar, bottom-left: a round model length ≈ 2 paper inches.
+    const targetUm = 2 * 25.4 * k * MM;
+    const unit = units === 'metric' ? UM_PER_M : UM_PER_FOOT;
+    const nice = [5, 10, 20, 25, 30, 40, 50, 60, 100, 150, 200, 250, 300, 500, 1000]
+      .reduce((best, n) => Math.abs(n * unit - targetUm) < Math.abs(best * unit - targetUm) ? n : best, 5);
+    const barL = nice * unit;
+    const bx = vb.x + P(8), by = vb.y + vb.h - P(8);
+    const fmt = (n) => units === 'metric' ? `${n} m` : `${n}'`;
+    furniture.push(`<g class="ud-s-scale">`
+      + `<path class="ud-s-ln" d="M${mm(bx)} ${mm(by)}h${mm(barL)}M${mm(bx)} ${mm(by - P(1.2))}v${mm(P(2.4))}M${mm(bx + barL / 2)} ${mm(by - P(1))}v${mm(P(2))}M${mm(bx + barL)} ${mm(by - P(1.2))}v${mm(P(2.4))}"${sw(0.3)}/>`
+      + `<rect class="ud-s-txt" x="${mm(bx)}" y="${mm(by - P(0.6))}" width="${mm(barL / 4)}" height="${mm(P(0.6))}"/>`
+      + `<rect class="ud-s-txt" x="${mm(bx + barL / 2)}" y="${mm(by - P(0.6))}" width="${mm(barL / 4)}" height="${mm(P(0.6))}"/>`
+      + `<text class="ud-s-txt ud-s-mut" x="${mm(bx)}" y="${mm(by - P(2.6))}" font-size="${mm(P(1.8))}" text-anchor="middle">0</text>`
+      + `<text class="ud-s-txt ud-s-mut" x="${mm(bx + barL / 2)}" y="${mm(by - P(2.6))}" font-size="${mm(P(1.8))}" text-anchor="middle">${esc(fmt(nice / 2))}</text>`
+      + `<text class="ud-s-txt ud-s-mut" x="${mm(bx + barL)}" y="${mm(by - P(2.6))}" font-size="${mm(P(1.8))}" text-anchor="middle">${esc(fmt(nice))}</text>`
+      + `<text class="ud-s-txt ud-s-mut" x="${mm(bx)}" y="${mm(by + P(3.2))}" font-size="${mm(P(1.8))}">${esc(siteScaleLabel(k, units))}</text>`
+      + `</g>`);
+  }
+
+  const head = [];
+  if (opts.styles) head.push(`<style>${opts.styles}</style>`);
+  if (opts.background) {
+    head.push(`<rect class="ud-paper" x="${mm(vb.x)}" y="${mm(vb.y)}" width="${mm(vb.w)}" height="${mm(vb.h)}"/>`);
+  }
+  const widthMm = mm(vb.w), heightMm = mm(vb.h);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${mm(vb.x)} ${mm(vb.y)} ${widthMm} ${heightMm}"`
+    + ` class="ud-svg ud-site-svg" font-family="ui-monospace, Menlo, Consolas, monospace">${head.join('')}`
+    + `<g class="ud-site"${rot ? ` transform="rotate(${rot})"` : ''}>${parts.join('')}</g>${furniture.join('')}</svg>`;
+  return { svg, viewBox: vb, widthMm, heightMm };
+}
+
+/**
+ * Where the lot label goes: the centroid, unless the label block would land
+ * on a building/feature/tree — then the nearest clear spot on a widening
+ * ring of candidates, staying inside the lot.
+ */
+function lotLabelSpot(lot, obstacles, halfW, halfH, rot) {
+  const [cx, cy] = lot.centroid;
+  const box = (x, y) => uprightBox(x, y, halfW, halfH, rot);
+  const clear = (x, y) => {
+    const b = box(x, y);
+    return !obstacles.some(o => o.x < b.x + b.w && o.x + o.w > b.x && o.y < b.y + b.h && o.y + o.h > b.y);
+  };
+  if (clear(cx, cy)) return [cx, cy];
+  const inside = (x, y) => {
+    const b = box(x, y);
+    return [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]]
+      .every(p => pointInPolyF(p, lot.pts));
+  };
+  const step = Math.max(halfW, halfH);
+  for (let ring = 1; ring <= 6; ring++) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * 2 * Math.PI;
+      const x = cx + Math.cos(a) * step * ring, y = cy + Math.sin(a) * step * ring;
+      if (clear(x, y) && inside(x, y)) return [x, y];
+    }
+  }
+  return [cx, cy];
+}
+
+/**
+ * Model-space bbox of a screen-upright rectangle (half extents in µm) centred
+ * on MODEL point (x, y), on a sheet rotated by `rot` — its corners are the
+ * half extents turned by -rot about the centre.  (Rotating a model-space
+ * rect about the origin put the box somewhere else entirely — real bug.)
+ */
+function uprightBox(x, y, halfW, halfH, rot) {
+  const c = Math.cos(-rot * Math.PI / 180), s = Math.sin(-rot * Math.PI / 180);
+  const pts = [[-halfW, -halfH], [halfW, -halfH], [halfW, halfH], [-halfW, halfH]]
+    .map(([dx, dy]) => [x + dx * c - dy * s, y + dx * s + dy * c]);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [px, py] of pts) { x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py); }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+function pointInPolyF([px, py], poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Union of every site record's screen-space box (lots by their corners). */
+function screenBounds(site, rot) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const add = (b) => { x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h); };
+  const c = Math.cos(rot * Math.PI / 180), s = Math.sin(rot * Math.PI / 180);
+  const pt = ([x, y]) => add({ x: x * c - y * s, y: x * s + y * c, w: 0, h: 0 });
+  for (const lot of site.lots) { lot.pts.forEach(pt); (lot.setbackPoly ?? []).forEach(pt); }
+  for (const r of site.roads) { r.near.forEach(pt); r.far.forEach(pt); }
+  for (const c2 of [...site.contours, ...site.lines]) c2.pts.forEach(pt);
+  for (const d of site.driveways) add(rotatedBox(d.bbox, rot));
+  for (const b of site.buildings) b.corners.forEach(pt);
+  for (const f of [...site.features, ...site.trees, ...site.notes]) add(rotatedBox(f.bbox, rot));
+  if (x0 === Infinity) return { x: 0, y: 0, w: 0, h: 0 };
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+function shoelaceSign(poly) {
+  let s = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const [x0, y0] = poly[i], [x1, y1] = poly[(i + 1) % poly.length];
+    s += x0 * y1 - x1 * y0;
+  }
+  return s > 0 ? 1 : -1;
+}
+
+/**
+ * One site feature.  Point symbols are paper-sized (a well reads the same at
+ * any scale); area features draw their footprint at true size, rotated
+ * about `at`.  Custom `define`d objects reuse the fixture symbol machinery.
+ */
+function siteFeatureMarkup(f, P, sw, dash, stext, rot) {
+  const { x, y, w, d, type } = f;
+  let body = '';
+  const tf = f.angle ? ` transform="rotate(${f.angle} ${mm(x)} ${mm(y)})"` : '';
+  const r = (rx, ry, rw, rh, extra = '') =>
+    `<rect class="ud-s-ln" x="${mm(rx)}" y="${mm(ry)}" width="${mm(rw)}" height="${mm(rh)}"${sw(0.3)}${extra}/>`;
+  const c = (cx, cy, rad, extra = '') => `<circle class="ud-s-ln" cx="${mm(cx)}" cy="${mm(cy)}" r="${mm(rad)}"${sw(0.3)}${extra}/>`;
+  if (f.point) {
+    const R = P(1.4);
+    switch (type) {
+      case 'well':
+        body = c(x, y, R) + `<circle class="ud-s-txt" cx="${mm(x)}" cy="${mm(y)}" r="${mm(P(0.45))}"/>`;
+        break;
+      case 'pin':
+        body = c(x, y, R * 0.7) + `<path class="ud-s-ln" d="M${mm(x - R)} ${mm(y)}h${mm(2 * R)}M${mm(x)} ${mm(y - R)}v${mm(2 * R)}"${sw(0.25)}/>`;
+        break;
+      case 'pole':
+        body = c(x, y, R * 0.6) + `<path class="ud-s-ln" d="M${mm(x - R * 1.4)} ${mm(y)}h${mm(2.8 * R)}"${sw(0.3)}/>`;
+        break;
+      case 'hydrant':
+        body = c(x, y, R * 0.8) + `<path class="ud-s-ln" d="M${mm(x - R * 0.8)} ${mm(y - R * 1.2)}h${mm(1.6 * R)}"${sw(0.4)}/>`;
+        break;
+      case 'manhole':
+        body = c(x, y, R) + stext(x, y, 'MH', { size: 1.4 });
+        break;
+      default:
+        body = c(x, y, R);
+    }
+    if (f.label) body += stext(x, y, f.label, { size: 1.9, halo: true, dy: R + P(2) });
+    return body;
+  }
+  // Area feature.
+  let inner = '';
+  if (f.def) {
+    // A define'd object: its silhouette via the fixture drawer, at footprint size.
+    const local = fixtureLocal(type, w, d, f.def, true, f.angle - rot);
+    inner = `<g transform="translate(${mm(x)} ${mm(y)})">${local.replace(/class="ud-sym"/g, `class="ud-s-ln"${sw(0.3)}`)}</g>`;
+  } else {
+    switch (type) {
+      case 'drainfield':
+        inner = r(x, y, w, d, dash(3, 1.5));
+        // Lateral lines every 6' (or 2 m) across the depth.
+        {
+          const step = 6 * UM_PER_FOOT;
+          let dd = '';
+          for (let ly = y + step; ly < y + d - step / 2; ly += step) dd += `M${mm(x + P(1))} ${mm(ly)}h${mm(w - 2 * P(1))}`;
+          if (dd) inner += `<path class="ud-s-ln ud-s-mut" d="${dd}"${sw(0.18)}${dash(2, 1)}/>`;
+        }
+        break;
+      case 'septic': case 'tank':
+        inner = r(x, y, w, d) + c(x + w * 0.3, y + d / 2, Math.min(w, d) * 0.22) + c(x + w * 0.7, y + d / 2, Math.min(w, d) * 0.22);
+        break;
+      case 'pool':
+        inner = r(x, y, w, d, ` rx="${mm(Math.min(w, d) * 0.2)}"`) + r(x + P(1), y + P(1), w - 2 * P(1), d - 2 * P(1), ` rx="${mm(Math.min(w, d) * 0.15)}"${sw(0.18)}`);
+        break;
+      case 'deck': case 'patio':
+        inner = r(x, y, w, d);
+        {
+          const step = P(1.2);
+          let dd = '';
+          for (let ly = y + step; ly < y + d; ly += step) dd += `M${mm(x)} ${mm(ly)}h${mm(w)}`;
+          inner += `<path class="ud-s-ln ud-s-mut" d="${dd}"${sw(0.12)}/>`;
+        }
+        break;
+      default:
+        inner = `<rect class="ud-s-fill" x="${mm(x)}" y="${mm(y)}" width="${mm(w)}" height="${mm(d)}"/>` + r(x, y, w, d);
+    }
+  }
+  body = `<g${tf}>${inner}</g>`;
+  const label = f.label ?? (SITE_LABELS[type] ?? type.toUpperCase());
+  if (label) {
+    // Inside the footprint when it fits, else just below it (screen-down).
+    const need = label.length * P(1.4), fitsW = Math.max(f.bbox.w, f.bbox.h) > need, fitsH = Math.min(f.bbox.w, f.bbox.h) > P(5);
+    const busy = type === 'septic' || type === 'tank';       // symbol fills the box
+    const [lx, ly] = [f.bbox.x + f.bbox.w / 2, f.bbox.y + f.bbox.h / 2];
+    body += fitsW && fitsH && !busy
+      ? stext(lx, ly, label.toUpperCase(), { size: 1.9, halo: true })
+      : stext(lx, ly, label.toUpperCase(), { size: 1.9, halo: true, dy: Math.max(f.bbox.w, f.bbox.h) / 2 + P(1.8) });
+  }
+  return body;
+}
+
+const SITE_LABELS = { drainfield: 'DRAINFIELD', septic: 'SEPTIC', tank: 'TANK', pad: 'PAD', deck: 'DECK', patio: 'PATIO',
+  pool: 'POOL', shed: 'SHED', garage: 'GARAGE', barn: 'BARN' };
+
+// ---------------------------------------------------------------------------
 // Export styling (the app themes via its own stylesheet instead)
 // ---------------------------------------------------------------------------
 
@@ -713,6 +1245,15 @@ export function baseStyles(fg, bg, mut) {
     `.ud-dim-txt{font-size:${S.dimText}px;fill:${mut}}`,
     `.ud-fix-txt{font-size:${S.fixText}px;fill:${mut}}`,
     `.ud-stair-txt{font-size:${S.stairText}px;fill:${mut};font-weight:600}`,
+    // Site plan (sizes travel as attributes — they scale with the sheet's ratio).
+    `.ud-s-ln{stroke:${fg};fill:none;stroke-linecap:round;stroke-linejoin:round}`,
+    `.ud-s-mut{stroke:${mut}}`,
+    `.ud-s-fill{fill:${fg};fill-opacity:0.10;stroke:none}`,
+    `.ud-s-paper{stroke:${bg}}`,
+    `.ud-s-txt{fill:${fg};stroke:none}`,
+    `.ud-s-txt.ud-s-mut{fill:${mut};stroke:none}`,
+    `.ud-s-halo{paint-order:stroke;stroke:${bg};stroke-linejoin:round}`,
+    `.ud-s-bold{font-weight:600;letter-spacing:.06em}`,
   ].join('\n');
 }
 
@@ -732,27 +1273,55 @@ export function renderExportSvg(scene, floorIndex = 0) {
 }
 
 /**
- * Print body for the PDF export: one sheet per floor, each svg sized in real
+ * Print sheets for the PDF export: one per floor/site, each svg sized in real
  * inches so the plan prints AT SCALE (`scale:` front matter, default
- * 1/4" = 1'-0").  The caller wraps this in a print window with
- * `@page { margin: 0 }` and body padding as margins.
+ * 1/4" = 1'-0"; a site sheet at its own `scale`).  Each sheet also reports
+ * the smallest standard page that holds it (`pageW`/`pageH`, inches, with
+ * 0.5" margins) — the caller maps them to CSS named pages, because a
+ * 30'-wide floor at 1/4" already overflows letter paper, and a lot at 1"=20'
+ * needs tabloid or more.
+ * @returns {Array<{html:string, wIn:number, hIn:number, pageW:number, pageH:number, name:string}>}
  */
-export function renderPrintBody(scene, docTitle = '') {
-  const { ratio } = parseScale(scene.meta.scale);
-  const sheets = scene.floors.map((floor, i) => {
+export function renderPrintSheets(scene, docTitle = '') {
+  const floorRatio = parseScale(scene.meta.scale).ratio;
+  const PAGES = [[8.5, 11], [11, 8.5], [11, 17], [17, 11], [17, 22], [22, 17], [22, 34], [34, 22]];
+  return scene.floors.map((floor, i) => {
     const { svg, widthMm, heightMm } = renderFloorSvg(floor, scene.meta, {
       interactive: false,
       styles: exportStyles('plain'),                     // print is always ink-on-paper
     });
+    // A site sheet prints at ITS scale (1" = 30'), the floors at `scale:`.
+    const ratio = floor.kind === 'site' ? floor.ratio : floorRatio;
     const wIn = (widthMm / 25.4) / ratio;
     const hIn = (heightMm / 25.4) / ratio;
     const sized = svg.replace('<svg ', `<svg width="${wIn.toFixed(3)}in" height="${hIn.toFixed(3)}in" `);
-    const label = floor.title || (floor.num != null ? `Floor ${floor.num}` : '');
-    const sub = [docTitle, label, scaleLabel(scene.meta.scale)].filter(Boolean).join(' — ');
-    return `<div class="ud-sheet" style="break-inside:avoid;page-break-inside:avoid;margin-bottom:0.4in">`
+    const label = floor.title || (floor.kind === 'site' ? 'Site Plan' : floor.num != null ? `Floor ${floor.num}` : '');
+    const scaleText = floor.kind === 'site' ? siteScaleLabel(floor.ratio, scene.meta.units) : scaleLabel(scene.meta.scale);
+    const sub = [docTitle, label, scaleText].filter(Boolean).join(' — ');
+    const name = `ud-sheet-${i}`;
+    const fit = PAGES.find(([W, H]) => wIn + 1 <= W && hIn + 1.3 <= H);
+    const [pageW, pageH] = fit ?? [Math.ceil(wIn + 1), Math.ceil(hIn + 1.3)];
+    const html = `<div class="ud-sheet" style="page:${name};break-inside:avoid;page-break-inside:avoid;break-after:page;margin-bottom:0.4in">`
       + `${sized}<div style="font:600 10px/1.6 ui-monospace,Menlo,monospace;color:#333">${esc(sub)}</div></div>`;
+    return { html, wIn, hIn, pageW, pageH, name };
   });
-  return sheets.join('\n');
+}
+
+/** The print body (every sheet) — see renderPrintSheets. */
+export function renderPrintBody(scene, docTitle = '') {
+  return renderPrintSheets(scene, docTitle).map(s => s.html).join('\n');
+}
+
+/** `@page` rules giving each sheet its own page size (named pages). */
+export function renderPrintPageRules(scene, docTitle = '') {
+  return renderPrintSheets(scene, docTitle)
+    .map(s => `@page ${s.name}{size:${s.pageW}in ${s.pageH}in;margin:0}`).join('\n');
+}
+
+/** `SCALE: 1" = 30'` (imperial, when the ratio is whole feet per inch) or `SCALE 1:500`. */
+export function siteScaleLabel(ratio, units = 'imperial') {
+  if (units !== 'metric' && Number.isInteger(ratio / 12)) return `SCALE: 1" = ${ratio / 12}'`;
+  return `SCALE 1:${Math.round(ratio)}`;
 }
 
 export function scaleLabel(scale) {

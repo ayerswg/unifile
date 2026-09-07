@@ -27,7 +27,7 @@
  * that is the click-to-source map.
  */
 
-import { FIXTURES, SIDE_NAMES, formatLength } from './parse.js';
+import { FIXTURES, SITE_FEATURES, SIDE_NAMES, formatLength, formatSurveyLength } from './parse.js';
 
 // ---------------------------------------------------------------------------
 // Small geometry helpers
@@ -227,8 +227,14 @@ export function layoutDocument(parsed) {
   const { meta } = parsed;
   const issues = [...parsed.issues];
   const defines = parsed.defines ?? new Map();
-  const floors = parsed.floors.map(f => layoutFloor(f, meta, issues, defines));
-  crossFloorStairsCheck(floors, issues);
+  // Floors first (a site's `building from floor N` stamps a laid-out floor's
+  // walls onto the lot, wherever the floor sits in the document), then sites.
+  const floors = parsed.floors.map(f => f.kind === 'site' ? null : layoutFloor(f, meta, issues, defines));
+  const realFloors = floors.filter(Boolean);
+  parsed.floors.forEach((f, i) => {
+    if (f.kind === 'site') floors[i] = layoutSite(f, meta, issues, defines, realFloors);
+  });
+  crossFloorStairsCheck(realFloors, issues);
   return { meta, floors, issues, defines };
 }
 
@@ -704,5 +710,327 @@ function resolveOpening(stmt, ctx) {
     width, offsetFromLo: lo - measureLo,                  // for the inspector
     into, hingeEnd, openDir,
     line: stmt.line, from: stmt.from, to: stmt.to,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Site plans — the `site` sheet: surveyed lots (metes and bounds), setbacks,
+// contours, the building footprint, roads, driveways and site features.
+//
+// Nothing here is axis-aligned (a course runs at any bearing), so this is
+// float geometry rounded to integer µm at the end of every construction —
+// there are no equality tests to keep exact, only drawing.  Coordinates stay
+// screen-style (x east, y south); the site origin is the first lot's point
+// of beginning unless the lot says `at x, y`.
+// ---------------------------------------------------------------------------
+
+const DEG = Math.PI / 180;
+
+/** Course end point from a start, azimuth (° clockwise from north) and length. */
+function courseEnd([x, y], az, len) {
+  return [x + len * Math.sin(az * DEG), y - len * Math.cos(az * DEG)];
+}
+
+/** Point-in-polygon (ray casting, float). */
+export function pointInPoly([px, py], poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Area centroid of a simple polygon. */
+function centroidOf(poly) {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const [x0, y0] = poly[i], [x1, y1] = poly[(i + 1) % poly.length];
+    const c = x0 * y1 - x1 * y0;
+    a += c; cx += (x0 + x1) * c; cy += (y0 + y1) * c;
+  }
+  if (!a) return bboxCenter(bboxOf(poly));
+  return [cx / (3 * a), cy / (3 * a)];
+}
+
+const bboxCenter = (b) => [b.x + b.w / 2, b.y + b.h / 2];
+
+/**
+ * Inward offset of a closed polygon by a per-edge distance (0 = no offset):
+ * each edge slides inward along its normal; consecutive offset lines
+ * intersect at the new corner (parallel neighbours just keep the slid point).
+ */
+export function offsetPolygon(poly, dists) {
+  const n = poly.length;
+  const sign = shoelace(poly) > 0 ? 1 : -1;               // CW-screen → interior to the right
+  const lines = poly.map((p, i) => {
+    const q = poly[(i + 1) % n];
+    const dx = q[0] - p[0], dy = q[1] - p[1];
+    const L = Math.hypot(dx, dy) || 1;
+    const nx = sign * (-dy / L), ny = sign * (dx / L);   // right of travel (inward)
+    const d = dists[i] ?? 0;
+    return { p: [p[0] + nx * d, p[1] + ny * d], v: [dx, dy] };
+  });
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = lines[(i - 1 + n) % n], b = lines[i];
+    const den = a.v[0] * b.v[1] - a.v[1] * b.v[0];
+    if (Math.abs(den) < 1e-9) { out.push(b.p); continue; }
+    const t = ((b.p[0] - a.p[0]) * b.v[1] - (b.p[1] - a.p[1]) * b.v[0]) / den;
+    out.push([a.p[0] + a.v[0] * t, a.p[1] + a.v[1] * t]);
+  }
+  return out.map(([x, y]) => [Math.round(x), Math.round(y)]);
+}
+
+/** Rotate a point about a pivot by `deg` clockwise on screen. */
+function rotatePt([x, y], [cx, cy], deg) {
+  const c = Math.cos(deg * DEG), s = Math.sin(deg * DEG);
+  const dx = x - cx, dy = y - cy;
+  return [cx + dx * c - dy * s, cy + dx * s + dy * c];
+}
+
+/** Grow a running {x0,y0,x1,y1} box by a point or rect. */
+function grow(box, x, y, w = 0, h = 0) {
+  box.x0 = Math.min(box.x0, x); box.y0 = Math.min(box.y0, y);
+  box.x1 = Math.max(box.x1, x + w); box.y1 = Math.max(box.y1, y + h);
+}
+
+function layoutSite(site, meta, issues, defines, floors) {
+  const ratio = site.ratio ?? (meta.units === 'metric' ? 500 : 240);   // 1"=20' / 1:500
+  const rotation = site.north ?? 0;
+  const lots = [];
+  const byId = new Map();
+  const box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+
+  // ── 1. Lots: each `lot` opens a boundary; `course` lines append to the last one
+  let lastLot = null;
+  for (const stmt of site.statements) {
+    if (stmt.kind === 'lot') {
+      let origin = [0, 0];
+      if (stmt.at) origin = stmt.at;
+      else if (stmt.fromLot) {
+        const ref = byId.get(stmt.fromLot.ref);
+        if (!ref) { err(issues, stmt, `lot "${stmt.id}": lot "${stmt.fromLot.ref}" is not declared above this line`); continue; }
+        const k = stmt.fromLot.corner;
+        if (!(k >= 1 && k <= ref.legs.length)) { err(issues, stmt, `lot "${stmt.id}": "${ref.id}" has corners 1–${ref.legs.length}`); continue; }
+        origin = null;                                     // resolved after ref's courses are final
+        lastLot = { kind: 'lot', stmt, id: stmt.id, label: stmt.label, legs: stmt.legs.map(l => ({ ...l, line: stmt.line, from: stmt.from, to: stmt.to })),
+          ref: ref, refCorner: k, setbacks: [] };
+        lots.push(lastLot); byId.set(stmt.id, lastLot);
+        continue;
+      }
+      lastLot = { kind: 'lot', stmt, id: stmt.id, label: stmt.label, origin,
+        legs: stmt.legs.map(l => ({ ...l, line: stmt.line, from: stmt.from, to: stmt.to })), setbacks: [] };
+      lots.push(lastLot); byId.set(stmt.id, lastLot);
+    } else if (stmt.kind === 'course') {
+      if (!lastLot) { err(issues, stmt, 'course: declare a "lot" above the courses'); continue; }
+      lastLot.legs.push({ az: stmt.az, len: stmt.len, monument: stmt.monument, line: stmt.line, from: stmt.from, to: stmt.to });
+    } else if (stmt.kind === 'setback') {
+      const lot = stmt.lot ? byId.get(stmt.lot) : lastLot;
+      if (!lot) { err(issues, stmt, `setback: ${stmt.lot ? `lot "${stmt.lot}" is not declared above this line` : 'declare a "lot" first'}`); continue; }
+      lot.setbacks.push({ len: stmt.len, course: stmt.course, line: stmt.line, from: stmt.from, to: stmt.to });
+    }
+  }
+
+  // Walk the courses → corners; close the figure back to the origin and
+  // report the closure error the way a surveyor would.
+  for (const lot of lots) {
+    if (lot.legs.length < 3) {
+      err(issues, lot.stmt, `lot "${lot.id}" needs at least three courses (${lot.legs.length} given)`);
+      lot.bad = true;
+      continue;
+    }
+    if (!lot.origin) {
+      const ref = lot.ref;
+      if (ref.bad || !ref.pts) { lot.bad = true; continue; }
+      lot.origin = ref.pts[(lot.refCorner - 1) % ref.pts.length];
+    }
+    const pts = [lot.origin.slice()];
+    const courses = [];
+    let cur = lot.origin.slice();
+    lot.legs.forEach((leg, i) => {
+      const end = courseEnd(cur, leg.az, leg.len);
+      const [x1, y1] = [Math.round(end[0]), Math.round(end[1])];
+      courses.push({ kind: 'course', i: i + 1, az: leg.az, len: leg.len, x0: cur[0], y0: cur[1], x1, y1,
+        monument: leg.monument ?? null, line: leg.line, from: leg.from, to: leg.to });
+      cur = [x1, y1];
+      pts.push(cur);
+    });
+    const [ex, ey] = pts[pts.length - 1];
+    const closure = Math.hypot(ex - pts[0][0], ey - pts[0][1]);
+    const tol = meta.units === 'metric' ? 150000 : 152400;           // 0.15 m / 0.5 ft
+    if (closure > tol) {
+      err(issues, lot.stmt, `lot "${lot.id}" misses closing by ${formatSurveyLength(closure, meta.units)} — check the last course`, 'warning');
+    }
+    pts.pop();                                             // the figure closes on the origin
+    lot.pts = pts;
+    lot.courses = courses;
+    lot.closure = closure;
+    lot.areaUm2 = Math.abs(shoelace(pts)) / 2;
+    lot.centroid = centroidOf(pts);
+    lot.bbox = bboxOf(pts);
+    lot.line = lot.stmt.line; lot.from = lot.stmt.from; lot.to = lot.stmt.to;
+    for (const p of pts) grow(box, p[0], p[1]);
+
+    // Setbacks → one inward-offset polygon (uniform distance, per-course overrides).
+    if (lot.setbacks.length) {
+      const dists = new Array(courses.length).fill(0);
+      for (const sb of lot.setbacks) {
+        if (sb.course == null) dists.fill(sb.len);
+      }
+      for (const sb of lot.setbacks) {
+        if (sb.course == null) continue;
+        if (!(sb.course >= 1 && sb.course <= courses.length)) {
+          err(issues, sb, `setback: "${lot.id}" has courses 1–${courses.length}`);
+          continue;
+        }
+        dists[sb.course - 1] = sb.len;
+      }
+      lot.setbackDists = dists;
+      lot.setbackPoly = offsetPolygon(pts, dists);
+      const sbb = bboxOf(lot.setbackPoly);
+      for (const sb of lot.setbacks) { sb.kind = 'setback'; sb.bbox = sbb; sb.lotId = lot.id; }
+    }
+  }
+  const goodLots = lots.filter(l => !l.bad && l.pts);
+  const firstLot = goodLots[0] ?? null;
+
+  // ── 2. Everything else, in declaration order ──────────────────────────
+  const contours = [], lines = [], buildings = [], roads = [], driveways = [];
+  const features = [], trees = [], notes = [];
+  for (const stmt of site.statements) {
+    switch (stmt.kind) {
+      case 'contour': {
+        const b = bboxOf(stmt.pts);
+        contours.push({ kind: 'contour', elev: stmt.elev, index: stmt.index, pts: stmt.pts, bbox: b,
+          line: stmt.line, from: stmt.from, to: stmt.to });
+        grow(box, b.x, b.y, b.w, b.h);
+        break;
+      }
+      case 'line': {
+        const b = bboxOf(stmt.pts);
+        lines.push({ kind: 'line', label: stmt.label, dashed: stmt.dashed, smooth: stmt.smooth, pts: stmt.pts, bbox: b,
+          line: stmt.line, from: stmt.from, to: stmt.to });
+        grow(box, b.x, b.y, b.w, b.h);
+        break;
+      }
+      case 'building': {
+        let w = stmt.w, d = stmt.d, floor = null;
+        if (stmt.floorRef) {
+          const r = stmt.floorRef;
+          floor = r.first ? floors[0]
+            : r.num != null ? floors.find(f => f.num === r.num)
+            : floors.find(f => f.title === r.title);
+          if (!floor) {
+            err(issues, stmt, `building: no floor ${r.num != null ? r.num : r.title != null ? `"${r.title}"` : 'declared'} in this document`);
+            break;
+          }
+          if (!floor.rooms.length) { err(issues, stmt, `building: floor ${floor.title || floor.num} has no rooms yet`); break; }
+          w = floor.outerBbox.w; d = floor.outerBbox.h;
+        }
+        const [x, y] = stmt.at;
+        const angle = stmt.angle ?? 0;
+        const corners = [[x, y], [x + w, y], [x + w, y + d], [x, y + d]].map(p => rotatePt(p, [x, y], angle));
+        const bb = bboxOf(corners);
+        const bld = { kind: 'building', id: stmt.id, label: stmt.label ?? (stmt.id ? defaultLabel(stmt.id) : (floor ? 'House' : 'Building')),
+          x, y, w, d, angle, corners, bbox: bb,
+          floor: floor ? { title: floor.title, num: floor.num, outerBbox: floor.outerBbox,
+            wallRects: floor.wallRects, rooms: floor.rooms.map(r => r.poly) } : null,
+          line: stmt.line, from: stmt.from, to: stmt.to };
+        buildings.push(bld);
+        grow(box, bb.x, bb.y, bb.w, bb.h);
+        // A footprint that leaves the lot, or crosses the setback line, is
+        // exactly what a permit reviewer looks for — say so.
+        if (firstLot) {
+          const lot = goodLots.find(l => corners.some(c => pointInPoly(c, l.pts))) ?? firstLot;
+          if (!corners.every(c => pointInPoly(c, lot.pts))) {
+            err(issues, stmt, `building "${bld.label}" is not entirely inside lot "${lot.id}"`, 'warning');
+          } else if (lot.setbackPoly && !corners.every(c => pointInPoly(c, lot.setbackPoly))) {
+            err(issues, stmt, `building "${bld.label}" encroaches on the setback line`, 'warning');
+          }
+        }
+        break;
+      }
+      case 'road': {
+        const lot = stmt.lot ? byId.get(stmt.lot) : firstLot;
+        if (!lot || lot.bad) { err(issues, stmt, `road: ${stmt.lot ? `lot "${stmt.lot}" is not declared above this line` : 'declare a "lot" first'}`); break; }
+        const c = lot.courses[stmt.course - 1];
+        if (!c) { err(issues, stmt, `road: "${lot.id}" has courses 1–${lot.courses.length}`); break; }
+        const width = stmt.width ?? (meta.units === 'metric' ? 15000000 : 50 * 304800);
+        const dx = c.x1 - c.x0, dy = c.y1 - c.y0;
+        const L = Math.hypot(dx, dy) || 1;
+        const sign = shoelace(lot.pts) > 0 ? 1 : -1;
+        // Outward = opposite the interior side (see offsetPolygon).
+        const nx = -sign * (-dy / L), ny = -sign * (dx / L);
+        // The road runs on past the lot by half its width at each end.
+        const ex = dx / L * width / 2, ey = dy / L * width / 2;
+        const p0 = [c.x0 - ex, c.y0 - ey], p1 = [c.x1 + ex, c.y1 + ey];
+        const far = [[p0[0] + nx * width, p0[1] + ny * width], [p1[0] + nx * width, p1[1] + ny * width]].map(p => p.map(Math.round));
+        const mid = [[p0[0] + nx * width / 2, p0[1] + ny * width / 2], [p1[0] + nx * width / 2, p1[1] + ny * width / 2]].map(p => p.map(Math.round));
+        const rb = bboxOf([p0, p1, ...far]);
+        roads.push({ kind: 'road', name: stmt.name, sub: stmt.sub, width, course: c, near: [p0, p1], mid, far,
+          normal: [nx, ny], bbox: rb, line: stmt.line, from: stmt.from, to: stmt.to });
+        grow(box, rb.x, rb.y, rb.w, rb.h);
+        break;
+      }
+      case 'driveway': {
+        const b = bboxOf(stmt.pts);
+        const pad = stmt.width / 2;
+        driveways.push({ kind: 'driveway', width: stmt.width, pts: stmt.pts, label: stmt.label,
+          bbox: { x: b.x - pad, y: b.y - pad, w: b.w + 2 * pad, h: b.h + 2 * pad },
+          line: stmt.line, from: stmt.from, to: stmt.to });
+        grow(box, b.x - pad, b.y - pad, b.w + 2 * pad, b.h + 2 * pad);
+        break;
+      }
+      case 'feature': {
+        const lib = SITE_FEATURES[stmt.type];
+        const def = lib ? null : defines.get(stmt.type);
+        const spec = lib ?? def;
+        const w = stmt.w ?? spec.w, d = stmt.d ?? spec.d;
+        const [x, y] = stmt.at;
+        const point = !!lib?.point;
+        // Point symbols are centred on `at`; areas put their NW corner there.
+        const x0 = point ? x - w / 2 : x, y0 = point ? y - d / 2 : y;
+        const corners = [[x0, y0], [x0 + w, y0], [x0 + w, y0 + d], [x0, y0 + d]].map(p => rotatePt(p, [x, y], stmt.angle ?? 0));
+        const bb = bboxOf(corners);
+        features.push({ kind: 'feature', type: stmt.type, point, dashed: !!lib?.dashed, x, y, w, d, angle: stmt.angle ?? 0,
+          label: stmt.label ?? (def ? (def.label ?? defaultLabel(stmt.type)) : null),
+          def: def ? { label: def.label ?? defaultLabel(stmt.type), shape: def.shape ?? null, path: def.path ?? null } : null,
+          bbox: bb, line: stmt.line, from: stmt.from, to: stmt.to });
+        grow(box, bb.x, bb.y, bb.w, bb.h);
+        break;
+      }
+      case 'tree': {
+        const [x, y] = stmt.at;
+        // Canopy rule of thumb: a foot of spread per inch of trunk.
+        const canopy = stmt.canopy ?? (stmt.caliper ? Math.round(stmt.caliper / 25400 * 304800) : 20 * 304800);
+        const r = canopy / 2;
+        trees.push({ kind: 'tree', x, y, caliper: stmt.caliper, canopy, label: stmt.label,
+          bbox: { x: x - r, y: y - r, w: canopy, h: canopy }, line: stmt.line, from: stmt.from, to: stmt.to });
+        grow(box, x - r, y - r, canopy, canopy);
+        break;
+      }
+      case 'note': {
+        const [x, y] = stmt.at;
+        notes.push({ kind: 'note', x, y, text: stmt.text, bbox: { x, y, w: 0, h: 0 },
+          line: stmt.line, from: stmt.from, to: stmt.to });
+        grow(box, x, y);
+        break;
+      }
+      default: break;
+    }
+  }
+
+  const outerBbox = box.x0 === Infinity
+    ? { x: 0, y: 0, w: 0, h: 0 }
+    : { x: box.x0, y: box.y0, w: box.x1 - box.x0, h: box.y1 - box.y0 };
+
+  return {
+    kind: 'site', num: null, title: site.title, line: site.line,
+    ratio, rotation,
+    lots: goodLots, contours, lines, buildings, roads, driveways, features, trees, notes,
+    // Floor-shaped empties so every floor consumer stays oblivious.
+    rooms: [], walls: [], wallRects: [], openings: [], stairs: [], fixtures: [], dims: [],
+    outerBbox,
   };
 }

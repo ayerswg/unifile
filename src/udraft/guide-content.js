@@ -12,7 +12,8 @@ walls, door swings, window symbols, dimension strings, room labels with areas.
 Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
 **Example plan** in the ⋯ menu loads a complete three-floor cottage —
 stacked stairwell, kitchen island, a \`define\`d baby grand placed on two
-floors, an L-shaped desk — to explore and pull apart.
+floors, an L-shaped desk — plus a **site plan** of its lakeside lot, to
+explore and pull apart.
 
 The drawing is navigated hierarchically — floor › room › object:
 
@@ -194,6 +195,82 @@ Each floor's \`stairs\` statement draws the flight you see on that floor
 (\`up\` or \`down\` labels the arrow). uDraft checks that flights stack: an
 \`up\` with no stairs over the same spot on the floor above gets a warning
 in the issue strip.
+
+## Site plans — the lot, the land, the house on it
+
+A \`site\` sheet draws everything **outside** the walls: the surveyed lot,
+setbacks, ground contours, the house footprint, the driveway, wells,
+septic, trees. It appears as its own tab beside the floors. Start one with
+\`site\`, then read the lot straight off the plat — one course per line,
+clockwise from the point of beginning:
+
+\`\`\`
+site "Lot 7, Loon Lake" scale 1"=20' north up
+lot "LOT 7" S 77°30'00" E 150' "IPF"
+course S 12°30'00" W 120' "IPF"
+course S 45°00'00" W 60'
+course N 82°03'44" W 118.14'
+course N 12°30'00" E 180' "IPF"
+setback 30'
+setback 50' course 1
+\`\`\`
+
+- **\`site\`** takes a title, a **scale** (\`1"=30'\`, \`1:500\`, or just
+  \`30\`; the default is 1" = 20') and **\`north\`** — \`up\`, \`left\`,
+  \`right\`, \`down\` or degrees — to turn the drawing the way the plat is
+  drawn. Bearings are always true; only the sheet rotates.
+- **\`lot\`** + **\`course\`**: surveyor's bearings and distances —
+  \`N 87°35'24" E 210.48'\` (also \`N 87-35-24 E\`, \`N 87.59 E\`, plain
+  \`NE\`/\`S\`, or \`az 92.5\`). Courses may follow the \`lot\` line
+  inline or on \`course\` lines below it. The figure closes itself back to
+  the start; if the courses miss by more than half a foot the issue strip
+  says by how much. A quoted string after a course labels the monument at
+  its end (\`"IRF"\`, \`"IPF"\`); one after \`lot\` labels the parcel.
+  The area is computed and written at the centre.
+- **\`setback 25'\`** draws the building line inside every course;
+  \`setback 50' course 1\` overrides one side (the front). A building that
+  crosses it — or leaves the lot — gets a warning.
+- **Coordinates** on a site are \`x, y\` from the point of beginning
+  (x east, y south), the same convention as \`at\` inside a room.
+
+\`\`\`
+road "Loon Lake Road" along course 1 width 50' "State Route 12"
+building from floor 1 at 50', 75' "Cottage"
+building shed 12' x 10' at 120', 40'
+driveway 10' from 76', -10' to 66', 50' to 60', 72'
+well at 25', 60' "Well"
+septic at 95', 95'
+drainfield 40' x 24' at 90', 110'
+tree 30" "oak" at 118', 60'
+line "Loon Lake" smooth -60,196 0,204 60,210 120,204
+contour 1010 index -20,40 40,45 100,42 160,48
+contour 1008 -30,75 40,78 100,74 160,80
+note at 10', 10' "Zoned R-1"
+\`\`\`
+
+- **\`building from floor 1\`** stamps that floor's **actual walls** onto
+  the lot (the north-west corner of its walls at \`at\`; \`rotate 10\`
+  turns it clockwise). \`building <w> x <d> at …\` draws a plain footprint.
+- **\`road\`** draws the right-of-way beyond one course (edge line, dashed
+  centre line, name); **\`driveway\`** is a smoothed band of the given
+  width through its points.
+- **Features**: \`well\`, \`septic\`, \`tank\`, \`drainfield\`, \`pad\`,
+  \`deck\`, \`patio\`, \`pool\`, \`shed\`, \`garage\`, \`barn\`, \`pin\`,
+  \`pole\`, \`hydrant\`, \`manhole\` — each works as its own statement
+  (\`well at …\`) or as \`feature <type> …\`, with an optional
+  \`<w> x <d>\`, \`rotate <deg>\` and a \`"Label"\`. Point symbols
+  (wells, pins) draw at paper size; areas at true size. A \`define\`d
+  object can be placed with \`feature <id> at …\`.
+- **\`tree\`**: caliper, species and position; the canopy is a foot of
+  spread per inch of trunk unless you give \`canopy 30'\`.
+- **\`contour\`**: an elevation followed by the points the line passes
+  through (smoothed); \`index\` makes it a heavy line. **\`line\`** draws
+  any other polyline — a shoreline (\`smooth\`), a fence (\`dashed\`).
+- **\`note at x, y "text"\`** places free text.
+
+Every site element is tappable (long-press edits its line; a lot opens with
+all its courses and setbacks). Exports print the site sheet **at its own
+scale**, with a north arrow and a graphic scale bar.
 
 ## Front matter
 
