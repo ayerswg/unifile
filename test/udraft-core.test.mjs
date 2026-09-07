@@ -8,10 +8,13 @@ import assert from 'node:assert/strict';
 
 import {
   parseLength, formatLength, parseDocument, tokenizeLine, parseScale,
+  formatBearing, formatSurveyLength, formatLotArea,
   UM_PER_FOOT, UM_PER_INCH,
 } from '../src/core/udraft/parse.js';
-import { layoutDocument, polyToRects, defaultLabel } from '../src/core/udraft/layout.js';
-import { renderFloorSvg, renderExportSvg, renderPrintBody } from '../src/core/udraft/svg.js';
+import { layoutDocument, polyToRects, defaultLabel, pointInPoly } from '../src/core/udraft/layout.js';
+import {
+  renderFloorSvg, renderExportSvg, renderPrintBody, scopeExtent, annotationMarkup, siteRecords,
+} from '../src/core/udraft/svg.js';
 
 const FT = UM_PER_FOOT;
 const IN = UM_PER_INCH;
@@ -621,4 +624,203 @@ test('svg: fixture labels counter-rotate so they read upright', () => {
   assert.match(texts[0], /rotate\(-180 /);                     // south wall
   assert.match(texts[1], /rotate\(-90 /);                      // facing west = back east = +90
   assert.doesNotMatch(texts[2], /rotate/);                     // north wall: none needed
+});
+
+// ---------------------------------------------------------------------------
+// Site plans: bearings, lots, setbacks, contours, buildings on the lot
+// ---------------------------------------------------------------------------
+
+const SITE = `---
+title: Site Test
+---
+floor 1 "Main"
+room living 20' x 14'
+room kitchen 12' x 10' east of living, align north
+
+site "Lot 1" scale 1"=30' north left
+lot "PIN 1" N 87°35'24" E 210.48' "IRF"
+course S 14°18'14" E 210.21' "IRF"
+course S 87°31'38" W 211.57'
+course N 14°00'00" W 210.22'
+setback 25'
+setback 50' course 4
+road "Lees Ridge Road" along course 4 width 50' "VA. RTE. 744"
+contour 340 index 0,120 40,118 80,110
+contour 342 0,140 40,138 80,130
+building from floor 1 at 100', 80' rotate 10 "Proposed House"
+building shed 12' x 10' at 30', 60'
+driveway 12' from 20', 150' to 80', 120'
+well at 150', 100' "Proposed well"
+tree 24" "walnut" at 60', 95'
+drainfield 60' x 40' at 130', 20' "Reserve #1"
+feature septic at 100', 60'
+note at 10', 10' "hello"
+line "Fence" dashed 0,0 10,20 30,25
+`;
+
+test('lexer: surveyor bearings lex only when enabled', () => {
+  const forms = [`N 87°35'24" E`, `N87°35'24"E`, 'N 87-35-24 E', 'N 87d35m24s E', 'N 87.59 E'];
+  for (const f of forms) {
+    const t = tokenizeLine(f + " 210.48'", { bearings: true });
+    assert.equal(t[0].t, 'bearing', f);
+    assert.ok(Math.abs(t[0].az - 87.59) < 1e-9, `${f} → ${t[0].az}`);
+    assert.equal(t[1].t, 'len');
+  }
+  assert.ok(Math.abs(tokenizeLine(`S 14°18'14" E`, { bearings: true })[0].az - (180 - 14.303888)) < 1e-4);
+  assert.ok(Math.abs(tokenizeLine('N 14° W', { bearings: true })[0].az - 346) < 1e-9);
+  // Off by default: an outline walk's `N 8 E 6` stays words and numbers.
+  assert.deepEqual(tokenizeLine('N 8 E 6').map(t => t.t), ['word', 'num', 'word', 'num']);
+  assert.equal(formatBearing(87.59), `N 87°35'24" E`);
+  assert.equal(formatBearing(346), `N 14°00'00" W`);
+  assert.equal(formatBearing(90), 'DUE EAST');
+  assert.equal(formatSurveyLength(210.48 * FT), `210.48'`);
+  assert.equal(formatLotArea(43560 * FT * FT), '43,560 SF (1 AC)');
+});
+
+test('parse: site blocks, implicit sites, bare feature keywords', () => {
+  const p = parseDocument(SITE);
+  assert.equal(p.issues.length, 0, JSON.stringify(p.issues));
+  assert.equal(p.floors.length, 2);
+  assert.equal(p.floors[0].kind, 'floor');
+  const site = p.floors[1];
+  assert.equal(site.kind, 'site');
+  assert.equal(site.title, 'Lot 1');
+  assert.equal(site.ratio, 360);                               // 1" = 30'
+  assert.equal(site.north, -90);
+  const kinds = site.statements.map(s => s.kind);
+  assert.deepEqual(kinds.slice(0, 6), ['lot', 'course', 'course', 'course', 'setback', 'setback']);
+  assert.ok(kinds.includes('road') && kinds.includes('contour') && kinds.includes('building'));
+  // `well at …` and `drainfield … at …` are features.
+  const feats = site.statements.filter(s => s.kind === 'feature').map(s => s.type);
+  assert.deepEqual(feats, ['well', 'drainfield', 'septic']);
+  assert.equal(site.statements.find(s => s.kind === 'note').at[0], 10 * FT);
+  // The lot line's inline course carries its monument; `course` lines append.
+  const lot = site.statements[0];
+  assert.equal(lot.legs.length, 1);
+  assert.equal(lot.legs[0].monument, 'IRF');
+  // A site statement with no `site` line opens an implicit site sheet.
+  const imp = parseDocument(`lot N 0 E 100' S 90 E 100' S 0 W 100'\nroom a 10' x 10'\n`);
+  assert.deepEqual(imp.floors.map(f => f.kind), ['site', 'floor']);
+  // Scale forms.
+  assert.equal(parseDocument('site scale 1:500\n').floors[0].ratio, 500);
+  assert.equal(parseDocument('site scale 20\n').floors[0].ratio, 240);
+  assert.match(parseDocument('feature spaceship at 0,0\n').issues[0].message, /unknown feature "spaceship"/);
+});
+
+test('layout: a lot closes on its courses; area, setbacks, roads', () => {
+  const scene = layoutDocument(parseDocument(SITE));
+  const site = scene.floors[1];
+  const lot = site.lots[0];
+  assert.equal(lot.courses.length, 4);
+  assert.ok(lot.closure < 0.05 * FT, `closure ${lot.closure / FT} ft`);
+  // 0.99-odd acres, like the plat says.
+  const ac = lot.areaUm2 / (FT * FT) / 43560;
+  assert.ok(ac > 0.99 && ac < 1.0, `area ${ac} ac`);
+  assert.equal(lot.courses[0].monument, 'IRF');
+  assert.equal(lot.courses[2].monument, null);
+  // Uniform 25' + 50' on course 4: the offset polygon is inset accordingly.
+  assert.deepEqual(lot.setbackDists, [25 * FT, 25 * FT, 25 * FT, 50 * FT]);
+  const inset = lot.setbackPoly;
+  assert.equal(inset.length, 4);
+  for (const p of inset) assert.ok(pointInPoly(p, lot.pts), 'setback corners inside the lot');
+  // The road sits OUTSIDE the lot along course 4.
+  const road = site.roads[0];
+  assert.equal(road.course.i, 4);
+  for (const p of road.far) assert.ok(!pointInPoly(p, lot.pts), 'road far edge outside the lot');
+  // A course that fails to close warns with the miss distance.
+  const bad = layoutDocument(parseDocument(`lot N 0 E 100' S 90 E 100' S 0 W 100' N 90 W 90'\n`));
+  assert.match(bad.issues[0].message, /misses closing by 10'/);
+  assert.equal(bad.issues[0].severity, 'warning');
+  assert.match(layoutDocument(parseDocument(`lot N 0 E 100'\n`)).issues[0].message, /at least three courses/);
+  assert.match(layoutDocument(parseDocument(`course N 0 E 100'\n`)).issues[0].message, /declare a "lot"/);
+});
+
+test('layout: buildings stamp a floor onto the lot and flag encroachment', () => {
+  const scene = layoutDocument(parseDocument(SITE));
+  const site = scene.floors[1];
+  const [house, shed] = site.buildings;
+  assert.ok(house.floor, 'from floor 1 resolved');
+  assert.equal(house.w, scene.floors[0].outerBbox.w);           // the floor's walled envelope
+  assert.equal(house.angle, 10);
+  assert.equal(house.label, 'Proposed House');
+  assert.equal(shed.w, 12 * FT);
+  assert.equal(shed.label, 'Shed');
+  // The shed at 30' from the west line sits inside the 50' front setback → warning.
+  const warns = scene.issues.filter(i => /encroaches/.test(i.message));
+  assert.equal(warns.length, 1);
+  assert.equal(warns[0].line, shed.line);
+  // Unknown floor is an error; a building outside the lot warns.
+  const SQ = `lot N 0 E 100' S 90 E 100' S 0 W 100' N 90 W 100'`;
+  const nf = layoutDocument(parseDocument(`room a 10' x 10'\nsite\n${SQ}\nbuilding from floor 7 at 10', 10'\n`));
+  assert.equal(nf.issues.length, 1);
+  assert.match(nf.issues[0].message, /no floor 7/);
+  const out = layoutDocument(parseDocument(`${SQ}\nbuilding 20' x 20' at 200', 200'\n`));
+  assert.equal(out.issues.length, 1);
+  assert.match(out.issues[0].message, /not entirely inside lot/);
+  // Features, trees, driveways, notes and lines all land with bboxes.
+  assert.equal(site.features.length, 3);
+  assert.ok(site.features[0].point && site.features[0].type === 'well');
+  assert.equal(site.trees[0].canopy, 24 * FT);                  // 1' of spread per inch of caliper
+  assert.equal(site.driveways[0].width, 12 * FT);
+  assert.equal(site.notes[0].text, 'hello');
+  assert.equal(site.lines[0].dashed, true);
+  assert.equal(site.contours.length, 2);
+  assert.ok(site.outerBbox.w > 260 * FT, 'extents cover the lot and the road');
+});
+
+test('svg: site sheets render rotated, at their own scale, with north arrow + scale bar', () => {
+  const scene = layoutDocument(parseDocument(SITE));
+  const site = scene.floors[1];
+  const { svg, widthMm } = renderFloorSvg(site, scene.meta, { interactive: true });
+  assert.match(svg, /class="ud-svg ud-site-svg"/);
+  assert.match(svg, /<g class="ud-site" transform="rotate\(-90\)">/);
+  for (const cls of ['ud-s-lot', 'ud-s-course', 'ud-s-setback', 'ud-s-contour', 'ud-s-building', 'ud-s-road',
+    'ud-s-driveway', 'ud-s-feature', 'ud-s-tree', 'ud-s-note', 'ud-s-line', 'ud-s-north', 'ud-s-scale']) {
+    assert.match(svg, new RegExp(cls), cls);
+  }
+  assert.match(svg, /N 87°35'24&quot; E/);                    // course bearing text
+  assert.match(svg, /210\.48'/);                               // course distance
+  assert.match(svg, /SF \(0\.99\d AC\)/);                      // lot area
+  assert.match(svg, /LEES RIDGE ROAD/);
+  assert.match(svg, /25' SETBACK/);
+  assert.match(svg, /class="ud-walls"/);                       // the floor's walls on the lot
+  assert.match(svg, /SCALE: 1&quot; = 30'/);
+  assert.match(svg, /data-doc-from/);
+  // Exports: no hit targets, styles embedded; print body sized by the SITE ratio.
+  const doc = renderExportSvg(scene, 1);
+  assert.doesNotMatch(doc, /ud-hit/);
+  assert.match(doc, /\.ud-s-ln\{/);
+  const body = renderPrintBody(scene, 'Site Test');
+  const widths = [...body.matchAll(/width="([\d.]+)in"/g)].map(m => parseFloat(m[1]));
+  assert.equal(widths.length, 2);
+  assert.ok(Math.abs(widths[1] - widthMm / 25.4 / 360) < 0.01, 'site sheet at 1"=30\'');
+  assert.match(body, /Site Test — Lot 1 — SCALE: 1&quot; = 30'/);
+  // Scope extents come back in SCREEN space (rotated): the lot is wider N–S
+  // in the model, so after `north left` its screen box is wider than tall.
+  const ext = scopeExtent(site, { entFrom: site.lots[0].from });
+  assert.ok(ext.w > 0 && ext.h > 0);
+  assert.equal(annotationMarkup(site, scene.meta, { entFrom: site.lots[0].from }), '');
+  // Every site record is addressable by its statement offset.
+  const ids = siteRecords(site).map(r => r.from);
+  assert.ok(ids.includes(site.trees[0].from) && ids.includes(site.lots[0].courses[1].from));
+});
+
+test('syntax: lot/course lines with bearings still round-trip exactly', async () => {
+  const { classifyDoc, renderLineHtml } = await import('../src/udraft/syntax.js');
+  const textContent = (html) => html.replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const lines = [
+    `lot "PIN 1" N 87°35'24" E 210.48' "IRF"   # north line`,
+    `course S 14°18'14" E 210.21' "IRF"`,
+    `well at 120', 100' "Proposed well"`,
+    `feature drainfield 60' x 40' at 130', 20' "Reserve #1"`,
+    `site "Lot 1" scale 1"=30' north left`,
+  ];
+  const infos = classifyDoc(lines);
+  for (let i = 0; i < lines.length; i++) {
+    assert.equal(textContent(renderLineHtml(lines[i], infos[i])), lines[i], lines[i]);
+  }
+  assert.equal(infos[0].kw, 'lot');
+  assert.equal(infos[2].kw, 'well');                           // bare feature keyword
+  assert.match(renderLineHtml(lines[1], infos[1]), /class="dir">S 14°18'14" E</);
 });

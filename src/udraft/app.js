@@ -35,9 +35,9 @@ import { UPubEditor } from '../upub/editor.js';
 import { SlashMenu } from '../upub/slash-menu.js';
 import { renderMarkdown } from '../upub/preview.js';
 import * as udSyntax from './syntax.js';
-import { parseDocument, formatArea, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SHAPE_NAMES } from '../core/udraft/parse.js';
+import { parseDocument, formatArea, formatElevation, tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SHAPE_NAMES, SITE_FEATURES } from '../core/udraft/parse.js';
 import { layoutDocument } from '../core/udraft/layout.js';
-import { renderFloorSvg, renderExportSvg, renderPrintBody, exportStyles, scopeExtent } from '../core/udraft/svg.js';
+import { renderFloorSvg, renderExportSvg, renderPrintSheets, exportStyles, scopeExtent, siteRecords } from '../core/udraft/svg.js';
 import { GUIDE_MD } from './guide-content.js';
 
 const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
@@ -136,6 +136,41 @@ fixture rec     piano        centered               # same object — defined on
 
 label rec "Rec Room"
 note  rec "below grade"
+
+# ── Site plan ─────────────────────────────────────────────────────────────
+# A "site" sheet draws the lot: surveyor's courses (bearing + distance from
+# the point of beginning, clockwise), setbacks, contours, the house — its
+# real walls, from floor 1 — and everything else on the land.  Coordinates
+# are x east / y south from the point of beginning.
+site "Lot 7, Loon Lake" scale 1"=20'
+
+lot "LOT 7" S 77°30'00" E 150' "IPF"                    # north line, along the road
+course S 12°30'00" W 120' "IPF"
+course S 45°00'00" W 60'
+course N 82°03'44" W 118.14'                            # along the shore
+course N 12°30'00" E 180' "IPF"
+setback 30'
+setback 50' course 1                                    # front setback off the road
+
+road "Loon Lake Road" along course 1 width 50' "State Route 12"
+building from floor 1 at 50', 75' "Cottage"
+driveway 10' from 76', -10' to 66', 50' to 60', 72'
+
+well at 25', 60' "Well"
+septic at 95', 95'
+drainfield 40' x 24' at 90', 110' "Drainfield"
+feature deck 6' x 24' at 57', 187' "Dock"
+tree 18" "white pine" at 30', 120'
+tree 30" "oak" at 118', 60'
+tree 12" "birch" at 92', 150'
+
+line "Loon Lake" smooth -60,196 0,204 60,210 120,204 170,190
+contour 1010 index -20,40 40,45 100,42 160,48
+contour 1008 -30,75 40,78 100,74 160,80
+contour 1006 -35,105 40,108 100,104 160,110
+contour 1004 -40,135 40,138 100,134 165,140
+contour 1002 -45,160 40,163 100,160 170,166
+contour 1000 index -55,182 40,186 100,183 175,190
 `;
 
 const ICONS = {
@@ -395,6 +430,8 @@ export class UDraftApp {
     this._bindScopeEdit();
   }
 
+  _activeSheet() { return this.scene?.floors[this.activeFloor] ?? null; }
+
   _ctxRoom() {
     if (!this._ctxRoomId) return null;
     return this.scene.floors[this.activeFloor]?.rooms.find(r => r.id === this._ctxRoomId) ?? null;
@@ -427,6 +464,10 @@ export class UDraftApp {
   _tapEnt(from) {
     const rec = this._entIndex?.get(from);
     if (!rec) return;                                     // auto dims etc.
+    if (this._activeSheet()?.kind === 'site') {           // sites: flat — select outright
+      this._setScope(null, this._selFrom === from ? null : from);
+      return;
+    }
     const inCtx = this._ctxRoomId
       && (rec.roomId === this._ctxRoomId || rec.rooms?.includes(this._ctxRoomId));
     if (!inCtx) {
@@ -466,7 +507,7 @@ export class UDraftApp {
       // isolated room render).
       const ext = scopeExtent(floor, scope);
       if (ext) {
-        const m = this.scene.meta.wallExt / 1000 + 700;
+        const m = floor.kind === 'site' ? floor.ratio * 4 : this.scene.meta.wallExt / 1000 + 700;
         this._animateView(svg, [
           ext.x / 1000 - m, ext.y / 1000 - m,
           ext.w / 1000 + 2 * m, ext.h / 1000 + 2 * m,
@@ -517,12 +558,17 @@ export class UDraftApp {
     bar.hidden = false;
 
     const floor = this.scene.floors[this.activeFloor];
-    const floorName = floor ? (floor.title || (floor.num != null ? `Floor ${floor.num}` : 'Floor')) : 'Floor';
+    const floorName = floor ? (floor.title || (floor.kind === 'site' ? 'Site' : floor.num != null ? `Floor ${floor.num}` : 'Floor')) : 'Floor';
     const crumbs = [`<button class="ud-crumb-btn" data-nav="floor">${esc(floorName)}</button>`];
     let title;
     if (sel) {
       if (room) crumbs.push(`<button class="ud-crumb-btn" data-nav="room">${esc(room.label.toUpperCase())}</button>`);
-      title = esc((sel.kind === 'fixture' ? sel.type : sel.kind).toUpperCase());
+      const name = (sel.kind === 'fixture' || sel.kind === 'feature') ? sel.type
+        : sel.kind === 'lot' ? (sel.label || 'lot')
+        : sel.kind === 'course' ? `course ${sel.i}`
+        : sel.kind === 'contour' ? `contour ${formatElevation(sel.elev, this.scene.meta.units)}`
+        : sel.kind;
+      title = esc(String(name).toUpperCase());
     } else {
       title = esc(room.label.toUpperCase());
     }
@@ -583,9 +629,14 @@ export class UDraftApp {
     if (this._selFrom != null) {
       const rec = this._entIndex?.get(this._selFrom);
       if (!rec) return [];
+      // A lot edits as a block: its line, every `course` and `setback` of it.
+      if (rec.kind === 'lot') {
+        const lines = new Set([rec.line, ...rec.courses.map(c => c.line), ...rec.setbacks.map(sb => sb.line)]);
+        return [...lines].sort((a, b) => a - b);
+      }
       // A custom object's `define` travels with its placement — long-press
       // edits both the footprint and where it stands.
-      const def = rec.kind === 'fixture' ? this.scene.defines?.get(rec.type) : null;
+      const def = (rec.kind === 'fixture' || rec.kind === 'feature') ? this.scene.defines?.get(rec.type) : null;
       return def ? [def.line, rec.line] : [rec.line];
     }
     const room = this._ctxRoom();
@@ -771,6 +822,11 @@ export class UDraftApp {
           } else if (g.dataset.docFrom != null) {
             const rec = this._entIndex?.get(+g.dataset.docFrom);
             if (!rec) return;
+            if (this._activeSheet()?.kind === 'site') {
+              this._setScope(null, +g.dataset.docFrom);
+              this._openScopeEditor();
+              return;
+            }
             const owner = this._roomOfRec(rec);
             const inCtx = this._ctxRoomId
               && (rec.roomId === this._ctxRoomId || rec.rooms?.includes(this._ctxRoomId));
@@ -885,6 +941,32 @@ export class UDraftApp {
       tpl: 'dim room south', ph: 'room' },
     { id: 'floor',   label: 'Floor',          hint: 'storey',    block: true, keywords: 'level storey story',
       tpl: 'floor 2 "Second Floor"', ph: '2' },
+    { id: 'site',    label: 'Site plan',      hint: 'sheet',     block: true, keywords: 'site plan plot survey lot land exterior',
+      tpl: `site "Site Plan" scale 1"=20' north up`, ph: 'Site Plan' },
+    { id: 'lot',     label: 'Lot',            hint: 'survey',    block: true, keywords: 'lot parcel boundary survey metes bounds plat property',
+      tpl: `lot "Lot 1" N 12°30'00" E 180' "IPF"\ncourse S 77°30'00" E 150' "IPF"\ncourse S 12°30'00" W 180'\ncourse N 77°30'00" W 150'`, ph: 'Lot 1' },
+    { id: 'course',  label: 'Course',         hint: 'bearing',   block: true, keywords: 'course bearing distance survey leg boundary',
+      tpl: `course N 45°00'00" E 100'`, ph: `N 45°00'00" E 100'` },
+    { id: 'setback', label: 'Setback',        hint: "25'",       block: true, keywords: 'setback zoning building line offset',
+      tpl: `setback 25'`, ph: `25'` },
+    { id: 'contour', label: 'Contour',        hint: 'elevation', block: true, keywords: 'contour elevation topo grade slope survey land',
+      tpl: `contour 100 0,50 40,48 80,45 120,40`, ph: '100' },
+    { id: 'building', label: 'Building',      hint: 'footprint', block: true, keywords: 'building house footprint from floor site',
+      tpl: `building from floor 1 at 40', 40' "House"`, ph: `40', 40'` },
+    { id: 'driveway', label: 'Driveway',      hint: "12'",       block: true, keywords: 'driveway drive road access path site',
+      tpl: `driveway 12' from 0', 0' to 40', 30' to 60', 60'`, ph: `0', 0'` },
+    { id: 'road',    label: 'Road',           hint: 'R/W',       block: true, keywords: 'road street right of way site',
+      tpl: `road "Road Name" along course 1 width 50'`, ph: 'Road Name' },
+    { id: 'well',    label: 'Well',           hint: 'site',      block: true, keywords: 'well water site',
+      tpl: `well at 60', 40' "Well"`, ph: `60', 40'` },
+    { id: 'tree',    label: 'Tree',           hint: '24"',       block: true, keywords: 'tree oak walnut canopy site',
+      tpl: `tree 24" "oak" at 60', 40'`, ph: `60', 40'` },
+    { id: 'feature', label: 'Site feature',   hint: 'septic…',   block: true, keywords: 'feature septic drainfield shed garage deck pool pad site',
+      tpl: `feature drainfield 50' x 30' at 100', 20' "Drainfield"`, ph: 'drainfield' },
+    { id: 'line',    label: 'Site line',      hint: 'shore…',    block: true, keywords: 'line shoreline fence pipe utility site',
+      tpl: `line "Shoreline" smooth 0,200 40,195 80,205`, ph: 'Shoreline' },
+    { id: 'snote',   label: 'Site note',      hint: '"…"',       block: true, keywords: 'note text annotation site',
+      tpl: `note at 10', 10' "text"`, ph: 'text' },
     { id: 'fm',      label: 'Front matter',   hint: '---',       block: true, keywords: 'title units scale settings meta',
       tpl: '---\ntitle: Untitled\nunits: imperial\nscale: 1/4in\n---', ph: 'Untitled' },
     { id: 'undo',    label: 'Undo',           keywords: 'revert back' },
@@ -1005,15 +1087,31 @@ export class UDraftApp {
       .map(r => r.id))].map(id => item(id, 'room'));
     const sideItems = () => ['north', 'south', 'east', 'west'].map(s => item(s, 'side'));
 
+    const lotItems = () => [...new Set((this.scene ? this.scene.floors.flatMap(f => f.lots ?? []) : [])
+      .map(l => l.id))].map(id => item(id, 'lot'));
+
     let items = null;
     if (!toks.length) {
       if (!/^\s*$/.test(beforeWord)) return null;
-      items = STATEMENT_KEYWORDS.map(k => item(k, 'statement', k + ' '));
+      items = [
+        ...STATEMENT_KEYWORDS.map(k => item(k, 'statement', k + ' ')),
+        ...Object.keys(SITE_FEATURES).map(k => item(k, 'site feature', k + ' ')),
+      ];
     } else {
       const kw = toks[0].t === 'word' ? toks[0].v.toLowerCase() : null;
       const last = toks[toks.length - 1];
       const lw = last.t === 'word' ? last.v.toLowerCase() : null;
       if (last.t === 'slash') items = roomItems();
+      else if (kw === 'site' && lw === 'north') items = ['up', 'left', 'right', 'down'].map(w => item(w, 'north'));
+      else if (kw === 'road' && lw === 'along') items = [item('course', 'course')];
+      else if (kw === 'building' && lw === 'from') items = [item('floor', 'floor')];
+      else if ((kw === 'setback' || kw === 'road' || kw === 'lot') && (lw === 'of' || lw === 'from')) items = lotItems();
+      else if (kw === 'feature' && toks.length === 1) {
+        items = [
+          ...Object.keys(SITE_FEATURES).map(t => item(t, 'feature', t + ' ')),
+          ...[...(this.scene?.defines?.keys() ?? [])].map(t => item(t, 'object', t + ' ')),
+        ];
+      }
       else if (lw === 'of') items = roomItems();
       else if (lw === 'swing') items = [...roomItems(), item('in', 'inward'), item('out', 'outward')];
       else if (lw === 'align' || lw === 'from' || lw === 'on' || lw === 'along' || lw === 'facing') items = sideItems();
@@ -1063,10 +1161,11 @@ export class UDraftApp {
     const el = document.getElementById('wr-count');
     if (!el || !this.scene) return;
     const rooms = this.scene.floors.reduce((n, f) => n + f.rooms.length, 0);
+    const lots = this.scene.floors.reduce((n, f) => n + (f.lots?.length ?? 0), 0);
     const area = this.scene.floors.reduce((n, f) => n + f.rooms.reduce((a, r) => a + r.areaUm2, 0), 0);
     const errs = this.scene.issues.filter(i => i.severity === 'error').length;
     const mode = this._countMode || 0;
-    el.textContent = mode === 0 ? `${rooms} room${rooms === 1 ? '' : 's'}`
+    el.textContent = mode === 0 ? (rooms || !lots ? `${rooms} room${rooms === 1 ? '' : 's'}` : `${lots} lot${lots === 1 ? '' : 's'}`)
       : mode === 1 ? formatArea(area, this.scene.meta.units)
       : errs ? `${errs} issue${errs === 1 ? '' : 's'}` : 'no issues';
     el.classList.toggle('ud-has-issues', errs > 0);
@@ -1139,11 +1238,19 @@ export class UDraftApp {
     const tabs = document.getElementById('ud-ptabs');
     if (floors.length > 1) {
       tabs.hidden = false;
+      // Floors by number (when every floor has one), site sheets after them.
       const order = floors.map((f, i) => i);
-      if (floors.every(f => f.num != null)) order.sort((a, b) => floors[a].num - floors[b].num);
+      const realFloors = floors.filter(f => f.kind !== 'site');
+      if (realFloors.every(f => f.num != null)) {
+        order.sort((a, b) => {
+          const fa = floors[a], fb = floors[b];
+          if ((fa.kind === 'site') !== (fb.kind === 'site')) return fa.kind === 'site' ? 1 : -1;
+          return fa.kind === 'site' ? a - b : fa.num - fb.num;
+        });
+      }
       tabs.innerHTML = order.map(i => {
         const f = floors[i];
-        const name = f.title || (f.num != null ? `Floor ${f.num}` : `Floor ${i + 1}`);
+        const name = f.title || (f.kind === 'site' ? 'Site' : f.num != null ? `Floor ${f.num}` : `Floor ${i + 1}`);
         return `<button data-floor="${i}" class="${i === this.activeFloor ? 'active' : ''}">${esc(name)}</button>`;
       }).join('');
     } else {
@@ -1164,8 +1271,11 @@ export class UDraftApp {
 
     const floor = floors[this.activeFloor];
     const plan = document.getElementById('ud-plan');
-    if (!floor || !floor.rooms.length) {
-      plan.innerHTML = '<p class="ud-empty">Declare a room to start drawing — try <code>room living 16\' x 13\'</code>, or type <code>/</code>. Or load the <b>Example plan</b> from the ⋯ menu.</p>';
+    const empty = !floor || (floor.kind === 'site' ? !siteRecords(floor).length : !floor.rooms.length);
+    if (empty) {
+      plan.innerHTML = floor?.kind === 'site'
+        ? '<p class="ud-empty">Declare a lot to start the site plan — try <code>lot N 12°30\' E 180\' S 77°30\' E 150\' …</code>, or type <code>/</code>.</p>'
+        : '<p class="ud-empty">Declare a room to start drawing — try <code>room living 16\' x 13\'</code>, or type <code>/</code>. Or load the <b>Example plan</b> from the ⋯ menu.</p>';
       this._ctxRoomId = null;
       this._selFrom = null;
       this._entIndex = new Map();
@@ -1179,6 +1289,11 @@ export class UDraftApp {
     // half-typed statement must not collapse the scope out from under the
     // person typing it (the issue strip already shows what's wrong).
     const idx = new Map();
+    if (floor.kind === 'site') {
+      // Courses first so a lot declared with inline courses (same line) wins.
+      for (const c of floor.lots.flatMap(l => l.courses)) idx.set(c.from, { kind: 'course', ...c });
+      for (const r of siteRecords(floor)) if (r.kind !== 'course') idx.set(r.from, r);
+    }
     for (const r of floor.rooms) idx.set(r.from, { kind: 'room', ...r });
     for (const o of floor.openings) idx.set(o.from, o);
     for (const f of floor.fixtures) idx.set(f.from, { kind: 'fixture', ...f });
@@ -1365,15 +1480,21 @@ export class UDraftApp {
     });
   }
 
-  /** Print window sized so the plan is at true drawing scale (see svg.js). */
+  /**
+   * Print window sized so the plan is at true drawing scale (see svg.js).
+   * Every sheet gets its own NAMED PAGE sized to hold it (letter → tabloid →
+   * C → D, else a custom size): a floor at 1/4" or a lot at 1"=20' is wider
+   * than letter, and an overflowing `@page size:letter` just clipped it.
+   */
   _exportPdf() {
     const win = window.open('', '_blank');
     if (!win) { this._toast('Allow pop-ups to export a PDF'); return; }
-    const body = renderPrintBody(this.scene, this.title);
+    const sheets = renderPrintSheets(this.scene, this.title);
+    const rules = sheets.map(s => `@page ${s.name}{size:${s.pageW}in ${s.pageH}in;margin:0}`).join('\n');
     win.document.write(`<!doctype html><html><head><meta charset="utf-8">`
       + `<title>${esc(this.title)}</title>`
-      + `<style>@page{size:letter;margin:0}html,body{margin:0}body{padding:0.5in}</style>`
-      + `</head><body>${body}</body></html>`);
+      + `<style>@page{margin:0}${rules}html,body{margin:0}body{padding:0.5in}.ud-sheet{padding-top:0.3in}</style>`
+      + `</head><body>${sheets.map(s => s.html).join('\n')}</body></html>`);
     win.document.close();
     setTimeout(() => { try { win.focus(); win.print(); } catch { /* user closed it */ } }, 350);
   }

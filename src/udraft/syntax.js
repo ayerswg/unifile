@@ -19,16 +19,22 @@
  * diagnostics live in the preview's issue strip).
  */
 
-import { tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SHAPE_NAMES } from '../core/udraft/parse.js';
+import { tokenizeLine, STATEMENT_KEYWORDS, FIXTURES, SHAPE_NAMES, SITE_FEATURES } from '../core/udraft/parse.js';
 
-const KEYWORDS = new Set(STATEMENT_KEYWORDS);
-const SIDES = new Set(['north', 'south', 'east', 'west', 'n', 's', 'e', 'w']);
+// Site feature types double as statement keywords (`well at …`).
+const KEYWORDS = new Set([...STATEMENT_KEYWORDS, ...Object.keys(SITE_FEATURES)]);
+const SIDES = new Set(['north', 'south', 'east', 'west', 'n', 's', 'e', 'w',
+  'ne', 'nw', 'se', 'sw', 'northeast', 'northwest', 'southeast', 'southwest']);
 const CONNECTIVES = new Set([
   'of', 'align', 'offset', 'at', 'from', 'centered', 'center', 'centred',
   'swing', 'on', 'along', 'facing', 'x', 'outline', 'close', 'up', 'down',
   'in', 'out', 'shape', 'path',
+  // site plan
+  'scale', 'north', 'left', 'right', 'corner', 'course', 'index', 'dashed',
+  'smooth', 'to', 'width', 'rotate', 'rotated', 'canopy', 'floor', 'az',
 ]);
 const FIXTURE_TYPES = new Set(Object.keys(FIXTURES));
+const SITE_TYPES = new Set(Object.keys(SITE_FEATURES));
 const SHAPES = new Set(SHAPE_NAMES);
 // `define … path M 0 0 L 5' 0 …` — the path letters read as operators.
 const PATH_LETTERS = new Set(['m', 'l', 'h', 'v', 'c', 'q', 'z']);
@@ -118,7 +124,8 @@ export function renderLineHtml(line, info) {
 function renderStmt(line, info) {
   const cs = commentStart(line);
   const code = cs >= 0 ? line.slice(0, cs) : line;
-  const tokens = tokenizeLine(code);
+  // `lot` / `course` lines carry surveyor's bearings (`N 87°35'24" E`).
+  const tokens = tokenizeLine(code, { bearings: info.kw === 'lot' || info.kw === 'course' });
   let out = '';
   let pos = 0;
   let first = true;
@@ -129,6 +136,7 @@ function renderStmt(line, info) {
     const raw = t.t === 'str' ? code.slice(t.col, t.col + t.v.length + 2) : t.v;
     let cls = null;
     if (t.t === 'len' || t.t === 'num') cls = 'len';
+    else if (t.t === 'bearing') cls = 'dir';
     else if (t.t === 'str') cls = 'str';
     else if (t.t === 'slash') cls = 'op';
     else if (t.t === 'word') {
@@ -138,6 +146,7 @@ function renderStmt(line, info) {
       else if (SIDES.has(w)) cls = 'dir';
       else if (CONNECTIVES.has(w)) { cls = 'op'; if (info.kw === 'define' && w === 'path') inPath = true; }
       else if (info.kw === 'fixture' && FIXTURE_TYPES.has(w)) cls = 'fix';
+      else if (info.kw === 'feature' && SITE_TYPES.has(w)) cls = 'fix';
       else if (info.kw === 'define' && SHAPES.has(w)) cls = 'fix';
       else cls = 'id';
     }

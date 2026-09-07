@@ -191,20 +191,42 @@
 #ud-plan .ud-fix-txt { font-size: 170px; fill: var(--fg-mut); }
 #ud-plan .ud-stair-txt { font-size: 180px; fill: var(--fg-mut); font-weight: 600; }
 
+/* Site plan classes (svg.js renderSiteSvg): colours only — pen weights and
+   text sizes travel as attributes, scaled to the sheet's own ratio. */
+#ud-plan .ud-s-ln    { stroke: var(--fg); fill: none; stroke-linecap: round; stroke-linejoin: round; }
+#ud-plan .ud-s-mut   { stroke: var(--fg-mut); }
+#ud-plan .ud-s-fill  { fill: var(--fg); fill-opacity: 0.10; stroke: none; }
+#ud-plan .ud-s-paper { stroke: var(--bg); }
+#ud-plan .ud-s-txt   { fill: var(--fg); stroke: none; }
+#ud-plan .ud-s-txt.ud-s-mut { fill: var(--fg-mut); stroke: none; }
+#ud-plan .ud-s-halo  { paint-order: stroke; stroke: var(--bg); stroke-linejoin: round; }
+#ud-plan .ud-s-bold  { font-weight: 600; letter-spacing: 0.06em; }
+
 #ud-plan .ud-ent { cursor: pointer; }
 #ud-plan .ud-hit { pointer-events: all; }
 #ud-plan .ud-room-hit { pointer-events: all; cursor: pointer; }
 #ud-plan .ud-ent:hover .ud-sym,
-#ud-plan .ud-ent:hover .ud-thin { stroke: var(--accent); }
-#ud-plan .ud-ent:hover .ud-txt  { fill: var(--accent); }
+#ud-plan .ud-ent:hover .ud-thin,
+#ud-plan .ud-ent:hover .ud-s-ln:not(.ud-s-paper) { stroke: var(--accent); }
+#ud-plan .ud-ent:hover .ud-txt,
+#ud-plan .ud-ent:hover .ud-s-txt { fill: var(--accent); }
 /* Hovering a room's interior shouldn't light the label if the label is its
    own target (a `label` statement) — the inner group re-scopes the hover. */
 #ud-plan .ud-ent.ud-roomlabel:hover .ud-txt { fill: var(--accent); }
 
 /* Selected object: accent linework + a dashed marquee over its hit area. */
 #ud-plan .ud-selected .ud-sym,
-#ud-plan .ud-selected .ud-thin { stroke: var(--accent); }
-#ud-plan .ud-selected .ud-txt  { fill: var(--accent); }
+#ud-plan .ud-selected .ud-thin,
+#ud-plan .ud-selected .ud-s-ln:not(.ud-s-paper) { stroke: var(--accent); }
+#ud-plan .ud-selected .ud-txt,
+#ud-plan .ud-selected .ud-s-txt { fill: var(--accent); }
+/* Site hit shapes are lines/paths as well as rects — the marquee follows. */
+#ud-plan .ud-site-svg .ud-selected > .ud-hit {
+  stroke: var(--accent);
+  stroke-dasharray: none;
+  stroke-opacity: 0.35;
+  fill: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 #ud-plan .ud-selected > .ud-hit {
   stroke: var(--accent);
   stroke-width: 18;

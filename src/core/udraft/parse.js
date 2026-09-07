@@ -94,7 +94,104 @@ export const SIDE_NAMES = { n: 'north', s: 'south', e: 'east', w: 'west' };
 export const STATEMENT_KEYWORDS = [
   'floor', 'room', 'door', 'window', 'opening', 'stairs', 'fixture',
   'define', 'label', 'note', 'dim',
+  // Site plan (the `site` sheet — see "Site plans" in the guide).
+  'site', 'lot', 'course', 'setback', 'contour', 'line', 'building', 'road',
+  'driveway', 'feature', 'tree',
 ];
+
+/** Statements that only make sense on a `site` sheet (they open one implicitly). */
+export const SITE_KEYWORDS = new Set([
+  'lot', 'course', 'setback', 'contour', 'line', 'building', 'road', 'driveway',
+  'feature', 'tree',
+]);
+
+/**
+ * Site feature library: type → { w, d } default footprint (µm) and whether it
+ * is an AREA (a footprint drawn at true size — a drainfield, a shed) or a
+ * POINT symbol (drawn at paper size whatever the scale — a well, a pin).
+ * Any of these also works as a statement keyword of its own
+ * (`well at 120', 100'` ≡ `feature well at 120', 100'`).
+ */
+export const SITE_FEATURES = {
+  well:       { w: 3 * UM_PER_FOOT,  d: 3 * UM_PER_FOOT,  point: true },
+  septic:     { w: 8 * UM_PER_FOOT,  d: 5 * UM_PER_FOOT },
+  tank:       { w: 8 * UM_PER_FOOT,  d: 5 * UM_PER_FOOT },
+  drainfield: { w: 50 * UM_PER_FOOT, d: 30 * UM_PER_FOOT, dashed: true },
+  pad:        { w: 10 * UM_PER_FOOT, d: 10 * UM_PER_FOOT },
+  deck:       { w: 16 * UM_PER_FOOT, d: 12 * UM_PER_FOOT },
+  patio:      { w: 16 * UM_PER_FOOT, d: 12 * UM_PER_FOOT },
+  pool:       { w: 32 * UM_PER_FOOT, d: 16 * UM_PER_FOOT },
+  shed:       { w: 12 * UM_PER_FOOT, d: 10 * UM_PER_FOOT },
+  garage:     { w: 24 * UM_PER_FOOT, d: 24 * UM_PER_FOOT },
+  barn:       { w: 40 * UM_PER_FOOT, d: 30 * UM_PER_FOOT },
+  pin:        { w: 1 * UM_PER_FOOT,  d: 1 * UM_PER_FOOT,  point: true },
+  pole:       { w: 1 * UM_PER_FOOT,  d: 1 * UM_PER_FOOT,  point: true },
+  hydrant:    { w: 1 * UM_PER_FOOT,  d: 1 * UM_PER_FOOT,  point: true },
+  manhole:    { w: 3 * UM_PER_FOOT,  d: 3 * UM_PER_FOOT,  point: true },
+};
+
+/** Cardinal / inter-cardinal words accepted as a course bearing → azimuth °. */
+const CARDINAL_AZ = {
+  n: 0, north: 0, ne: 45, northeast: 45, e: 90, east: 90, se: 135, southeast: 135,
+  s: 180, south: 180, sw: 225, southwest: 225, w: 270, west: 270, nw: 315, northwest: 315,
+};
+
+/**
+ * Quadrant bearing → azimuth degrees clockwise from north.
+ * `N 87°35'24" E` → 87.59; `S 14°18'14" E` → 165.70; `N 14° W` → 346.
+ */
+export function bearingToAzimuth(ns, deg, min = 0, sec = 0, ew) {
+  const a = deg + min / 60 + sec / 3600;
+  const north = ns.toLowerCase() === 'n';
+  const east = ew.toLowerCase() === 'e';
+  if (north && east) return a;
+  if (!north && east) return 180 - a;
+  if (!north && !east) return 180 + a;
+  return (360 - a) % 360;
+}
+
+/** Azimuth degrees → surveyor's quadrant bearing text (`N 87°35'24" E`). */
+export function formatBearing(az) {
+  az = ((az % 360) + 360) % 360;
+  if (az === 0) return 'DUE NORTH';
+  if (az === 90) return 'DUE EAST';
+  if (az === 180) return 'DUE SOUTH';
+  if (az === 270) return 'DUE WEST';
+  let ns, ew, a;
+  if (az < 90) { ns = 'N'; ew = 'E'; a = az; }
+  else if (az < 180) { ns = 'S'; ew = 'E'; a = 180 - az; }
+  else if (az < 270) { ns = 'S'; ew = 'W'; a = az - 180; }
+  else { ns = 'N'; ew = 'W'; a = 360 - az; }
+  let total = Math.round(a * 3600);
+  const d = Math.floor(total / 3600); total -= d * 3600;
+  const m = Math.floor(total / 60); total -= m * 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${ns} ${pad(d)}°${pad(m)}'${pad(total)}" ${ew}`;
+}
+
+/** Survey-style length: decimal feet (`210.48'`) or metres (`64.15 m`). */
+export function formatSurveyLength(um, units = 'imperial') {
+  if (units === 'metric') return `${trim(um / UM_PER_M)} m`;
+  return `${(um / UM_PER_FOOT).toFixed(2).replace(/\.?0+$/, '')}'`;
+}
+
+/** Contour elevation label: plain feet (`340`, `342.5`) or metres. */
+export function formatElevation(um, units = 'imperial') {
+  const v = units === 'metric' ? um / UM_PER_M : um / UM_PER_FOOT;
+  return String(Math.round(v * 100) / 100);
+}
+
+/** Lot area: `43,259 SF (0.993 AC)` or `4,019 m² (0.402 ha)`. */
+export function formatLotArea(um2, units = 'imperial') {
+  const grp = (n) => Math.round(n).toLocaleString('en-US');
+  if (units === 'metric') {
+    const m2 = um2 / (UM_PER_M * UM_PER_M);
+    return `${grp(m2)} m² (${trim(m2 / 10000)} ha)`;
+  }
+  const sf = um2 / (UM_PER_FOOT * UM_PER_FOOT);
+  const ac = sf / 43560;
+  return `${grp(sf)} SF (${(Math.round(ac * 1000) / 1000)} AC)`;
+}
 
 /** v1 fixture symbol library: type → default {w, d} (µm; plan-view width × depth). */
 export const FIXTURES = {
@@ -135,6 +232,11 @@ const PATH_CMDS = { m: 2, l: 2, h: 1, v: 1, c: 6, q: 4, z: 0 };
 
 // Length must be tried before word/number.  `"` after digits = inch mark.
 const T_LENGTH = /^-?\d+(?:\.\d+)?(?:'(?:\d+(?:\.\d+)?"?)?|"|mm|cm|m\b)/;
+// Surveyor's quadrant bearing — ONLY on `lot`/`course` lines (opts.bearings):
+// `N 87°35'24" E`, `N87°35'24"E`, `N 87-35-24 E`, `N 87d35m24s E`, `N 87.59 E`.
+// Tried first there because its minutes/seconds (`35'24"`) would otherwise
+// lex as a length; elsewhere `N 8 E` stays an outline walk.
+const T_BEARING = /^([NnSs])\s*(\d+(?:\.\d+)?)(?:\s*(?:°|º|[dD](?:eg)?|-)\s*(?:(\d+(?:\.\d+)?)(?:\s*(?:'|′|[mM]|-)\s*(?:(\d+(?:\.\d+)?)\s*(?:"|″|[sS])?)?)?)?)?\s*([EeWw])(?![A-Za-z0-9])/;
 const T_NUMBER = /^-?\d+(?:\.\d+)?/;
 const T_WORD = /^[A-Za-z][A-Za-z0-9_-]*/;
 const T_STRING = /^"([^"]*)"/;
@@ -142,9 +244,10 @@ const T_STRING = /^"([^"]*)"/;
 /**
  * Tokenize one source line.  Commas are soft separators (skipped); `#` starts
  * a comment at line start or when preceded by whitespace.
- * @returns {Array<{t:'len'|'num'|'word'|'str'|'slash', v:string, col:number}>}
+ * `opts.bearings` enables the surveyor's-bearing token (see T_BEARING).
+ * @returns {Array<{t:'len'|'num'|'word'|'str'|'slash'|'bearing', v:string, col:number}>}
  */
-export function tokenizeLine(line) {
+export function tokenizeLine(line, opts = {}) {
   const tokens = [];
   let i = 0;
   while (i < line.length) {
@@ -153,6 +256,11 @@ export function tokenizeLine(line) {
     if (ch === ' ' || ch === '\t' || ch === ',') { i++; continue; }
     if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) break;   // comment
     let m;
+    if (opts.bearings && (m = T_BEARING.exec(rest))) {
+      const az = bearingToAzimuth(m[1], parseFloat(m[2]), m[3] ? parseFloat(m[3]) : 0,
+        m[4] ? parseFloat(m[4]) : 0, m[5]);
+      tokens.push({ t: 'bearing', v: m[0], az, col: i }); i += m[0].length; continue;
+    }
     if ((m = T_LENGTH.exec(rest))) { tokens.push({ t: 'len', v: m[0], col: i }); i += m[0].length; continue; }
     if ((m = T_STRING.exec(rest))) { tokens.push({ t: 'str', v: m[1], col: i }); i += m[0].length; continue; }
     if (ch === '/') { tokens.push({ t: 'slash', v: '/', col: i }); i++; continue; }
@@ -373,6 +481,79 @@ function parsePosition(cur, units) {
   cur.fail('expected a position ("centered" or "at <distance>")');
 }
 
+/** `<x>, <y>` — a site coordinate pair (µm each; x east, y south). */
+function parsePoint(cur, units, what = 'a point') {
+  const x = cur.length(units, `${what}: an x coordinate`);
+  const y = cur.length(units, `${what}: a y coordinate after the x`);
+  return [x, y];
+}
+
+/** A run of coordinate pairs (`0,120 40,118 …`) to the end of the line. */
+function parsePoints(cur, units, min = 2) {
+  const pts = [];
+  while (!cur.done()) {
+    const t = cur.peek();
+    if (!(t.t === 'len' || t.t === 'num')) break;
+    pts.push(parsePoint(cur, units, 'point ' + (pts.length + 1)));
+  }
+  if (pts.length < min) cur.fail(`expected at least ${min} points (x, y pairs)`);
+  return pts;
+}
+
+/**
+ * One survey course: a bearing (quadrant token, cardinal word, or `az <deg>`)
+ * followed by its distance.  `N 87°35'24" E 210.48'`, `NE 50'`, `az 92.5 40'`.
+ * @returns {{az:number, len:number}|null} null when the cursor isn't at one.
+ */
+function parseCourseLeg(cur, units) {
+  const t = cur.peek();
+  if (!t) return null;
+  let az = null;
+  if (t.t === 'bearing') { az = cur.next().az; }
+  else if (t.t === 'word' && CARDINAL_AZ[t.v.toLowerCase()] != null
+      && cur.peek(1) && (cur.peek(1).t === 'len' || cur.peek(1).t === 'num')) {
+    az = CARDINAL_AZ[cur.next().v.toLowerCase()];
+  } else if (t.t === 'word' && /^az(?:imuth)?$/i.test(t.v)) {
+    cur.next();
+    const n = cur.peek();
+    if (!n || n.t !== 'num') cur.fail('expected azimuth degrees after "az"');
+    az = parseFloat(cur.next().v);
+  } else {
+    return null;
+  }
+  const len = cur.length(units, 'the course distance after its bearing');
+  if (len <= 0) cur.fail('a course distance must be positive');
+  return { az: ((az % 360) + 360) % 360, len };
+}
+
+/**
+ * Site feature clauses (shared by `feature`, the bare feature keywords and
+ * `building`): `[<w> x <d>] at <x>, <y> [rotate <deg>] ["Label"]` in any order.
+ */
+function parseSiteClauses(cur, units, out, allow = {}) {
+  while (!cur.done()) {
+    const t = cur.peek();
+    if (t.t === 'str') { out.label = cur.string(); continue; }
+    if ((t.t === 'len' || t.t === 'num') && out.w == null && allow.size !== false) {
+      out.w = cur.length(units, 'a width');
+      cur.expectWord('"x" between width and depth', 'x');
+      out.d = cur.length(units, 'a depth after "x"');
+      if (out.w <= 0 || out.d <= 0) cur.fail('dimensions must be positive');
+      continue;
+    }
+    if (cur.word('at')) { out.at = parsePoint(cur, units, 'the position after "at"'); continue; }
+    if (cur.word('rotate', 'rotated')) {
+      const n = cur.peek();
+      if (!n || n.t !== 'num') cur.fail('expected degrees after "rotate" (clockwise)');
+      out.angle = parseFloat(cur.next().v);
+      continue;
+    }
+    if (allow.canopy && cur.word('canopy')) { out.canopy = cur.length(units, 'a canopy diameter after "canopy"'); continue; }
+    cur.fail(allow.hint || 'expected "at <x>, <y>", a "<w> x <d>" size, "rotate <deg>" or a "Label"');
+  }
+  if (!out.at) cur.fail('needs a position: at <x>, <y>');
+}
+
 const STMT_PARSERS = {
   floor(cur, units) {
     const t = cur.peek();
@@ -510,6 +691,234 @@ const STMT_PARSERS = {
     return { kind: 'define', id, w, d, label, shape, path };
   },
 
+  // ── Site plan statements ───────────────────────────────────────────────
+
+  /** `site ["Title"] [scale 1"=30' | scale 1:500 | scale 30] [north up|left|right|down|<deg>]` */
+  site(cur, units) {
+    let title = null, ratio = null, north = 0;
+    while (!cur.done()) {
+      const t = cur.peek();
+      if (t.t === 'str') { title = cur.string(); continue; }
+      if (cur.word('scale')) {
+        const a = cur.peek();
+        if (!a || !(a.t === 'len' || a.t === 'num')) cur.fail('expected a scale after "scale" (1"=30\', 1:500, or 30 for 1"=30\')');
+        cur.next();
+        const j = cur.peek();
+        if (j && j.t === 'junk' && (j.v === '=' || j.v === ':')) {
+          cur.next();
+          const b = cur.peek();
+          if (!b || !(b.t === 'len' || b.t === 'num')) cur.fail(`expected the drawing length after "${j.v}"`);
+          cur.next();
+          if (j.v === ':') {
+            ratio = parseFloat(b.v) / parseFloat(a.v);                 // 1:500
+          } else {
+            const pa = parseLength(a.v, units), pb = parseLength(b.v, units);
+            if (!pa || !pb) cur.fail('bad scale lengths');
+            ratio = pb / pa;                                           // 1" = 30'
+          }
+        } else if (a.t === 'num') {
+          ratio = parseFloat(a.v) * (units === 'metric' ? 1 : 12);     // 30 → 1"=30'
+        } else {
+          cur.fail('expected "scale 1\"=30\'" or "scale 1:500"');
+        }
+        if (!(ratio > 0)) cur.fail('the scale must be positive');
+        continue;
+      }
+      if (cur.word('north')) {
+        const n = cur.peek();
+        if (n && n.t === 'num') { north = parseFloat(cur.next().v); continue; }
+        const w = cur.expectWord('"up", "left", "right", "down" or degrees after "north"', 'up', 'left', 'right', 'down');
+        north = { up: 0, right: 90, down: 180, left: -90 }[w];
+        continue;
+      }
+      cur.fail('expected a "Title", "scale …" or "north …"');
+    }
+    return { kind: 'site', title, ratio, north };
+  },
+
+  /**
+   * `lot [<id>] ["Label"] [at <x>, <y> | from <lot> corner <n>] [<course>…]`
+   * Courses may follow inline and/or on `course` lines below.
+   */
+  lot(cur, units) {
+    let id = null, label = null, at = null, fromLot = null;
+    const t0 = cur.peek();
+    if (t0 && t0.t === 'word' && CARDINAL_AZ[t0.v.toLowerCase()] == null
+        && !/^az(?:imuth)?$/i.test(t0.v) && !['at', 'from', 'close'].includes(t0.v.toLowerCase())) {
+      id = cur.ident('a lot name');
+    }
+    const legs = [];
+    while (!cur.done()) {
+      const t = cur.peek();
+      if (t.t === 'str') {
+        if (legs.length) legs[legs.length - 1].monument = cur.string();
+        else label = cur.string();
+        continue;
+      }
+      if (cur.word('at')) { at = parsePoint(cur, units, 'the lot origin after "at"'); continue; }
+      if (cur.word('from')) {
+        const ref = cur.ident('a lot name after "from"');
+        cur.expectWord('"corner" after the lot name', 'corner');
+        const n = cur.peek();
+        if (!n || n.t !== 'num') cur.fail('expected a corner number after "corner"');
+        fromLot = { ref, corner: parseInt(cur.next().v, 10) };
+        continue;
+      }
+      if (cur.word('close')) continue;
+      const leg = parseCourseLeg(cur, units);
+      if (!leg) cur.fail('expected a course (e.g. N 87°35\'24" E 210.48\') or a "Label"');
+      legs.push(leg);
+    }
+    return { kind: 'lot', id: id ?? 'lot', label, at, fromLot, legs };
+  },
+
+  /** `course <bearing> <distance> ["monument at its end"]` — appends to the lot above. */
+  course(cur, units) {
+    const leg = parseCourseLeg(cur, units);
+    if (!leg) cur.fail('expected a bearing (N 87°35\'24" E, NE, or az 92.5) and a distance');
+    let monument = null;
+    if (cur.peek() && cur.peek().t === 'str') monument = cur.string();
+    cur.endOrFail();
+    return { kind: 'course', ...leg, monument };
+  },
+
+  /** `setback <distance> [course <n>] [of <lot>]` */
+  setback(cur, units) {
+    const len = cur.length(units, 'a setback distance');
+    if (len < 0) cur.fail('a setback cannot be negative');
+    let course = null, lot = null;
+    while (!cur.done()) {
+      if (cur.word('course')) {
+        const n = cur.peek();
+        if (!n || n.t !== 'num') cur.fail('expected a course number after "course"');
+        course = parseInt(cur.next().v, 10);
+        continue;
+      }
+      if (cur.word('of')) { lot = cur.ident('a lot name after "of"'); continue; }
+      cur.fail('expected "course <n>" or "of <lot>"');
+    }
+    return { kind: 'setback', len, course, lot };
+  },
+
+  /** `contour <elevation> [index] <x>,<y> <x>,<y> …` (smoothed through the points) */
+  contour(cur, units) {
+    const elev = cur.length(units, 'an elevation');
+    let index = false;
+    if (cur.word('index')) index = true;
+    const pts = parsePoints(cur, units, 2);
+    if (cur.word('index')) index = true;
+    cur.endOrFail();
+    return { kind: 'contour', elev, index, pts };
+  },
+
+  /** `line ["Label"] [dashed] [smooth] <x>,<y> <x>,<y> …` — a shoreline, a fence, a pipe. */
+  line(cur, units) {
+    let label = null, dashed = false, smooth = false;
+    for (;;) {
+      const t = cur.peek();
+      if (t && t.t === 'str') { label = cur.string(); continue; }
+      if (cur.word('dashed')) { dashed = true; continue; }
+      if (cur.word('smooth')) { smooth = true; continue; }
+      break;
+    }
+    const pts = parsePoints(cur, units, 2);
+    cur.endOrFail();
+    return { kind: 'line', label, dashed, smooth, pts };
+  },
+
+  /**
+   * `building [<id>] <w> x <d> at <x>, <y> [rotate <deg>] ["Label"]`
+   * `building [<id>] from floor [<n> | "Title"] at <x>, <y> [rotate <deg>] ["Label"]`
+   * The floor form stamps that floor's actual walls onto the lot.
+   */
+  building(cur, units) {
+    const out = { kind: 'building', id: null, floorRef: null, w: null, d: null, at: null, angle: 0, label: null };
+    const t0 = cur.peek();
+    if (t0 && t0.t === 'word' && !['from', 'at', 'rotate', 'rotated'].includes(t0.v.toLowerCase())) {
+      out.id = cur.ident('a building name');
+    }
+    if (cur.word('from')) {
+      cur.expectWord('"floor" after "from"', 'floor');
+      const n = cur.peek();
+      if (n && n.t === 'num') out.floorRef = { num: parseInt(cur.next().v, 10) };
+      else if (n && n.t === 'str') out.floorRef = { title: cur.string() };
+      else out.floorRef = { first: true };
+      parseSiteClauses(cur, units, out, { size: false,
+        hint: 'expected "at <x>, <y>", "rotate <deg>" or a "Label"' });
+    } else {
+      parseSiteClauses(cur, units, out, {});
+      if (out.w == null) cur.fail('a building needs a size (<w> x <d>) or "from floor <n>"');
+    }
+    return out;
+  },
+
+  /** `road "Name" along course <n> [of <lot>] [width <len>] ["subtitle"]` */
+  road(cur, units) {
+    const name = cur.string('the road name in quotes');
+    cur.expectWord('"along" after the road name', 'along');
+    cur.expectWord('"course" after "along"', 'course');
+    const n = cur.peek();
+    if (!n || n.t !== 'num') cur.fail('expected a course number after "course"');
+    const course = parseInt(cur.next().v, 10);
+    let lot = null, width = null, sub = null;
+    while (!cur.done()) {
+      const t = cur.peek();
+      if (t.t === 'str') { sub = cur.string(); continue; }
+      if (cur.word('of')) { lot = cur.ident('a lot name after "of"'); continue; }
+      if (cur.word('width')) { width = cur.length(units, 'a width after "width"'); continue; }
+      cur.fail('expected "of <lot>", "width <len>" or a "subtitle"');
+    }
+    return { kind: 'road', name, course, lot, width, sub };
+  },
+
+  /** `driveway <width> from <x>, <y> to <x>, <y> [to <x>, <y> …] ["Label"]` (smoothed) */
+  driveway(cur, units) {
+    const width = cur.length(units, 'the driveway width');
+    if (width <= 0) cur.fail('the driveway width must be positive');
+    cur.expectWord('"from" after the width', 'from');
+    const pts = [parsePoint(cur, units, 'the start after "from"')];
+    let label = null;
+    while (!cur.done()) {
+      if (cur.word('to')) { pts.push(parsePoint(cur, units, 'a point after "to"')); continue; }
+      if (cur.peek().t === 'str') { label = cur.string(); continue; }
+      cur.fail('expected "to <x>, <y>" or a "Label"');
+    }
+    if (pts.length < 2) cur.fail('a driveway needs at least "from <x>, <y> to <x>, <y>"');
+    return { kind: 'driveway', width, pts, label };
+  },
+
+  /** `feature <type> [<w> x <d>] at <x>, <y> [rotate <deg>] ["Label"]` */
+  feature(cur, units, ctx) {
+    const typeTok = cur.peek();
+    const type = cur.ident('a feature type');
+    if (!SITE_FEATURES[type] && !ctx?.defines?.has(type)) {
+      const known = [...Object.keys(SITE_FEATURES), ...(ctx?.defines?.keys() ?? [])];
+      throw new ParseError(`unknown feature "${type}" — one of: ${known.join(', ')}`
+        + ` (or define it above this line: define ${type} 10' x 8')`, typeTok ? typeTok.col : 0);
+    }
+    const out = { kind: 'feature', type, w: null, d: null, at: null, angle: 0, label: null };
+    parseSiteClauses(cur, units, out, {});
+    return out;
+  },
+
+  /** `tree [<caliper>] ["species"] at <x>, <y> [canopy <diameter>]` */
+  tree(cur, units) {
+    const out = { kind: 'tree', caliper: null, label: null, at: null, canopy: null };
+    while (!cur.done()) {
+      const t = cur.peek();
+      if (t.t === 'str') { out.label = cur.string(); continue; }
+      if ((t.t === 'len' || t.t === 'num') && out.caliper == null) {
+        out.caliper = cur.length(units, 'a trunk caliper');
+        continue;
+      }
+      if (cur.word('at')) { out.at = parsePoint(cur, units, 'the position after "at"'); continue; }
+      if (cur.word('canopy')) { out.canopy = cur.length(units, 'a canopy diameter after "canopy"'); continue; }
+      cur.fail('expected a caliper (24"), a "species", "at <x>, <y>" or "canopy <diameter>"');
+    }
+    if (!out.at) cur.fail('a tree needs a position: at <x>, <y>');
+    return out;
+  },
+
   label(cur) {
     const room = cur.ident('a room name');
     const text = cur.string('the label text in quotes');
@@ -517,7 +926,14 @@ const STMT_PARSERS = {
     return { kind: 'label', room, text };
   },
 
-  note(cur) {
+  note(cur, units) {
+    // Site form: `note at <x>, <y> "text"` (free text on the plan).
+    if (cur.word('at')) {
+      const at = parsePoint(cur, units, 'the position after "at"');
+      const text = cur.string('the note text in quotes');
+      cur.endOrFail();
+      return { kind: 'note', at, text };
+    }
     const room = cur.ident('a room name');
     const text = cur.string('the note text in quotes');
     cur.endOrFail();
@@ -601,7 +1017,8 @@ export function parseScale(str) {
  * @param {string} text  full document text
  * @returns {{
  *   meta: object,
- *   floors: Array<{num:number|null, title:string|null, line:number|null, statements:object[]}>,
+ *   floors: Array<{kind:'floor'|'site', num:number|null, title:string|null, line:number|null,
+ *            statements:object[], ratio?:number|null, north?:number}>,
  *   issues: Array<{line:number, col:number, from:number, to:number, message:string, severity:string}>,
  *   roomIds: string[],
  *   defines: Map<string, {w:number, d:number, label:string|null, shape:string|null,
@@ -609,6 +1026,11 @@ export function parseScale(str) {
  * }}
  * Every statement carries { line, from, to } — 0-based line index and absolute
  * char offsets of its source line (the click-to-source map).
+ *
+ * Sheets: `floor` opens a floor block, `site` a site-plan block; both live in
+ * `floors` in declaration order (a site entry has kind 'site').  A site
+ * statement (lot, contour, …) outside a site block opens an implicit site,
+ * and a floor statement inside a site block opens an implicit floor.
  */
 export function parseDocument(text) {
   const src = String(text ?? '').replace(/\r\n?/g, '\n');
@@ -624,7 +1046,11 @@ export function parseDocument(text) {
   let floor = null;
 
   const openFloor = (num, title, line) => {
-    floor = { num, title, line, statements: [], ids: new Set() };
+    floor = { kind: 'floor', num, title, line, statements: [], ids: new Set() };
+    floors.push(floor);
+  };
+  const openSite = (title, line, ratio = null, north = 0) => {
+    floor = { kind: 'site', num: null, title, line, statements: [], ids: new Set(), ratio, north };
     floors.push(floor);
   };
 
@@ -636,22 +1062,25 @@ export function parseDocument(text) {
     const to = offset + line.length;
     offset = to + 1;
     if (from < bodyFrom) continue;                        // front matter
-    const tokens = tokenizeLine(line);
-    if (!tokens.length) continue;                          // blank / comment
-
-    const head = tokens[0];
-    const kw = head.t === 'word' ? head.v.toLowerCase() : null;
+    const head0 = tokenizeLine(line)[0];
+    if (!head0) continue;                                  // blank / comment
+    let kw = head0.t === 'word' ? head0.v.toLowerCase() : null;
+    // Bare feature keywords: `well at …` ≡ `feature well at …`.
+    const bareFeature = kw && !STMT_PARSERS[kw] && SITE_FEATURES[kw] ? kw : null;
+    if (bareFeature) kw = 'feature';
     const parser = kw && STMT_PARSERS[kw];
     if (!parser) {
       issues.push({
-        line: li, col: head.col, from, to, severity: 'error',
+        line: li, col: head0.col, from, to, severity: 'error',
         message: kw
-          ? `unknown statement "${kw}" — one of: ${STATEMENT_KEYWORDS.join(', ')}`
+          ? `unknown statement "${kw}" — one of: ${STATEMENT_KEYWORDS.join(', ')} (or a site feature: ${Object.keys(SITE_FEATURES).join(', ')})`
           : 'a statement starts with a keyword (room, door, window, …)',
       });
       continue;
     }
-    const cur = new Cur(tokens.slice(1), line);
+    // `lot` / `course` lines lex surveyor's bearings (`N 87°35'24" E`).
+    const tokens = tokenizeLine(line, { bearings: kw === 'lot' || kw === 'course' });
+    const cur = new Cur(bareFeature ? tokens : tokens.slice(1), line);
     try {
       const stmt = parser(cur, meta.units, { defines });
       stmt.line = li; stmt.from = from; stmt.to = to;
@@ -659,10 +1088,14 @@ export function parseDocument(text) {
         openFloor(stmt.num, stmt.title, li);
         continue;
       }
+      if (stmt.kind === 'site') {
+        openSite(stmt.title, li, stmt.ratio, stmt.north);
+        continue;
+      }
       if (stmt.kind === 'define') {
         // Document-level, like `floor` — never opens an implicit floor.
         if (defines.has(stmt.id)) {
-          issues.push({ line: li, col: head.col, from, to, severity: 'error',
+          issues.push({ line: li, col: head0.col, from, to, severity: 'error',
             message: `object "${stmt.id}" is already defined` });
           continue;
         }
@@ -670,23 +1103,36 @@ export function parseDocument(text) {
           shape: stmt.shape, path: stmt.path, line: li, from, to });
         continue;
       }
-      if (!floor) openFloor(null, null, null);             // implicit single floor
+      const siteStmt = SITE_KEYWORDS.has(stmt.kind) || (stmt.kind === 'note' && stmt.at);
+      if (siteStmt) {
+        if (!floor || floor.kind !== 'site') openSite(null, null);   // implicit site
+      } else if (!floor || floor.kind !== 'floor') {
+        openFloor(null, null, null);                       // implicit floor
+      }
       if (stmt.kind === 'room') {
         // Ids are scoped PER FLOOR (each storey can have its own "bath");
         // roomIds stays the deduped global list for editor autocomplete.
         if (floor.ids.has(stmt.id)) {
-          issues.push({ line: li, col: head.col, from, to, severity: 'error',
+          issues.push({ line: li, col: head0.col, from, to, severity: 'error',
             message: `room "${stmt.id}" is already declared on this floor` });
           continue;
         }
         floor.ids.add(stmt.id);
         if (!roomIds.includes(stmt.id)) roomIds.push(stmt.id);
       }
+      if (stmt.kind === 'lot') {
+        if (floor.ids.has(stmt.id)) {
+          issues.push({ line: li, col: head0.col, from, to, severity: 'error',
+            message: `lot "${stmt.id}" is already declared on this site` });
+          continue;
+        }
+        floor.ids.add(stmt.id);
+      }
       floor.statements.push(stmt);
     } catch (e) {
       if (!(e instanceof ParseError)) throw e;
       issues.push({ line: li, col: e.col ?? 0, from, to, severity: 'error',
-        message: `${kw}: ${e.message}` });
+        message: `${bareFeature ?? kw}: ${e.message}` });
     }
   }
 

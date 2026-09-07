@@ -20,9 +20,9 @@ Everything else is standard unifile: git-style history, quine + PWA, offline,
 line-level comments, and (the payoff for a *text* CAD format) meaningful diffs —
 "moved the bathroom door 2'" is a one-line change you can read in the commit log.
 
-**Non-goals (v1):** 3D, structural engineering, curved walls, site plans,
-elevations, DXF/IFC interchange. This is a *drafting* tool for plan-view
-blueprints, not a BIM system.
+**Non-goals (v1):** 3D, structural engineering, curved walls, elevations,
+DXF/IFC interchange. This is a *drafting* tool for plan-view blueprints, not a
+BIM system. (Site plans were a v1 non-goal and landed in 2026-09 — see §2.11.)
 
 ---
 
@@ -244,6 +244,40 @@ Sketched now so v1 doesn't paint them out:
   piano-roll pattern (edits go out as `'dsl-edit'` CM6 changes so undo/history
   just work). The one-statement-per-line property is what will make this
   tractable; it's the long-term reason to hold that invariant.
+
+### 2.11 Site plans (added 2026-09)
+
+A `site` block is a second kind of sheet beside `floor`s: the lot and what
+stands on it. The design keeps every v1 property — one statement per line,
+declaration order, line-mapped diagnostics — but the geometry is *not*
+axis-aligned (a survey course runs at any bearing), so `layoutSite` is float
+geometry rounded to integer µm at the end of each construction; nothing on a
+site needs the exact-equality tests walls rely on.
+
+```
+site "Lot 7" scale 1"=20' north left      # own print scale; sheet rotation
+lot "LOT 7" S 77°30'00" E 150' "IPF"      # metes & bounds, clockwise from the POB
+course S 12°30'00" W 120'                 # one course per line (or inline on `lot`)
+setback 30'                               # inward offset polygon; per-course override
+contour 1010 index -20,40 40,45 100,42    # smoothed through points; `index` = heavy
+building from floor 1 at 50', 75'         # the floor's REAL walls, stamped on the lot
+road "Loon Lake Road" along course 1 width 50'
+driveway 10' from 76', -10' to 60', 72'
+well at 25', 60'   ·   septic at …   ·   tree 30" "oak" at …   ·   line "Shore" smooth …
+```
+
+Decisions: **bearings are true, only the sheet rotates** (`north left`
+reproduces a plat drawn with north to the left without touching a number);
+**the sheet has its own scale** — pen weights and text are specified in paper
+millimetres and multiplied by the ratio, travelling as SVG attributes (the
+stylesheet only colours); **the site origin is the lot's point of beginning**,
+`x east / y south` like every other `at`; **closure is reported, never
+corrected** (a lot that misses closing by more than 0.5' warns with the
+distance, exactly what a surveyor checks); **site sheets are flat** in the
+app's navigation — no room level, a tap selects the entity outright.
+`building from floor N` is the link between the two sheet kinds: the site
+reuses the laid-out floor's wall rects and room polygons, so the footprint on
+the lot is the plan, not a redrawn box.
 
 ---
 
