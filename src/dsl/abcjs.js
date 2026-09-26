@@ -16,7 +16,7 @@
 import abcjs from 'abcjs';
 import { StreamLanguage } from '@codemirror/language';
 import { linter } from '@codemirror/lint';
-import { hoverTooltip } from '@codemirror/view';
+import { hoverTooltip, EditorView } from '@codemirror/view';
 import { registerDSL } from './registry.js';
 import { alignAbcVoices } from './abc-align.js';
 import {
@@ -2913,6 +2913,10 @@ function abcLintSource(view) {
 function getEditorExtensions() {
   return [
     abcLanguage,
+    // Long music lines wrap instead of scrolling horizontally: a tune reads top
+    // to bottom on any width, and the "measure per line" formatter (below) keeps
+    // the source tidy without depending on column alignment.
+    EditorView.lineWrapping,
     // Context-aware autocomplete (front-matter schema + ABC body).
     abcLanguage.data.of({ autocomplete: abcComplete }),
     // Live diagnostics (squiggles + hover), debounced.
@@ -2938,10 +2942,10 @@ const abcjsDSL = {
   renderToString,
   getEditorExtensions,
 
-  // Source formatter: pad measures with whitespace so multiple voices (and
-  // successive lines) line up vertically. Surfaced via the editor's align
-  // command (Alt-Shift-F) and the mobile align button.
-  alignLabel: 'Align voices',
+  // Source formatter: put every measure on its own line (staff-line breaks kept
+  // via ` \` continuations). Surfaced via the editor's format command
+  // (Alt-Shift-F) and the mobile format button.
+  alignLabel: 'One measure per line',
   alignSource: alignAbcVoices,
 
   exporters: {

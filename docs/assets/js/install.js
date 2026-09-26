@@ -62,7 +62,7 @@
     overlay.id = "install-modal";
     overlay.innerHTML =
       '<div class="im-box" role="dialog" aria-modal="true" aria-labelledby="im-title">' +
-      '<div class="im-head"><span id="im-title">INSTALL</span>' +
+      '<div class="im-head"><span id="im-title">Install</span>' +
       '<button class="im-x" aria-label="Close">&#x2715;</button></div>' +
       '<div class="im-tabs">' +
       '<button data-tab="ios">iPhone / iPad</button>' +
@@ -98,7 +98,7 @@
   function show(app, pwa, dl) {
     if (!overlay) build();
     current = { app: app, pwa: pwa, dl: dl };
-    overlay.querySelector("#im-title").textContent = "INSTALL — " + app.toUpperCase();
+    overlay.querySelector("#im-title").textContent = "Install " + app;
     select(defaultTab);
     overlay.classList.add("open");
   }

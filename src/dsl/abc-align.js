@@ -1,22 +1,26 @@
 /**
- * Align barlines and notes across the music lines of an ABC document by padding
- * with spaces, so multiple voices — and successive lines of one voice — line up
- * vertically in the source text. Each measure "column" is widened to its longest
- * occurrence across the lines being aligned (the longest line drives the width),
- * so the barlines fall on the same columns and the notes read as a grid.
+ * Reflow the music lines of an ABC document so that EVERY MEASURE SITS ON ITS
+ * OWN SOURCE LINE — the editor's "align" command for ABC.
  *
- * Purely additive whitespace: note content, beaming (a space between notes is
- * kept), and barline tokens are preserved — only leading/trailing and repeated
- * inner spaces are normalized, then padding is added. Running it twice is a
- * no-op (idempotent).
+ * Why not column padding: the editor now wraps long lines instead of scrolling
+ * horizontally, so whitespace grids drift at every wrap point. One measure per
+ * line reads as a grid without depending on the viewport width, and line diffs
+ * become per-measure diffs.
  *
- * Music lines are grouped into blocks bounded by blank lines, a `#!` section
- * marker, or a new tune (`X:`) — so voices written as separate `V:` blocks still
- * share one grid and their barlines line up vertically. Within a block, only the
- * measure lines are aligned; interspersed information fields (`V:`, `w:`, `M:` …),
- * comments, and front-matter lines pass through untouched without breaking it.
- * Distinct systems/tunes (separated by a blank line or an `X:`/section boundary)
- * align independently.
+ * Score line breaks are preserved. ABC treats a source newline as a staff-line
+ * break, so a measure that was NOT the last on its original line is emitted
+ * with a trailing ` \` — the ABC line-continuation, honoured by both engraving
+ * engines (abc2svg joins continued lines; abcjs rewrites `\`+newline in place,
+ * keeping char offsets stable). The last measure of an original line ends the
+ * staff line exactly as before. Running the formatter twice is a no-op.
+ *
+ * What counts as a measure line: anything that is not blank, a `%` comment, a
+ * `#!` section marker, or an information field (`X:`, `K:`, `V:`, `w:` …), and
+ * that carries a barline. A leading barline (`|:` at the start of a line) stays
+ * attached to the measure it opens; a trailing pickup with no closing barline
+ * becomes its own line. Whitespace inside a measure is normalised (trimmed,
+ * inner runs collapsed to one space) so beaming — the presence of a space
+ * between two notes — is preserved while the layout is tidy.
  */
 
 // Barline tokens: | || |: :| |] [| :|: — a run of | with optional leading/
@@ -32,77 +36,81 @@ function isFieldOrMeta(trimmed) {
     || /^[A-Za-z]:/.test(trimmed);    // information field: X: M: L: K: V: w: …
 }
 
-/** A music line worth aligning: not a field/meta line, and carries a barline. */
+/** A music line worth reflowing: not a field/meta line, and carries a barline. */
 function isMeasureLine(line) {
   const t = line.trim();
   if (isFieldOrMeta(t)) return false;
   return t.includes('|');
 }
 
-/** Split a music line into cells: segments (even indices) alternating with
- *  barline tokens (odd indices). Segment whitespace is normalized — trimmed and
- *  inner runs collapsed to a single space — which keeps beaming (the presence of
- *  a space between two notes) while making widths comparable across lines. */
-function tokenize(line) {
-  return line.split(BARLINE_RE).map((cell, i) =>
-    (i % 2 === 0) ? cell.trim().replace(/\s+/g, ' ') : cell
-  );
-}
-
-/** Align one contiguous run of measure lines to a shared column grid. */
-function alignGroup(rows) {
-  const celled = rows.map(tokenize);
-  const cols = Math.max(...celled.map(c => c.length));
-  const width = [];
-  for (let c = 0; c < cols; c++) {
-    width[c] = Math.max(0, ...celled.map(cells => (cells[c] ?? '').length));
+/**
+ * Split one music line (continuation marker already stripped) into measures.
+ * Each measure = the notes before a barline plus that barline; a barline with
+ * nothing before it (a line-opening `|:` or `[|`) is carried as the prefix of
+ * the next measure. Notes after the last barline form a trailing measure.
+ * @param {string} line
+ * @returns {string[]}
+ */
+export function splitMeasures(line) {
+  const cells = line.split(BARLINE_RE);
+  const out = [];
+  let cur = '';                       // the measure being assembled
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    if (i % 2 === 0) {                // note segment
+      const seg = cell.trim().replace(/\s+/g, ' ');
+      if (seg) cur = cur ? `${cur} ${seg}` : seg;
+    } else {                          // barline
+      const hadNotes = /[^\s|:\[\]]/.test(cur);
+      cur = cur ? `${cur} ${cell}` : cell;
+      if (hadNotes) { out.push(cur); cur = ''; }
+    }
   }
-  return celled.map(cells => {
-    const out = [];
-    for (let c = 0; c < cols; c++) out.push((cells[c] ?? '').padEnd(width[c]));
-    // One space between cells; drop the padding that spills past the last cell
-    // and any leading space from an empty pre-barline segment.
-    return out.join(' ').replace(/\s+$/, '').replace(/^\s+/, '');
-  });
+  if (cur) {
+    // Trailing notes (a pickup without a closing barline) — or a dangling
+    // barline run with no notes at all — form the last measure.
+    out.push(cur);
+  }
+  return out;
 }
 
 /**
- * Align the music lines of an ABC document. Returns the reformatted text
- * (unchanged when there is nothing to align).
+ * Put every measure of the ABC document on its own line, keeping the score's
+ * staff-line breaks via ` \` continuations. Returns the reformatted text
+ * (unchanged when there is nothing to reflow).
  * @param {string} text
  * @returns {string}
  */
 export function alignAbcVoices(text) {
   const lines = text.split('\n');
-  const out = lines.slice();          // default: every line unchanged
+  const out = [];
 
   // Skip a leading front-matter block (`---` … `---`) verbatim — a YAML value
   // could otherwise look like a measure line (e.g. a `|` block scalar).
   let inFrontMatter = lines[0]?.trim() === '---';
 
-  // Indices of the measure lines in the block currently being accumulated. A
-  // block is flushed (aligned together) at every boundary.
-  let block = [];
-  const flush = () => {
-    if (block.length) {
-      const aligned = alignGroup(block.map(idx => lines[idx]));
-      block.forEach((idx, k) => { out[idx] = aligned[k]; });
-    }
-    block = [];
-  };
-
   for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (inFrontMatter) {
-      if (i > 0 && lines[i].trim() === '---') inFrontMatter = false;
+      if (i > 0 && line.trim() === '---') inFrontMatter = false;
+      out.push(line);
       continue;
     }
-    const t = lines[i].trim();
-    // Block boundaries: blank line, a new tune (X:), or a `#!` section marker.
-    if (t === '' || t.startsWith('#!') || /^X:/.test(t)) { flush(); continue; }
-    if (isMeasureLine(lines[i])) block.push(i);
-    // else: field / comment line — passes through, does not break the block.
+    if (!isMeasureLine(line)) { out.push(line); continue; }
+
+    // A line already ending in the continuation marker joins the next source
+    // line into the same staff line; remember that so the reflow keeps it.
+    const contMatch = /\\\s*$/.exec(line);
+    const continued = !!contMatch;
+    const body = continued ? line.slice(0, contMatch.index) : line;
+
+    const measures = splitMeasures(body);
+    if (!measures.length) { out.push(line); continue; }
+    measures.forEach((m, k) => {
+      const last = k === measures.length - 1;
+      out.push(last && !continued ? m : `${m} \\`);
+    });
   }
-  flush();
 
   return out.join('\n');
 }

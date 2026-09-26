@@ -252,9 +252,9 @@ export class App {
     const alignBtn = document.createElement('button');
     alignBtn.className = 'uf-align-btn';
     alignBtn.type = 'button';
-    alignBtn.title = 'Align voices';
-    alignBtn.setAttribute('aria-label', 'Align measures across voices');
-    // Two "voice" lines crossed by three aligned barlines — a measures grid.
+    alignBtn.title = 'One measure per line';
+    alignBtn.setAttribute('aria-label', 'Put each measure on its own line');
+    // Two "voice" lines crossed by three barlines — measures, one per line.
     alignBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">
       <path d="M2 5.5h12M2 10.5h12" stroke-width="1.3"/>
       <path d="M4 3v10M8 3v10M12 3v10" stroke-width="1.6"/>

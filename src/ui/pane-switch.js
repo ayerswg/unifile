@@ -127,7 +127,7 @@ export class PaneSwitch {
         <button type="button" class="ps-play${playing ? ' playing' : ''}" data-act="play"
           aria-label="Play or pause">${playing ? _iconPause() : _iconPlay()}</button>
         <button type="button" class="ps-align" data-act="align"
-          aria-label="Align voices">${_iconAlign()}</button>
+          aria-label="One measure per line">${_iconAlign()}</button>
         <button type="button" class="ps-roll${state.pianoRollOpen ? ' on' : ''}" data-act="roll"
           aria-label="Piano roll" aria-pressed="${!!state.pianoRollOpen}">${pianoRollIcon()}</button>
       ` : ''}
