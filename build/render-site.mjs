@@ -6,11 +6,13 @@
  *   npm run site:preview      → renders docs/ into docs/_site/
  *   then serve docs/_site (e.g. python3 -m http.server --directory docs/_site)
  *
- * Design: old-school mainframe terminal (green phosphor on black, monospace,
- * ISPF-style option menu).  The home page is a static listing of the apps —
- * each row shows its U-border icon (build/icons.mjs) + codename (uDoc, uPub…)
- * and three actions: INSTALL (per-device walkthrough modal, assets/js/install.js),
- * OPEN (the PWA) and DOWNLOAD (the single-file quine).
+ * Design: a plain white document rendered the way a DSL editor shows Markdown
+ * source — one monospaced size, the syntax marks (`#`, `**`, backticks, list
+ * dashes) left visible in grey via CSS pseudo-elements, links as plain blue
+ * hyperlinks (see assets/css/style.css).  The home page is a static listing of
+ * the apps — each row shows its U-border icon (build/icons.mjs) + codename
+ * (uDoc, uPub…) and three actions: Install (per-device walkthrough modal,
+ * assets/js/install.js), Open (the PWA) and Download (the single-file quine).
  */
 
 import { readFile, writeFile, mkdir, readdir, rm, cp, access } from 'fs/promises';
@@ -33,12 +35,12 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 // types.yml ids → icons.mjs keys (which are DSL ids).
 const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs', udraft: 'udraft' };
 
-// Site favicon: the bare U border, phosphor green.
+// Site favicon: the bare U border, black on white.
 const FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">` +
-  `<rect width="96" height="96" fill="#0a0f0a"/>` +
+  `<rect width="96" height="96" fill="#ffffff"/>` +
   `<path d="M 14 10 L 14 62 A 24 24 0 0 0 38 86 L 58 86 A 24 24 0 0 0 82 62 L 82 10"` +
-  ` fill="none" stroke="#4af626" stroke-width="11" stroke-linecap="round"/></svg>`);
+  ` fill="none" stroke="#1a1a1a" stroke-width="11" stroke-linecap="round"/></svg>`);
 
 // ── front matter ───────────────────────────────────────────────────────────
 function parseFrontMatter(raw) {
@@ -125,97 +127,76 @@ function pageFoot() {
   return `<script src="${rel('/assets/js/install.js')}" defer></script></body></html>`;
 }
 
-/** F-key bar — the footer on every page (links dressed as PF keys). */
-function fkeyBar() {
-  const v = VERSION ? `<span class="fk-ver">UNIFILE V${esc(VERSION)}</span>` : '';
-  return `<footer class="fkeys">
-  <a href="${rel('/')}"><b>F1</b>=APPS</a>
-  <a href="${rel('/posts/')}"><b>F2</b>=POSTS</a>
-  <a href="${rel('/about/')}"><b>F3</b>=ABOUT</a>
-  <a href="${rel('/upub/guide/')}"><b>F4</b>=UPUB GUIDE</a>
-  <a href="${rel('/udraft/guide/')}"><b>F5</b>=UDRAFT GUIDE</a>
-  ${v}
+/** Footer on every page: a rule, the version, the guides. */
+function footer() {
+  const v = VERSION ? `unifile v${esc(VERSION)} <span class="sep">·</span> ` : '';
+  return `<footer class="foot"><hr>
+  <p>${v}<a href="${rel('/upub/guide/')}">uPub guide</a> <span class="sep">·</span> <a href="${rel('/udraft/guide/')}">uDraft guide</a></p>
 </footer>`;
 }
 
-/** Header strip for inner pages: system name + current path + nav. */
-function navBar(url) {
-  return `<header class="tbar">
-  <a class="tbar-sys" href="${rel('/')}">UNIFILE</a>
-  <span class="tbar-path">${esc(url || '')}</span>
-  <nav class="tbar-nav">
-    <a href="${rel('/')}">APPS</a>
-    <a href="${rel('/posts/')}">POSTS</a>
-    <a href="${rel('/about/')}">ABOUT</a>
-  </nav>
-</header>`;
+/** Top line on every page: the site name + its few pages. */
+function nav() {
+  return `<nav class="nav">
+  <a class="nav-home" href="${rel('/')}">unifile</a>
+  <a href="${rel('/')}">apps</a>
+  <a href="${rel('/posts/')}">posts</a>
+  <a href="${rel('/about/')}">about</a>
+</nav>`;
 }
 
-// ── home: the primary option menu ───────────────────────────────────────────
+// ── home: the app list ──────────────────────────────────────────────────────
 function layoutHome(types) {
-  const shortName = (t) => t.title.replace(/^Unifile\s+/i, '').toUpperCase();
-  // The sysline already says FULLY OFFLINE — drop the redundant tagline suffix
-  // so the one-line descriptions fit without truncating.
-  const menuDesc = (t) => (t.tagline || '').replace(/\s*[—-]\s*(fully\s+)?offline\.?\s*$/i, '.');
-  const rows = types.map((t, i) => {
+  const rows = types.map((t) => {
     const ic = ICONS[TYPE_TO_ICON[t.id]] || {};
+    const code = ic.codename || t.title;
     const hub = t.id === 'markdown' ? '/get/' : `/${t.id}/`;
     const dlName = (t.download || '').split('/').pop();
-    return `<li class="menu-row">
-  <a class="menu-app" href="${rel(hub)}" title="About ${esc(t.title)}">
-    <span class="menu-opt">${i + 1}</span>
-    <span class="menu-icon">${iconSvg(ic.glyph, { size: 40 })}</span>
-    <span class="menu-code">${esc(ic.codename || '')}</span>
-    <span class="menu-id">
-      <span class="menu-name">${shortName(t)}</span>
-      <span class="menu-desc">${esc(menuDesc(t))}</span>
-    </span>
-  </a>
-  <span class="menu-actions">
-    <button class="act act-install" data-install data-app="${esc(shortName(t))}"
-      data-pwa="${rel(t.pwa)}" data-dl="${rel(t.download)}">INSTALL</button>
-    <a class="act" href="${rel(t.pwa)}">OPEN</a>
-    <a class="act" href="${rel(t.download)}" download="${esc(dlName)}">DOWNLOAD</a>
-  </span>
+    const appName = t.title.replace(/^Unifile\s+/i, '');
+    // The codename IS the name for uPub/uDraft; the others say what they edit.
+    const kind = appName.toLowerCase() === code.toLowerCase() ? '' : ` ${esc(appName)}`;
+    // The intro already says FULLY OFFLINE — drop the taglines' redundant suffix.
+    const desc = (t.tagline || '').replace(/\s*[—-]\s*(fully\s+)?offline\.?\s*$/i, '.');
+    return `<li class="app">
+  <a class="app-name" href="${rel(hub)}" title="About ${esc(t.title)}"><span class="app-icon">${iconSvg(ic.glyph, { size: 22 })}</span><strong>${esc(code)}</strong></a>${kind} — ${esc(desc)}
+  <span class="app-links"><button class="link" data-install data-app="${esc(appName)}"
+      data-pwa="${rel(t.pwa)}" data-dl="${rel(t.download)}">Install</button>
+    <span class="sep">·</span> <a href="${rel(t.pwa)}">Open</a>
+    <span class="sep">·</span> <a href="${rel(t.download)}" download="${esc(dlName)}">Download</a></span>
 </li>`;
   }).join('\n');
 
   return pageHead(SITE.title) + `
-<div class="frame">
-  <header class="tbar tbar-home">
-    <span class="tbar-sys">UNIFILE</span>
-    <span class="tbar-title">PRIMARY OPTION MENU</span>
-    <span class="tbar-ready">READY<span class="cursor"></span></span>
-  </header>
+<div class="doc">
+  ${nav()}
+  <div class="content">
+  <h1>Unifile</h1>
+  <p>Single-file document apps with built-in version history. Fully offline: no server, no account, nothing leaves your device.</p>
 
-  <p class="sysline">SINGLE-FILE DOCUMENT APPS WITH BUILT-IN VERSION HISTORY.
-FULLY OFFLINE &mdash; NO SERVER, NO ACCOUNT, NOTHING LEAVES YOUR DEVICE.</p>
-
-  <div class="rule">SELECT AN APPLICATION</div>
-
-  <ul class="menu">
+  <h2>Apps</h2>
+  <ul class="apps">
 ${rows}
   </ul>
 
-  <div class="rule">NOTES</div>
-  <dl class="notes">
-    <dt>INSTALL</dt><dd>step-by-step guide for your device &mdash; the app goes on your home screen or dock, works with no connection.</dd>
-    <dt>OPEN</dt><dd>run it in the browser; you can install it from there too.</dd>
-    <dt>DOWNLOAD</dt><dd>one <code>.html</code> file that <em>is</em> the whole app plus your document and its history &mdash; open it anywhere.</dd>
-  </dl>
-
-  ${fkeyBar()}
+  <h2>Notes</h2>
+  <ul>
+    <li><strong>Install</strong> — a step-by-step guide for your device. The app goes on your home screen or dock and works with no connection.</li>
+    <li><strong>Open</strong> — run it in the browser; you can install it from there too.</li>
+    <li><strong>Download</strong> — one <code>.html</code> file that <em>is</em> the whole app plus your document and its history. Open it anywhere.</li>
+  </ul>
+  </div>
+  ${footer()}
 </div>` + pageFoot();
 }
 
 // ── inner pages ─────────────────────────────────────────────────────────────
 function layoutPage(meta, contentHtml) {
-  const dateLine = meta.date ? `<div class="post-meta">${esc(meta.date)}</div>` : '';
+  const dateLine = meta.date ? `<p class="dim post-meta">${esc(meta.date)}</p>` : '';
   return pageHead(meta.title) + `
-<div class="frame">
-  ${navBar(meta.url)}
-  <div class="page-body"><h1>${esc(meta.title)}</h1>${dateLine}<div class="content">${contentHtml}</div></div>
-  ${fkeyBar()}
+<div class="doc">
+  ${nav()}
+  <div class="content"><h1>${esc(meta.title)}</h1>${dateLine}${contentHtml}</div>
+  ${footer()}
 </div>` + pageFoot();
 }
 
@@ -228,7 +209,7 @@ function renderPostList(posts) {
 }
 function renderAppList(apps) {
   const items = apps.map(a =>
-    `<li><a href="${rel(a.url)}">${esc(a.title)}</a> <span class="app-kind app-kind--${esc(a.kind)}">${esc(a.kind)}</span> <span class="app-desc">${esc(a.excerpt)}</span></li>`
+    `<li><a href="${rel(a.url)}">${esc(a.title)}</a> <span class="app-kind app-kind--${esc(a.kind)}">${esc(a.kind)}</span> — <span class="app-desc">${esc(a.excerpt)}</span></li>`
   ).join('\n');
   return `<ul class="app-list">\n${items}\n</ul>`;
 }
@@ -241,10 +222,10 @@ function renderLauncher(t) {
   const appName = t.title.replace(/^Unifile\s+/i, '');
   return `<div class="launcher">
   <div class="launch-identity">
-    <span class="launch-icon">${iconSvg(ic.glyph, { size: 64 })}</span>
+    <span class="launch-icon">${iconSvg(ic.glyph, { size: 48 })}</span>
     <div>
-      <div class="launch-code">${esc(ic.codename || '')}</div>
-      <p class="launch-tagline">${esc(t.tagline || '')}</p>
+      <div><strong>${esc(ic.codename || '')}</strong></div>
+      <p class="launch-tagline"><em>${esc(t.tagline || '')}</em></p>
     </div>
   </div>
   <div id="launch" class="launch-actions" data-pwa="${rel(t.pwa)}" data-download="${rel(t.download)}" data-title="${esc(t.title)}">

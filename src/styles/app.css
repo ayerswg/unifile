@@ -1021,7 +1021,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   position: relative;   /* anchor the floating mobile align button */
 }
 
-/* Floating "align voices" button — mobile only, and only for a DSL that ships a
+/* Floating "one measure per line" button — mobile only, and only for a DSL that ships a
    source formatter (ABC → #unifile-app gets .abc-active from the transport). */
 .uf-align-btn { display: none; }
 /* Floating play/pause button — phones only (transport bar is hidden there). */
@@ -1063,7 +1063,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-mobile-pane="render"] #uf-preview-wrap {
     display: flex !important;
   }
-
+  /* Measure-per-line FAB: bottom-right of the editor pane. Shown only for ABC
   /* Align-voices FAB: bottom-right of the editor pane. Shown only for ABC
      (.abc-active); sits ABOVE the play FAB so the two stack in the corner. */
   #unifile-app.abc-active #uf-editor-wrap .uf-align-btn {
