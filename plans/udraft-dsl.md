@@ -1,5 +1,9 @@
 # uDraft — plan (DSL-first)
 
+> **Naming note (2026-09):** the shipped app is now called `{draft}` (icon `{⌂}`)
+> under the unifile `{…}` brand; "uDraft" below is its working codename (still the
+> build id `udraft`).
+
 A new dedicated unifile variant: **uDraft**, for drafting architectural diagrams as
 blueprints — primarily floor plans for homes and buildings. This document is the
 design plan, written before any implementation. The bulk of it is the DSL design,

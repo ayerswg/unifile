@@ -1,6 +1,6 @@
 {
-  "name": "Unifile",
-  "short_name": "Unifile",
+  "name": "{unifile}",
+  "short_name": "{unifile}",
   "description": "Offline document editor with built-in version history",
   "start_url": "./",
   "display": "standalone",

@@ -1,78 +1,75 @@
 /**
- * Mobile pane switcher — the entire top chrome on phones.
+ * Phone top bar — `( ⑂ )   {♪} Title ⌄   ( ◉ )`
  *
- * It replaces the mobile top bar, the hamburger menu and the commit-pane bottom
- * bar.  Each of the three segments does three jobs:
- *   1. **Switch pane** when it isn't the active one (tap → that pane).
- *   2. **Show context**:
- *        • commit  → dirty dot (far left) · branch icon · branch name
- *        • code    → the document title (ellipsised)
- *        • render  → the DSL render icon (music note / eye / diagram)
- *   3. **Become a menu** when it IS the active pane: tapping again opens a
- *      dropdown (a caret appears on the right to signal this).  The menus are:
- *        • commit  → branch picker (switch / new branch)
- *        • code    → document + tooling actions (the old hamburger menu)
- *        • render  → rendered exports (SVG / PDF / MIDI) + export as app
+ * Three controls, and that's the whole top chrome on phones (portrait AND
+ * landscape; the old landscape dock is gone):
  *
- * Desktop keeps the classic top bar; this whole component is display:none there.
+ *   • LEFT circle  — the branch icon.  Tap → the commit/history pane; it is
+ *                    filled (accent) while that pane is showing; tap again →
+ *                    back to the editor.  Carries the dirty dot.
+ *   • CENTRE       — the app mark in braces + the document title + a caret.
+ *                    Tap → ONE dropdown with every menu option (branches,
+ *                    document, file, export, more).  While the history pane
+ *                    is up the label is the branch name instead.
+ *   • RIGHT circle — the eye.  Tap → the rendered DSL; filled while showing;
+ *                    tap again → back to the editor.
+ *
+ * The bar hides while typing (app.js sets `data-editing` on the shell) so the
+ * keyboard-shortened viewport goes to the text.  Editing verbs (play, undo,
+ * align…) live on the floating action button (action-fab.js); this menu is
+ * the list of menu options, built from the same registry (actions.js).
+ *
+ * Desktop keeps the classic top bar; this component is display:none there.
+ * In diff mode the centre becomes the L ↔ R commit picker.
  */
 
-import { state, PANELS } from './state.js';
+import { state } from './state.js';
 import { shortHash } from '../core/hash.js';
-import { getDSL, listDSLs } from '../dsl/registry.js';
+import { appMark } from '../core/brand.js';
 import {
-  loadUserPrefs, generateQuine, downloadFile, downloadBlob,
-} from '../core/storage.js';
-import {
-  showNewDocumentModal, showDslHelpModal, showExtensionsModal,
-} from './topbar.js';
-import { showArchivedCommentsModal } from './comments.js';
-import { pianoRollIcon } from './piano-roll.js';
+  listActions, GROUP_LABELS, switchBranch, esc,
+} from './actions.js';
 
 const PANES = ['commit', 'editor', 'render'];
 const WORKING = 'WORKING';
+const MENU_GROUPS = ['branch', 'document', 'file', 'export', 'more'];
 
 export class PaneSwitch {
-  /** @param {HTMLElement} el  @param {object} handlers */
-  constructor(el, handlers = {}) {
+  /** @param {HTMLElement} el  @param {object} ctx  { handlers, editor, openTopMenu } */
+  constructor(el, ctx = {}) {
     this.el = el;
-    this.handlers = handlers;
+    this.ctx = ctx;
     this._active = 'editor';
-    this._openMenu = null;         // 'commit' | 'code' | 'render' | null
-    this._committing = false;
-    // Landscape only: the rail is a collapsible dock. Default collapsed so it
-    // takes no real space until tapped (portrait/desktop ignore this).
-    this._dockCollapsed = true;
+    this._openMenu = null;         // 'main' | 'left' | 'right' | null
 
-    state.on('change', () => this.render());
-    state.on('content-change', () => this.render());
-    state.on('branch-switch', () => this.render());
-    state.on('checkout', () => this.render());
-    state.on('active-section-change', () => this.render());
-    // Reflect play/pause on the dock's play button (landscape).
-    state.on('abc-play-state', () => this.render());
-    // Reflect the piano-roll open state on the dock's roll button (landscape).
-    state.on('piano-roll-change', () => this.render());
-    // Entering/leaving diff mode (or changing a side) swaps the segments between
-    // the normal tabs and the diff pickers; drop any stale menu.
+    for (const ev of ['change', 'content-change', 'branch-switch', 'checkout', 'active-section-change']) {
+      state.on(ev, () => this.render());
+    }
     state.on('diff-change', () => { this._openMenu = null; this.render(); });
 
     // Outside tap closes any open menu.
-    this._onDocClick = (e) => {
+    document.addEventListener('click', (e) => {
       if (this._openMenu && !this.el.contains(e.target)) this._closeMenu();
-    };
-    document.addEventListener('click', this._onDocClick);
+    });
 
     this.render();
   }
 
-  /** Called by the app when the active pane changes (scroll / programmatic). */
+  /** Called by the app when the active pane changes (programmatic). */
   setActive(pane) {
     if (!PANES.includes(pane)) pane = 'editor';
     if (pane === this._active) return;
     this._active = pane;
-    this._openMenu = null;         // switching panes dismisses any menu
+    this._openMenu = null;
     this.render();
+  }
+
+  /** Open the centre dropdown (the action button's "Switch branch…" lands here). */
+  openMenu() {
+    if (state.diff) return;
+    this._openMenu = 'main';
+    this.render();
+    this.el.querySelector('.ps-menu')?.scrollTo?.(0, 0);
   }
 
   _closeMenu() { if (this._openMenu) { this._openMenu = null; this.render(); } }
@@ -86,104 +83,97 @@ export class PaneSwitch {
 
     const dirty = state.isDirty;
     const detached = state.isDetached;
-    const branch = detached ? '⚠' : state.currentBranch;
-    const dslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
-
-    const seg = (pane, key, inner, label) => {
-      const isActive = this._active === pane;
-      return `
-        <button type="button" class="ps-btn ps-${key}${isActive ? ' active' : ''}"
-          data-pane="${pane}" role="tab" aria-selected="${isActive}" aria-label="${label}"
-          ${isActive ? 'aria-haspopup="menu"' : ''}>
-          ${inner}
-          <span class="ps-caret" aria-hidden="true">${_iconCaret()}</span>
-        </button>`;
-    };
-
-    const isAbc = dslId === 'abcjs';
-    const playing = !!state.abcPlaying;
-
-    // The collapse handle + play/align live in the DOM always but are shown
-    // (via CSS) only in landscape, where the rail is a collapsible dock.
-    this.el.classList.toggle('ps-dock-collapsed', this._dockCollapsed);
+    const branch = detached ? '⚠ detached' : state.currentBranch;
+    const dslType = state.data?.dslType ?? 'markdown';
+    const commitActive = this._active === 'commit';
+    const renderActive = this._active === 'render';
+    const label = commitActive ? branch : state.title;
+    const menuOpen = this._openMenu === 'main';
 
     this.el.innerHTML = `
-      <button type="button" class="ps-handle" aria-label="${this._dockCollapsed ? 'Show controls' : 'Hide controls'}"
-        aria-expanded="${!this._dockCollapsed}">${_iconGrip()}</button>
-      <span class="ps-thumb" aria-hidden="true"></span>
-      ${seg('commit', 'commit', `
-        <span class="ps-branch-icon" aria-hidden="true">${_iconBranch()}</span>
-        <span class="ps-branch-name">${_esc(branch)}</span>
+      <button type="button" class="ps-circle ps-branch${commitActive ? ' active' : ''}" data-pane="commit"
+        aria-label="${commitActive ? 'Back to the editor' : 'History and branches'}" aria-pressed="${commitActive}">
+        ${_iconBranch()}
         ${dirty || detached ? `<span class="ps-dirty-dot${detached ? ' detached' : ''}" aria-hidden="true"></span>` : ''}
-      `, 'Commit history')}
-      ${seg('editor', 'code', `
-        <span class="ps-code-icon" aria-hidden="true">${_iconDoc()}</span>
-        <span class="ps-title">${_esc(state.title)}</span>
-      `, 'Editor')}
-      ${seg('render', 'render', `
-        <span class="ps-render-icon" aria-hidden="true">${_renderIconFor(dslId)}</span>
-      `, 'Preview')}
-      ${isAbc ? `
-        <button type="button" class="ps-play${playing ? ' playing' : ''}" data-act="play"
-          aria-label="Play or pause">${playing ? _iconPause() : _iconPlay()}</button>
-        <button type="button" class="ps-align" data-act="align"
-          aria-label="One measure per line">${_iconAlign()}</button>
-        <button type="button" class="ps-roll${state.pianoRollOpen ? ' on' : ''}" data-act="roll"
-          aria-label="Piano roll" aria-pressed="${!!state.pianoRollOpen}">${pianoRollIcon()}</button>
-      ` : ''}
-      <div class="ps-menu ps-menu-${this._openMenu ?? 'none'}${this._openMenu ? ' open' : ''}" role="menu">
-        ${this._openMenu ? this._renderMenu(this._openMenu) : ''}
-      </div>
-    `;
+      </button>
+      <button type="button" class="ps-title-btn${menuOpen ? ' open' : ''}" aria-haspopup="menu" aria-expanded="${menuOpen}">
+        <span class="ps-mark" aria-hidden="true">${esc(appMark(dslType))}</span>
+        <span class="ps-title">${esc(label)}</span>
+        <span class="ps-caret" aria-hidden="true">${_iconCaret()}</span>
+      </button>
+      <button type="button" class="ps-circle ps-eye${renderActive ? ' active' : ''}" data-pane="render"
+        aria-label="${renderActive ? 'Back to the editor' : 'Show the rendered document'}" aria-pressed="${renderActive}">
+        ${_iconEye()}
+      </button>
+      <div class="ps-menu${menuOpen ? ' open' : ''}" role="menu">
+        ${menuOpen ? this._renderMainMenu() : ''}
+      </div>`;
 
     this._bind();
   }
 
+  _renderMainMenu() {
+    const actions = listActions(this.ctx).filter(a => a.menu !== false);
+    const byGroup = {};
+    for (const a of actions) (byGroup[a.group] ||= []).push(a);
+
+    const item = (a) => `
+      <button class="ps-menu-item${a.disabled ? ' disabled' : ''}" data-act="${esc(a.id)}" role="menuitem">
+        <span class="ps-menu-ic">${esc(a.glyph)}</span>
+        <span class="ps-menu-name">${esc(a.label)}</span>
+      </button>`;
+
+    let html = '';
+    for (const g of MENU_GROUPS) {
+      const rows = byGroup[g] || [];
+      if (!rows.length && g !== 'branch') continue;
+      html += `<div class="ps-menu-label">${esc(GROUP_LABELS[g])}</div>`;
+      if (g === 'branch') html += this._renderBranchRows();
+      html += rows.map(item).join('');
+    }
+    return html;
+  }
+
+  _renderBranchRows() {
+    const vcs = state.vcs;
+    const branches = vcs?.listBranches?.() ?? [];
+    const detached = state.isDetached;
+    return branches.map(b => `
+      <button class="ps-menu-item${b.isCurrent && !detached ? ' current' : ''}" data-act="branch" data-branch="${esc(b.name)}" role="menuitem">
+        <span class="ps-menu-ic">${b.isCurrent && !detached ? '●' : '○'}</span>
+        <span class="ps-menu-name">${esc(b.name)}</span>
+        <span class="ps-menu-hash">${b.head ? esc(shortHash(b.head)) : ''}</span>
+      </button>`).join('');
+  }
+
   // ---------------------------------------------------------------------------
-  // Diff mode — the three segments become the diff pickers
-  //   commit → the selected (right) commit; tap → commit-log pane
-  //   editor → the LEFT/middle side (Current or a hash) + left picker menu
-  //   render → the RIGHT side (the selected commit) + right picker menu
+  // Diff mode — circles unchanged (history pane / right diff pane); the centre
+  // shows `L ↔ R` and its dropdown carries both side pickers.
   // ---------------------------------------------------------------------------
 
   _renderDiff() {
     const diff = state.diff;
-    const vcs = state.vcs;
     const leftLabel  = diff.left  === WORKING ? 'Current' : shortHash(diff.left);
     const rightLabel = diff.right === WORKING ? 'Current' : shortHash(diff.right);
-    const rightBranch = vcs?.branchAtTip?.(diff.right);
-
-    const seg = (pane, key, inner, hasMenu) => {
-      const isActive = this._active === pane;
-      return `
-        <button type="button" class="ps-btn ps-${key}${isActive ? ' active' : ''}"
-          data-pane="${pane}" role="tab" aria-selected="${isActive}"
-          ${isActive && hasMenu ? 'aria-haspopup="menu"' : ''}>
-          ${inner}
-          ${hasMenu ? `<span class="ps-caret" aria-hidden="true">${_iconCaret()}</span>` : ''}
-        </button>`;
-    };
+    const commitActive = this._active === 'commit';
+    const renderActive = this._active === 'render';
+    const menuOpen = this._openMenu === 'main';
 
     this.el.innerHTML = `
-      <span class="ps-thumb" aria-hidden="true"></span>
-      ${seg('commit', 'commit', `
-        <span class="ps-branch-icon" aria-hidden="true">${_iconBranch()}</span>
-        <span class="ps-branch-name">${_esc(rightBranch || rightLabel)}</span>
-      `, false)}
-      ${seg('editor', 'code', `
-        <span class="ps-diff-role" aria-hidden="true">L</span>
-        <span class="ps-title">${_esc(leftLabel)}</span>
-      `, true)}
-      ${seg('render', 'render', `
-        <span class="ps-diff-role" aria-hidden="true">R</span>
-        <span class="ps-title">${_esc(rightLabel)}</span>
-      `, true)}
-      <div class="ps-menu ps-menu-${this._openMenu ?? 'none'}${this._openMenu ? ' open' : ''}" role="menu">
-        ${this._openMenu === 'code' ? this._renderSidePicker('left')
-          : this._openMenu === 'render' ? this._renderSidePicker('right') : ''}
+      <button type="button" class="ps-circle ps-branch${commitActive ? ' active' : ''}" data-pane="commit"
+        aria-label="History" aria-pressed="${commitActive}">${_iconBranch()}</button>
+      <button type="button" class="ps-title-btn ps-diff${menuOpen ? ' open' : ''}" aria-haspopup="menu" aria-expanded="${menuOpen}">
+        <span class="ps-title ps-diff-title"><span class="ps-diff-role">L</span> ${esc(leftLabel)} <span class="ps-diff-arrow">↔</span> <span class="ps-diff-role">R</span> ${esc(rightLabel)}</span>
+        <span class="ps-caret" aria-hidden="true">${_iconCaret()}</span>
+      </button>
+      <button type="button" class="ps-circle ps-eye${renderActive ? ' active' : ''}" data-pane="render"
+        aria-label="Right side" aria-pressed="${renderActive}">${_iconEye()}</button>
+      <div class="ps-menu${menuOpen ? ' open' : ''}" role="menu">
+        ${menuOpen ? `<div class="ps-menu-label">Left side</div>${this._renderSidePicker('left')}
+                      <div class="ps-menu-label">Right side</div>${this._renderSidePicker('right')}` : ''}
       </div>`;
 
-    this._bindDiff();
+    this._bind();
   }
 
   /** A commit picker for one diff side: "Current" (left only) + all commits, all branches. */
@@ -193,10 +183,10 @@ export class PaneSwitch {
     const branches = vcs?.listBranches?.() ?? [];
 
     const item = (hash, name) => `
-      <button class="ps-menu-item${hash === cur ? ' current' : ''}" data-act="pick" data-side="${side}" data-hash="${_esc(hash)}" role="menuitem">
+      <button class="ps-menu-item${hash === cur ? ' current' : ''}" data-act="pick" data-side="${side}" data-hash="${esc(hash)}" role="menuitem">
         <span class="ps-menu-ic">${hash === cur ? '●' : '○'}</span>
-        <span class="ps-menu-name">${_esc(name)}</span>
-        <span class="ps-menu-hash">${hash === WORKING ? '' : _esc(shortHash(hash))}</span>
+        <span class="ps-menu-name">${esc(name)}</span>
+        <span class="ps-menu-hash">${hash === WORKING ? '' : esc(shortHash(hash))}</span>
       </button>`;
 
     let html = '';
@@ -204,96 +194,10 @@ export class PaneSwitch {
     for (const b of branches) {
       const log = vcs.log(b.name);   // newest first
       if (!log.length) continue;
-      html += `<div class="ps-menu-label">${_esc(b.name)}</div>`;
+      html += `<div class="ps-menu-sublabel">${esc(b.name)}</div>`;
       html += log.map(c => item(c.hash, c.message || '(no message)')).join('');
     }
     return html || '<div class="ps-menu-empty">No commits.</div>';
-  }
-
-  _bindDiff() {
-    this.el.querySelectorAll('.ps-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => { e.stopPropagation(); this._onDiffSegment(btn.dataset.pane); });
-    });
-    this.el.querySelectorAll('.ps-menu-item').forEach(el => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const { side, hash } = el.dataset;
-        if (side === 'left') state.openDiff(hash, state.diff.right);
-        else state.openDiff(state.diff.left, hash);
-        this._closeMenu();
-      });
-    });
-  }
-
-  _onDiffSegment(pane) {
-    if (pane !== this._active) { this._openMenu = null; state.emit('mobile-goto-pane', pane); return; }
-    if (pane === 'commit') { this._openMenu = null; this.render(); return; }  // no menu — the log pane is the picker
-    const menuKey = pane === 'editor' ? 'code' : 'render';
-    this._openMenu = this._openMenu === menuKey ? null : menuKey;
-    this.render();
-  }
-
-  _renderMenu(which) {
-    if (which === 'commit') return this._renderCommitMenu();
-    if (which === 'code')   return this._renderCodeMenu();
-    if (which === 'render') return this._renderRenderMenu();
-    return '';
-  }
-
-  _renderCommitMenu() {
-    const vcs = state.vcs;
-    const branches = vcs?.listBranches?.() ?? [];
-    const detached = state.isDetached;
-    return `
-      <div class="ps-menu-label">Switch branch</div>
-      ${branches.map(b => `
-        <button class="ps-menu-item${b.isCurrent && !detached ? ' current' : ''}" data-act="branch" data-branch="${_esc(b.name)}" role="menuitem">
-          <span class="ps-menu-ic">${b.isCurrent && !detached ? '●' : '○'}</span>
-          <span class="ps-menu-name">${_esc(b.name)}</span>
-          <span class="ps-menu-hash">${b.head ? _esc(shortHash(b.head)) : ''}</span>
-        </button>`).join('')}
-      <button class="ps-menu-item ps-menu-accent" data-act="new-branch" role="menuitem">
-        <span class="ps-menu-ic">＋</span><span class="ps-menu-name">New branch…</span>
-      </button>`;
-  }
-
-  _renderCodeMenu() {
-    const dslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
-    const dslName = (() => { try { return getDSL(dslId)?.name ?? dslId; } catch { return dslId; } })();
-    const hasCommits = (state.vcs?.log?.().length ?? 0) > 0;
-    const hasExt = listDSLs().some(d => (d.extensionSlots?.length ?? 0) > 0);
-    const item = (act, label, extra = '') =>
-      `<button class="ps-menu-item${extra}" data-act="${act}" role="menuitem"><span class="ps-menu-name">${label}</span></button>`;
-    return `
-      ${item('new-doc', 'New document…')}
-      ${item('rename', 'Rename document…')}
-      ${item('dsl-help', `${_esc(dslName)} help…`)}
-      ${item('blame', 'Blame view', hasCommits ? '' : ' disabled')}
-      <div class="ps-menu-sep" role="separator"></div>
-      ${item('save-data', 'Save data file…')}
-      ${item('open-data', 'Open data file…')}
-      ${item('merge', 'Import & merge…')}
-      ${hasExt ? item('extensions', 'Extensions…') : ''}
-      <div class="ps-menu-sep" role="separator"></div>
-      ${item('archived', 'Archived comments…')}
-      ${item('settings', 'Settings')}`;
-  }
-
-  _renderRenderMenu() {
-    const dslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
-    let exporters = {};
-    try { exporters = getDSL(dslId)?.exporters ?? {}; } catch {}
-    const rows = Object.entries(exporters).map(([key, exp]) =>
-      `<button class="ps-menu-item" data-act="export" data-key="${_esc(key)}" role="menuitem">
-        <span class="ps-menu-name">${_esc(exp.label ?? key)}</span>
-      </button>`).join('');
-    return `
-      <div class="ps-menu-label">Export</div>
-      ${rows || '<div class="ps-menu-empty">No exports for this format.</div>'}
-      <div class="ps-menu-sep" role="separator"></div>
-      <button class="ps-menu-item" data-act="export-app" role="menuitem">
-        <span class="ps-menu-name">Export as app (.html)…</span>
-      </button>`;
   }
 
   // ---------------------------------------------------------------------------
@@ -301,28 +205,18 @@ export class PaneSwitch {
   // ---------------------------------------------------------------------------
 
   _bind() {
-    // Landscape dock: the grip toggles the whole cluster open/closed.
-    this.el.querySelector('.ps-handle')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._dockCollapsed = !this._dockCollapsed;
-      this.render();
-    });
-
-    this.el.querySelectorAll('.ps-btn').forEach(btn => {
+    this.el.querySelectorAll('.ps-circle').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this._onSegment(btn.dataset.pane);
+        const pane = btn.dataset.pane;
+        this._openMenu = null;
+        // Tapping the active circle goes back to the editor.
+        state.emit('mobile-goto-pane', pane === this._active ? 'editor' : pane);
       });
     });
-    // Dock play / align (landscape only; not .ps-btn so the portrait bar ignores them).
-    this.el.querySelector('.ps-play')?.addEventListener('click', (e) => { e.stopPropagation(); state.emit('abc-play'); });
-    this.el.querySelector('.ps-align')?.addEventListener('click', (e) => { e.stopPropagation(); state.emit('mobile-align'); });
-    // Landscape only (portrait has no room): toggle the piano-roll overlay and
-    // tuck the dock away so it doesn't cover the roll.
-    this.el.querySelector('.ps-roll')?.addEventListener('click', (e) => {
+    this.el.querySelector('.ps-title-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      state.togglePianoRoll();
-      this._dockCollapsed = true;
+      this._openMenu = this._openMenu === 'main' ? null : 'main';
       this.render();
     });
     this.el.querySelectorAll('.ps-menu-item').forEach(item => {
@@ -334,127 +228,28 @@ export class PaneSwitch {
     });
   }
 
-  _onSegment(pane) {
-    // Menu key is 'code' for the editor pane, else the pane name.
-    const menuKey = pane === 'editor' ? 'code' : pane;
-    if (pane !== this._active) {
-      this._openMenu = null;
-      // In the landscape dock, switching panes tucks the dock away again so it
-      // stops covering content (no visual effect in portrait/desktop).
-      this._dockCollapsed = true;
-      state.emit('mobile-goto-pane', pane);   // app → setPane → setActive()
-    } else {
-      this._openMenu = this._openMenu === menuKey ? null : menuKey;
-      this.render();
-    }
-  }
-
   _onMenuAction(ds) {
-    const act = ds.act;
-    // Most actions dismiss the menu; branch switching re-renders anyway.
-    const close = () => this._closeMenu();
-
-    switch (act) {
-      case 'branch':      this._switchBranch(ds.branch); break;
-      case 'new-branch':  close(); this._newBranch(); break;
-
-      case 'new-doc':     close(); showNewDocumentModal(this.handlers); break;
-      case 'rename':      close(); this._renameDoc(); break;
-      case 'dsl-help':    close(); showDslHelpModal(state.activeDslId ?? state.data?.dslType ?? 'markdown'); break;
-      case 'blame':       close(); state.activePanel === PANELS.BLAME ? state.closePanel() : state.openPanel(PANELS.BLAME); break;
-      case 'save-data':   close(); state.emit('save-data-file'); break;
-      case 'open-data':   close(); state.emit('open-data-file'); break;
-      case 'merge':       close(); state.activePanel === PANELS.MERGE ? state.closePanel() : state.openPanel(PANELS.MERGE); break;
-      case 'extensions':  close(); showExtensionsModal(); break;
-      case 'archived':    close(); showArchivedCommentsModal(); break;
-      case 'settings':    close(); state.activePanel === PANELS.SETTINGS ? state.closePanel() : state.openPanel(PANELS.SETTINGS); break;
-
-      case 'export':      close(); this._exportFormat(ds.key); break;
-      case 'export-app':  close(); this._exportApp(); break;
+    if (ds.act === 'pick') {
+      if (ds.side === 'left') state.openDiff(ds.hash, state.diff.right);
+      else state.openDiff(state.diff.left, ds.hash);
+      this._closeMenu();
+      return;
     }
-  }
-
-  // ── Document rename (mobile has no editable top-bar title) ─────────────────
-
-  _renameDoc() {
-    const current = state.title || '';
-    const next = (window.prompt('Document title:', current) || '').trim();
-    if (!next || next === current) return;
-    state.update({ data: { ...state.data, title: next } });
-  }
-
-  // ── Branch actions (moved off the old commit-bar bottom bar) ───────────────
-
-  _switchBranch(name) {
-    if (!name || !state.vcs || (name === state.currentBranch && !state.isDetached)) { this._closeMenu(); return; }
-    if (state.isDirty) state.stash = { content: state.currentContent, fromHash: state.headHash };
-    const baseContent = state.vcs.switchBranch(name);
-    const newHash = state.vcs.headHash;
-    let content = baseContent;
-    if (state.stash && state.stash.fromHash === newHash) { content = state.stash.content; state.stash = null; }
-    state.update({ currentContent: content, isDirty: content !== baseContent });
-    state.emit('branch-switch', { name, content });
+    if (ds.act === 'branch') { switchBranch(ds.branch); this._closeMenu(); return; }
+    const act = listActions(this.ctx).find(a => a.id === ds.act);
     this._closeMenu();
-  }
-
-  _newBranch() {
-    const name = (window.prompt('New branch name:') || '').trim();
-    if (!name) return;
-    if (!/^[A-Za-z0-9/_-]+$/.test(name)) { window.alert('Branch name may only contain letters, numbers, /, _ and -'); return; }
-    try { state.vcs.createBranch(name, state.headHash); }
-    catch (err) { window.alert(err?.message || 'Could not create branch.'); return; }
-    state.update({ data: { ...state.data, ...state.vcs.serialize() } });
-    this._switchBranch(name);
-  }
-
-  // ── Exports (render menu) ──────────────────────────────────────────────────
-
-  async _exportFormat(key) {
-    const dslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
-    let exp; try { exp = getDSL(dslId)?.exporters?.[key]; } catch {}
-    if (!exp) return;
-    try {
-      const result = await exp.export(state.currentContent);
-      if (result instanceof Blob) {
-        const name = _slug(state.title) + (exp.ext ?? '');
-        if (exp.binary) downloadBlob(result, name);
-        else downloadFile(await result.text(), name, exp.mime);
-      }
-      // null → handled elsewhere (e.g. PDF via print dialog)
-    } catch (err) {
-      window.alert(`Export failed: ${err?.message ?? err}`);
-    }
-  }
-
-  async _exportApp() {
-    try {
-      const preview = await this.handlers.renderPreview?.() ?? '';
-      const data = { ...state.data, ...(state.vcs?.serialize?.() ?? {}) };
-      const html = generateQuine(data, preview, state.title);
-      downloadFile(html, _slug(state.title) + '.html', 'text/html');
-    } catch (err) {
-      window.alert(`Export failed: ${err?.message ?? err}`);
-    }
+    if (act && !act.disabled) act.run();
   }
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Icons
 // ---------------------------------------------------------------------------
-
-function _slug(s) {
-  return (String(s || 'untitled').trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled');
-}
-
-function _esc(s) {
-  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 function _iconBranch() {
-  return `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-    <circle cx="4" cy="3.5" r="1.6"/><circle cx="4" cy="12.5" r="1.6"/><circle cx="12" cy="6" r="1.6"/>
-    <path d="M4 5v6M4 9.5C4 7 12 9 12 7.5"/></svg>`;
+  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+    <circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="6" r="1.7"/>
+    <path d="M4 5.2v5.6M4 9.5C4 7 12 9 12 7.7"/></svg>`;
 }
 
 function _iconCaret() {
@@ -462,43 +257,7 @@ function _iconCaret() {
     <path d="M4 6l4 4 4-4"/></svg>`;
 }
 
-// Landscape-dock icons.
-function _iconGrip() {
-  return `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-    <circle cx="5" cy="4" r="1.3"/><circle cx="11" cy="4" r="1.3"/>
-    <circle cx="5" cy="8" r="1.3"/><circle cx="11" cy="8" r="1.3"/>
-    <circle cx="5" cy="12" r="1.3"/><circle cx="11" cy="12" r="1.3"/></svg>`;
-}
-function _iconPlay() {
-  return `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><polygon points="4,2 13,8 4,14"/></svg>`;
-}
-function _iconPause() {
-  return `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="2" width="4" height="12" rx="1"/><rect x="9" y="2" width="4" height="12" rx="1"/></svg>`;
-}
-function _iconAlign() {
-  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">
-    <path d="M2 5.5h12M2 10.5h12" stroke-width="1.3"/>
-    <path d="M4 3v10M8 3v10M12 3v10" stroke-width="1.6"/></svg>`;
-}
-function _iconDoc() {
-  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/><path d="M6 8h4M6 11h4"/></svg>`;
-}
-
-function _renderIconFor(dslId) {
-  if (dslId === 'abcjs') return _iconMusicNote();
-  if (dslId === 'mermaid') return _iconDiagram();
-  return _iconEye();
-}
-function _iconMusicNote() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>`;
-}
 function _iconEye() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
-}
-function _iconDiagram() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <rect x="8" y="3" width="8" height="5" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/><rect x="14" y="16" width="7" height="5" rx="1"/><path d="M12 8v4M12 12H6.5v4M12 12h5.5v4"/></svg>`;
 }

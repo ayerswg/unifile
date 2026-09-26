@@ -1,6 +1,6 @@
 ---
 layout: page
-title: Markdown
+title: "{document}"
 type: markdown
 permalink: /get/
 nav_exclude: true

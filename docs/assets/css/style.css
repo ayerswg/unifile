@@ -140,8 +140,7 @@ kbd::before, kbd::after { content: "`"; color: var(--mark); }
 /* ── Home: the app list ─────────────────────────────────────────── */
 
 .apps > li { margin-bottom: 0.9em; }
-.app-icon { display: inline-block; margin-right: 0.5ch; color: var(--fg); }
-.app-icon svg { display: inline-block; vertical-align: -0.35em; }
+.app-icon { display: inline-block; margin-right: 1ch; color: var(--fg); white-space: pre; }
 .app-name { color: inherit; text-decoration: none; }
 .app-name:hover strong { text-decoration: underline; text-underline-offset: 2px; }
 .app-links { display: block; }
@@ -171,8 +170,7 @@ button.link:hover { text-decoration-thickness: 2px; }
 /* ── Type hub launcher ──────────────────────────────────────────── */
 
 .launch-identity { display: flex; align-items: center; gap: 1.5ch; margin-bottom: 1em; }
-.launch-icon { color: var(--fg); flex-shrink: 0; }
-.launch-icon svg { display: block; }
+.launch-icon { color: var(--fg); flex-shrink: 0; font-size: 2em; line-height: 1; white-space: pre; }
 .launch-tagline { color: var(--dim); margin: 0; }
 
 .launch-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 1ch; margin-bottom: 1em; }

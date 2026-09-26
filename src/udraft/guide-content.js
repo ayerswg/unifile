@@ -5,7 +5,7 @@
  */
 
 export const GUIDE_MD = `
-uDraft turns a plain-text description of a building into an architectural
+{draft} (formerly uDraft) turns a plain-text description of a building into an architectural
 blueprint. You write statements — one per line — and the plan draws itself:
 walls, door swings, window symbols, dimension strings, room labels with areas.
 
@@ -192,7 +192,7 @@ stairs landing 3' x 9' down, along west              # same shaft
 \`\`\`
 
 Each floor's \`stairs\` statement draws the flight you see on that floor
-(\`up\` or \`down\` labels the arrow). uDraft checks that flights stack: an
+(\`up\` or \`down\` labels the arrow). {draft} checks that flights stack: an
 \`up\` with no stairs over the same spot on the floor above gets a warning
 in the issue strip.
 
@@ -294,7 +294,7 @@ history) and, in single-file mode, a copy of the whole app.
 
 ## History
 
-uDraft keeps git-style version history on your device — commit from the
+{draft} keeps git-style version history on your device — commit from the
 History sheet, restore any version. Everything is offline; nothing leaves
 your device.
 `;

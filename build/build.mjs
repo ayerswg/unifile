@@ -38,6 +38,7 @@ import { fileURLToPath } from 'url';
 import { gzipSync } from 'zlib';
 import { createHash } from 'crypto';
 import { execSync } from 'child_process';
+import { appName } from '../src/core/brand.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '..');
@@ -198,13 +199,15 @@ const DEFAULT_DSL_TYPE = 'markdown';
 // the generated ui/app.js entry module, and `css` (relative to src/) replaces
 // styles/app.css.  The `upub` variant uses this — it has no CodeMirror and no
 // DSL registry (see src/upub/).
+// `label` is the installed app's name — the `{name}` brand spelling from
+// src/core/brand.js ({document}, {diagram}, {compose}, {write}, {draft}).
 const DSL_META = {
-  markdown:  { abbrev: 'md',   plugins: ['markdown'],            defaultDslType: 'markdown', label: 'Unifile Markdown' },
-  mermaid:   { abbrev: 'mer',  plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid',  label: 'Unifile Mermaid'  },
-  abcjs:     { abbrev: 'abc',  plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs',    label: 'Unifile ABC'      },
-  upub:      { abbrev: 'upub', plugins: [],                      defaultDslType: 'upub',     label: 'uPub',
+  markdown:  { abbrev: 'md',   plugins: ['markdown'],            defaultDslType: 'markdown', label: appName('markdown') },
+  mermaid:   { abbrev: 'mer',  plugins: ['markdown', 'mermaid'], defaultDslType: 'mermaid',  label: appName('mermaid')  },
+  abcjs:     { abbrev: 'abc',  plugins: ['markdown', 'abcjs'],   defaultDslType: 'abcjs',    label: appName('abcjs')    },
+  upub:      { abbrev: 'upub', plugins: [],                      defaultDslType: 'upub',     label: appName('upub'),
                entry: 'upub/main.js', css: 'styles/upub.css' },
-  udraft:    { abbrev: 'dft',  plugins: [],                      defaultDslType: 'udraft',   label: 'uDraft',
+  udraft:    { abbrev: 'dft',  plugins: [],                      defaultDslType: 'udraft',   label: appName('udraft'),
                entry: 'udraft/main.js', css: 'styles/udraft.css' },
 };
 
@@ -357,6 +360,10 @@ async function buildQuine(meta, outName, tag) {
   console.log(`  ✓ ${outPath}  (${totalKB} KB total; bundle ${rawKB}→${gzKB} KB gzip+b64)`);
 }
 
+function _escHtml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 // ---------------------------------------------------------------------------
 // Build PWA
 // ---------------------------------------------------------------------------
@@ -374,7 +381,7 @@ async function buildQuine(meta, outName, tag) {
 async function buildPWA(plugins, meta, tag) {
   const dirName     = `pwa-${meta.abbrev}`;
   const cachePrefix = `unifile-${meta.abbrev}`;
-  const appName     = meta.label || 'Unifile';
+  const appLabel    = meta.label || '{unifile}';
   console.log(`\nBuilding PWA [${dirName}]…`);
 
   const pwaDir = join(DIST, dirName);
@@ -396,11 +403,11 @@ async function buildPWA(plugins, meta, tag) {
 
   // Stamp the variant identity into the manifest + shell so each type installs
   // as its own app, seeded with the right default DSL.  Icons are the per-type
-  // U-border set (build/icons.mjs → committed PNGs in templates/icons/<abbrev>/,
+  // `{glyph}` marks (build/icons.mjs → committed PNGs in templates/icons/<abbrev>/,
   // copied alongside the shell below).
   const manifestJson = JSON.parse(manifestRaw);
-  manifestJson.name = appName;
-  manifestJson.short_name = appName;
+  manifestJson.name = appLabel;
+  manifestJson.short_name = appLabel;
   manifestJson.icons = [
     { src: './icon-192.png',          sizes: '192x192', type: 'image/png', purpose: 'any' },
     { src: './icon-512.png',          sizes: '512x512', type: 'image/png', purpose: 'any' },
@@ -408,8 +415,8 @@ async function buildPWA(plugins, meta, tag) {
   ];
   const manifest = JSON.stringify(manifestJson, null, 2) + '\n';
   const pwaHtml = pwaHtmlRaw
-    .replace(/<title>[^<]*<\/title>/, () => `<title>${appName}</title>`)
-    .replace(/(apple-mobile-web-app-title"\s+content=")[^"]*"/, (_, p) => `${p}${appName}"`)
+    .replace(/<title>[^<]*<\/title>/, () => `<title>${_escHtml(appLabel)}</title>`)
+    .replace(/(apple-mobile-web-app-title"\s+content=")[^"]*"/, (_, p) => `${p}${_escHtml(appLabel)}"`)
     .replace(/"dslType":\s*"[^"]*"/, () => `"dslType": ${JSON.stringify(meta.defaultDslType)}`);
 
   // Per-variant icon PNGs (committed; regenerate with `node build/gen-icons.mjs`).

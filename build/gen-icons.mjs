@@ -1,11 +1,11 @@
 /**
- * One-off: rasterize the U-border icon system (build/icons.mjs) into the PNG
+ * One-off: rasterize the `{glyph}` app icons (build/icons.mjs) into the PNG
  * sizes the PWAs need, committed under templates/icons/<abbrev>/:
  *
  *   icon-192.png            manifest icon (purpose: any)
  *   icon-512.png            manifest icon (purpose: any)
  *   icon-maskable-512.png   manifest icon (purpose: maskable — art inset to
- *                           the ~80% safe zone so OS masks don't clip the U)
+ *                           the ~80% safe zone so OS masks don't clip the braces)
  *   apple-touch-icon.png    180×180, iOS home-screen icon (iOS ignores the
  *                           manifest icons; needs the <link rel> in pwa.html)
  *
@@ -22,7 +22,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
-import { ICONS, iconSvg, ICON_BG, ICON_FG } from './icons.mjs';
+import { APPS, iconSvg, appName, ICON_BG, ICON_FG } from './icons.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -137,13 +137,13 @@ async function cropPng(path, cw, ch) {
   ]));
 }
 
-for (const [id, { glyph, abbrev, codename }] of Object.entries(ICONS)) {
+for (const [id, { abbrev }] of Object.entries(APPS)) {
   const dir = join(OUT, abbrev);
   await mkdir(dir, { recursive: true });
   for (const { file, size, pad } of SIZES) {
-    const svg = iconSvg(glyph, { size, pad, fg: ICON_FG, bg: ICON_BG });
+    const svg = iconSvg(id, { size, pad, fg: ICON_FG, bg: ICON_BG });
     await raster(svg, size, join(dir, file));
   }
-  console.log(`  ✓ templates/icons/${abbrev}/  (${codename})`);
+  console.log(`  ✓ templates/icons/${abbrev}/  (${appName(id)})`);
 }
 console.log('Icons rasterized. Commit templates/icons/.');

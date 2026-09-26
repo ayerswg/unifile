@@ -10,9 +10,10 @@
  * source — one monospaced size, the syntax marks (`#`, `**`, backticks, list
  * dashes) left visible in grey via CSS pseudo-elements, links as plain blue
  * hyperlinks (see assets/css/style.css).  The home page is a static listing of
- * the apps — each row shows its U-border icon (build/icons.mjs) + codename
- * (uDoc, uPub…) and three actions: Install (per-device walkthrough modal,
- * assets/js/install.js), Open (the PWA) and Download (the single-file quine).
+ * the apps — each row shows its `{glyph}` mark + `{name}` (src/core/brand.js:
+ * `{♪} {compose}`, `{¶} {document}`…) and three actions: Install (per-device
+ * walkthrough modal, assets/js/install.js), Open (the PWA) and Download (the
+ * single-file quine).
  */
 
 import { readFile, writeFile, mkdir, readdir, rm, cp, access } from 'fs/promises';
@@ -21,26 +22,22 @@ import { fileURLToPath } from 'url';
 import { marked } from 'marked';
 import { GUIDE_MD } from '../src/upub/guide-content.js';
 import { GUIDE_MD as UDRAFT_GUIDE_MD } from '../src/udraft/guide-content.js';
-import { ICONS, iconSvg } from './icons.mjs';
+import { APPS, appMark, appName, faviconSvg } from './icons.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const DOCS = join(ROOT, 'docs');
 const OUT  = join(DOCS, '_site');
 
-const SITE = { title: 'Unifile', description: 'Single-file, offline, version-controlled document apps', baseurl: '' };
+const SITE = { title: '{unifile}', description: 'Single-file, offline, version-controlled document apps', baseurl: '' };
 const rel = (p) => SITE.baseurl + p;
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // types.yml ids → icons.mjs keys (which are DSL ids).
 const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs', udraft: 'udraft' };
 
-// Site favicon: the bare U border, black on white.
-const FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">` +
-  `<rect width="96" height="96" fill="#ffffff"/>` +
-  `<path d="M 14 10 L 14 62 A 24 24 0 0 0 38 86 L 58 86 A 24 24 0 0 0 82 62 L 82 10"` +
-  ` fill="none" stroke="#1a1a1a" stroke-width="11" stroke-linecap="round"/></svg>`);
+// Site favicon: the bare `{}`, black on white.
+const FAVICON = 'data:image/svg+xml,' + encodeURIComponent(faviconSvg());
 
 // ── front matter ───────────────────────────────────────────────────────────
 function parseFrontMatter(raw) {
@@ -131,14 +128,14 @@ function pageFoot() {
 function footer() {
   const v = VERSION ? `unifile v${esc(VERSION)} <span class="sep">·</span> ` : '';
   return `<footer class="foot"><hr>
-  <p>${v}<a href="${rel('/upub/guide/')}">uPub guide</a> <span class="sep">·</span> <a href="${rel('/udraft/guide/')}">uDraft guide</a></p>
+  <p>${v}<a href="${rel('/upub/guide/')}">${esc(appName('upub'))} guide</a> <span class="sep">·</span> <a href="${rel('/udraft/guide/')}">${esc(appName('udraft'))} guide</a></p>
 </footer>`;
 }
 
 /** Top line on every page: the site name + its few pages. */
 function nav() {
   return `<nav class="nav">
-  <a class="nav-home" href="${rel('/')}">unifile</a>
+  <a class="nav-home" href="${rel('/')}">{unifile}</a>
   <a href="${rel('/')}">apps</a>
   <a href="${rel('/posts/')}">posts</a>
   <a href="${rel('/about/')}">about</a>
@@ -148,18 +145,18 @@ function nav() {
 // ── home: the app list ──────────────────────────────────────────────────────
 function layoutHome(types) {
   const rows = types.map((t) => {
-    const ic = ICONS[TYPE_TO_ICON[t.id]] || {};
-    const code = ic.codename || t.title;
+    const id = TYPE_TO_ICON[t.id];
+    const name = APPS[id] ? appName(id) : t.title;     // {compose}
+    const mark = APPS[id] ? appMark(id) : '{}';        // {♪}
     const hub = t.id === 'markdown' ? '/get/' : `/${t.id}/`;
     const dlName = (t.download || '').split('/').pop();
-    const appName = t.title.replace(/^Unifile\s+/i, '');
-    // The codename IS the name for uPub/uDraft; the others say what they edit.
-    const kind = appName.toLowerCase() === code.toLowerCase() ? '' : ` ${esc(appName)}`;
+    // What it edits (the install modal's "Install Markdown" heading too).
+    const kind = APPS[id]?.edits || t.title;
     // The intro already says FULLY OFFLINE — drop the taglines' redundant suffix.
     const desc = (t.tagline || '').replace(/\s*[—-]\s*(fully\s+)?offline\.?\s*$/i, '.');
     return `<li class="app">
-  <a class="app-name" href="${rel(hub)}" title="About ${esc(t.title)}"><span class="app-icon">${iconSvg(ic.glyph, { size: 22 })}</span><strong>${esc(code)}</strong></a>${kind} — ${esc(desc)}
-  <span class="app-links"><button class="link" data-install data-app="${esc(appName)}"
+  <a class="app-name" href="${rel(hub)}" title="About ${esc(name)}"><span class="app-icon">${esc(mark)}</span><strong>${esc(name)}</strong></a> ${esc(kind)} — ${esc(desc)}
+  <span class="app-links"><button class="link" data-install data-app="${esc(name)}"
       data-pwa="${rel(t.pwa)}" data-dl="${rel(t.download)}">Install</button>
     <span class="sep">·</span> <a href="${rel(t.pwa)}">Open</a>
     <span class="sep">·</span> <a href="${rel(t.download)}" download="${esc(dlName)}">Download</a></span>
@@ -170,7 +167,7 @@ function layoutHome(types) {
 <div class="doc">
   ${nav()}
   <div class="content">
-  <h1>Unifile</h1>
+  <h1>{unifile}</h1>
   <p>Single-file document apps with built-in version history. Fully offline: no server, no account, nothing leaves your device.</p>
 
   <h2>Apps</h2>
@@ -216,15 +213,16 @@ function renderAppList(apps) {
 
 function renderLauncher(t) {
   if (!t) return '<p>(unknown type)</p>';
-  const ic = ICONS[TYPE_TO_ICON[t.id]] || {};
+  const id = TYPE_TO_ICON[t.id];
+  const name = APPS[id] ? appName(id) : t.title;
+  const mark = APPS[id] ? appMark(id) : '{}';
   const feats = (t.features || []).map(f => `<li>${esc(f)}</li>`).join('\n');
   const dlName = (t.download || '').split('/').pop();
-  const appName = t.title.replace(/^Unifile\s+/i, '');
   return `<div class="launcher">
   <div class="launch-identity">
-    <span class="launch-icon">${iconSvg(ic.glyph, { size: 48 })}</span>
+    <span class="launch-icon">${esc(mark)}</span>
     <div>
-      <div><strong>${esc(ic.codename || '')}</strong></div>
+      <div><strong>${esc(name)}</strong></div>
       <p class="launch-tagline"><em>${esc(t.tagline || '')}</em></p>
     </div>
   </div>
@@ -233,7 +231,7 @@ function renderLauncher(t) {
     <a class="launch-btn" href="${rel(t.download)}" download="${esc(dlName)}">Download single .html</a>
   </div>
   <p class="launch-howto">Not sure how to install it?
-    <a href="#" data-install data-app="${esc(appName)}" data-pwa="${rel(t.pwa)}" data-dl="${rel(t.download)}">Step-by-step guide for your device</a>.</p>
+    <a href="#" data-install data-app="${esc(name)}" data-pwa="${rel(t.pwa)}" data-dl="${rel(t.download)}">Step-by-step guide for your device</a>.</p>
   <div class="launch-overview"><p>${esc(t.overview || '')}</p>
     <ul class="launch-features">\n${feats}\n</ul>
   </div>
@@ -280,8 +278,8 @@ async function main() {
 
   // Synthetic page: the uPub guide is authored ONCE in src/upub/guide-content.js
   // (the app renders the same Markdown in its Guide sheet) and published here.
-  pages.push({ title: 'uPub Guide', url: '/upub/guide/', body: GUIDE_MD, isHome: false, file: '(generated)' });
-  pages.push({ title: 'uDraft Guide', url: '/udraft/guide/', body: UDRAFT_GUIDE_MD, isHome: false, file: '(generated)' });
+  pages.push({ title: `${appName('upub')} guide`, url: '/upub/guide/', body: GUIDE_MD, isHome: false, file: '(generated)' });
+  pages.push({ title: `${appName('udraft')} guide`, url: '/udraft/guide/', body: UDRAFT_GUIDE_MD, isHome: false, file: '(generated)' });
 
   // Render pages.
   for (const p of pages) {
