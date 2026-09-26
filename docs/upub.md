@@ -1,6 +1,6 @@
 ---
 layout: page
-title: uPub
+title: "{write}"
 type: upub
 permalink: /upub/
 nav_exclude: true

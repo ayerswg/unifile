@@ -50,7 +50,7 @@ const SEED = `---
 title: Lakeside Cottage
 units: imperial
 ---
-# Welcome to uDraft — rooms in, blueprint out.  Tap the eye to see the plan.
+# Welcome to {draft} — rooms in, blueprint out.  Tap the eye to see the plan.
 # Three floors share one origin, so the same relative placements stack the
 # stair shaft (hall → landing → stairwell) exactly on top of itself.
 
@@ -1670,7 +1670,7 @@ export class UDraftApp {
     const modal = this._openSheet(`
       <div class="wr-sheet-head">About</div>
       <div class="wr-sheet-body">
-        <p><b>uDraft</b> v${esc(VERSION)}
+        <p><b>{draft}</b> v${esc(VERSION)}
           <span class="wr-mut">· build ${esc(BUILT)}${COMMIT
             ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(COMMIT_AT.slice(0, 16).replace('T', ' '))}Z)` : ''}` : ''}</span></p>
         <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'

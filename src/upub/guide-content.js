@@ -7,10 +7,10 @@
  * can import it during the site build.
  */
 
-export const GUIDE_TITLE = 'uPub — Guide';
+export const GUIDE_TITLE = '{write} — Guide';
 
 export const GUIDE_MD = `
-uPub is a distraction-free Markdown writing app with two things
+{write} (formerly uPub) is a distraction-free Markdown writing app with two things
 most writing apps don't have: **built-in git-style version history** and
 **EPUB export** — and it runs **fully offline**. Nothing ever leaves your device: no server, no account, no sync,
 no telemetry.
@@ -68,7 +68,7 @@ the list.
 
 ## Markdown reference
 
-uPub supports the CommonMark + GFM constructs that map cleanly onto an
+{write} supports the CommonMark + GFM constructs that map cleanly onto an
 EPUB. This is the complete list — everything here survives the round trip
 into an e-book:
 
@@ -181,7 +181,7 @@ is never locked in.
 
 ## Version history
 
-uPub keeps a git-style history *inside* the document. Open **⋯ menu →
+{write} keeps a git-style history *inside* the document. Open **⋯ menu →
 History**:
 
 - **Commit** snapshots the current text (a message is optional). Commits
@@ -208,7 +208,7 @@ pressure — export a data file (or an EPUB) for anything you care about.
 
 ## iOS install
 
-Open the uPub page in Safari → Share → **Add to Home Screen**. The app
+Open the {write} page in Safari → Share → **Add to Home Screen**. The app
 then launches full-screen, works completely offline, and keeps your
 documents on the device. The share sheet is used for all exports, so you
 can save straight to Files, Books, or any app.

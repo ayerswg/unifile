@@ -20,7 +20,7 @@ import { EditorView, keymap, Decoration,
          rectangularSelection, crosshairCursor,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder, Text } from '@codemirror/state';
-import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { history, defaultKeymap, historyKeymap, indentWithTab, undo, redo } from '@codemirror/commands';
 import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
@@ -829,6 +829,10 @@ export class Editor {
     const langExts = this._getDslExtensions(dslId);
 
     const updateListener = EditorView.updateListener.of((update) => {
+      // Focus in/out → the phone shell hides its top bar while typing
+      // (app.js _bindEditingChrome) and the action button keeps its state.
+      if (update.focusChanged) state.emit('editor-focus', { focused: update.view.hasFocus });
+
       // Map thread char-offset positions through any document change BEFORE
       // broadcasting the new content so subscribers see fresh positions.
       if (update.docChanged) {
@@ -1020,6 +1024,11 @@ export class Editor {
   }
 
   focus() { this._view?.focus(); }
+  hasFocus() { return !!this._view?.hasFocus; }
+
+  /** Undo / redo through CM's history (the phone action button's Undo/Redo). */
+  undo() { return this._view ? undo(this._view) : false; }
+  redo() { return this._view ? redo(this._view) : false; }
 
   /**
    * Run the active DSL's source formatter (ABC: one measure per line) over the

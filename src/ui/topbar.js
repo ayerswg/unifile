@@ -1293,7 +1293,7 @@ clef=none          % no clef / percussion</code></pre>`
       {
         group: 'Playback (unifile)',
         title: 'Sound & Transport',
-        content: `<p class="help-note">Playback uses a built-in, fully-offline acoustic piano. Use the transport bar (play / scrubber / time) at the bottom, the floating play button on mobile, or press <code>Space</code>-like controls in the app. Put the cursor in a note to play from there; select a range to play just that range.</p>
+        content: `<p class="help-note">Playback uses a built-in, fully-offline acoustic piano. Use the transport bar (play / scrubber / time) at the bottom on desktop; on phones tap the round action button (hold it for every action, drag it to another corner). Put the cursor in a note to play from there; select a range to play just that range.</p>
 <p class="help-note">A custom soundfont URL can be set under <strong>Settings → Extensions</strong> (<code>soundfont-url</code>).</p>`
       },
       {

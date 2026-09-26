@@ -8,83 +8,83 @@
 #   kind: pwa      → an installable offline web app
 
 # ── Front-door hubs (primary) ──
-- title: Markdown
+- title: "{document}"
   url: /get/
   kind: app
   pinned: true
   excerpt: Markdown editor — overview, then install the app or download the file.
 
-- title: Mermaid
+- title: "{diagram}"
   url: /mermaid/
   kind: app
   pinned: true
   excerpt: Mermaid diagram editor — overview, then install the app or download the file.
 
-- title: ABC Notation
+- title: "{compose}"
   url: /abc/
   kind: app
   pinned: true
   excerpt: ABC music notation — overview, then install the app or download the file.
 
-- title: uPub
+- title: "{write}"
   url: /upub/
   kind: app
   pinned: true
   excerpt: Distraction-free Markdown writing with EPUB export — install or download.
 
-- title: uDraft
+- title: "{draft}"
   url: /udraft/
   kind: app
   pinned: true
   excerpt: Architectural blueprints from plain text — install or download.
 
 # ── Direct links (searchable) ──
-- title: Markdown — download (.html)
+- title: "{document} — download (.html)"
   url: /dl/unifile.md.html
   kind: download
   excerpt: Standalone single-file Markdown editor; save and open offline.
 
-- title: Mermaid — download (.html)
+- title: "{diagram} — download (.html)"
   url: /dl/unifile.mer.html
   kind: download
   excerpt: Standalone single-file Mermaid diagram editor; save and open offline.
 
-- title: ABC Notation — download (.html)
+- title: "{compose} — download (.html)"
   url: /dl/unifile.abc.html
   kind: download
   excerpt: Standalone ABC build with offline piano + MIDI.
 
-- title: Markdown — install (PWA)
+- title: "{document} — install (PWA)"
   url: /pwa-md/
   kind: pwa
   excerpt: Install the Markdown editor as an offline app.
 
-- title: Mermaid — install (PWA)
+- title: "{diagram} — install (PWA)"
   url: /pwa-mer/
   kind: pwa
   excerpt: Install the Mermaid diagram editor as an offline app.
 
-- title: ABC Notation — install (PWA)
+- title: "{compose} — install (PWA)"
   url: /pwa-abc/
   kind: pwa
   excerpt: Install the ABC notation app as an offline app.
 
-- title: uPub — download (.html)
+- title: "{write} — download (.html)"
   url: /dl/unifile.upub.html
   kind: download
   excerpt: Standalone single-file Markdown writing app with EPUB export.
 
-- title: uPub — install (PWA)
+- title: "{write} — install (PWA)"
   url: /pwa-upub/
   kind: pwa
-  excerpt: Install uPub as an offline writing app.
+  excerpt: Install {write} as an offline writing app.
 
-- title: uDraft — download (.html)
+- title: "{draft} — download (.html)"
   url: /dl/unifile.dft.html
   kind: download
   excerpt: Standalone single-file blueprint drafting app.
 
-- title: uDraft — install (PWA)
+- title: "{draft} — install (PWA)"
   url: /pwa-dft/
   kind: pwa
-  excerpt: Install uDraft as an offline drafting app.
+  excerpt: Install {draft} as an offline drafting app.

@@ -41,7 +41,7 @@ title: Untitled
 author:
 ---
 
-# Welcome to uPub
+# Welcome to {write}
 
 A quiet place to write — plain **Markdown**, saved on your device, with
 version history built in.
@@ -730,7 +730,7 @@ export class UPubApp {
     const modal = this._openSheet(`
       <div class="wr-sheet-head">About</div>
       <div class="wr-sheet-body">
-        <p><b>uPub</b> v${esc(VERSION)}
+        <p><b>{write}</b> v${esc(VERSION)}
           <span class="wr-mut">· build ${esc(BUILT)}${COMMIT
             ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(COMMIT_AT.slice(0, 16).replace('T', ' '))}Z)` : ''}` : ''}</span></p>
         <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'

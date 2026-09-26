@@ -1,6 +1,6 @@
 ---
 layout: page
-title: uDraft
+title: "{draft}"
 type: udraft
 permalink: /udraft/
 nav_exclude: true
