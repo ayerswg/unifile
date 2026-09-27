@@ -36,6 +36,7 @@ import { PianoRoll } from './piano-roll.js';
 import { mountSiteNav } from './site-nav.js';
 import { checkForUpdate } from './update-check.js';
 import { PaneSwitch } from './pane-switch.js';
+import { ActionFab } from './action-fab.js';
 import { DiffView, DiffBar, DiffPanes } from './diff-view.js';
 import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
@@ -247,47 +248,8 @@ export class App {
     editorFooterEl.id = 'uf-editor-footer';
     document.getElementById('uf-editor-wrap').appendChild(editorFooterEl);
 
-    // Floating align button (mobile, DSLs with a source formatter — i.e. ABC).
-    // CSS shows it only on phones when the active DSL is abcjs (.abc-active).
-    const alignBtn = document.createElement('button');
-    alignBtn.className = 'uf-align-btn';
-    alignBtn.type = 'button';
-    alignBtn.title = 'Align voices';
-    alignBtn.setAttribute('aria-label', 'Align measures across voices');
-    // Two "voice" lines crossed by three aligned barlines — a measures grid.
-    alignBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">
-      <path d="M2 5.5h12M2 10.5h12" stroke-width="1.3"/>
-      <path d="M4 3v10M8 3v10M12 3v10" stroke-width="1.6"/>
-    </svg>`;
-    alignBtn.addEventListener('click', () => {
-      this._components.editor?.alignActiveDsl();
-      this._components.editor?.focus();
-    });
-    document.getElementById('uf-editor-wrap').appendChild(alignBtn);
-
-    // Floating play/pause FAB (phones only — the transport bar is hidden there).
-    // Global (app-level) so it's reachable from both the editor and render panes;
-    // CSS shows it only on phones for ABC, and hides it in landscape where the
-    // collapsible pane dock provides its own play control instead.
-    const playBtn = document.createElement('button');
-    playBtn.className = 'uf-play-btn';
-    playBtn.type = 'button';
-    playBtn.title = 'Play / pause';
-    playBtn.setAttribute('aria-label', 'Play or pause playback');
-    playBtn.innerHTML = _playIcon(false);
-    playBtn.addEventListener('click', () => state.emit('abc-play'));
-    state.on('abc-play-state', ({ playing }) => {
-      playBtn.classList.toggle('playing', !!playing);
-      playBtn.innerHTML = _playIcon(!!playing);
-    });
-    document.getElementById('unifile-app').appendChild(playBtn);
-
-    // The landscape pane dock's align button routes through this event (the
-    // portrait FAB calls the editor directly above).
-    state.on('mobile-align', () => {
-      this._components.editor?.alignActiveDsl();
-      this._components.editor?.focus();
-    });
+    // Phone editing verbs (play/pause, align, undo…) live on the floating
+    // action button (action-fab.js, mounted below) — no per-verb FABs.
 
     // The DSL transport is a global bottom bar (sticks to the screen bottom and
     // is visible in both the editor and preview panes), not a per-pane footer.
@@ -298,9 +260,13 @@ export class App {
     // Mobile pane switcher — the whole top chrome on phones (segments = tabs +
     // context + dropdown menus). Owns branch switching, the DSL/tools menu and
     // exports; replaces the mobile top bar, hamburger and commit-pane bottom bar.
+    const shellCtx = { handlers, editor: this._components.editor };
     this._components.paneSwitch = new PaneSwitch(
-      document.getElementById('uf-pane-switch'), handlers
+      document.getElementById('uf-pane-switch'), shellCtx
     );
+    // Phone action button: tap = primary action, hold = every action in a grid,
+    // drag = snap to a corner (see action-fab.js). CSS hides it on desktop.
+    this._components.actionFab = new ActionFab(document.getElementById('unifile-app'), shellCtx);
     // Read-only commit diff view + its bottom-bar picker (desktop two-column).
     this._components.diffView = new DiffView(document.getElementById('uf-diff'));
     // Mobile single-column diff panes (middle = target, right = source).
@@ -611,6 +577,14 @@ export class App {
       const root = document.documentElement.style;
       root.setProperty('--app-height', `${h}px`);
       root.setProperty('--app-vv-top', `${top}px`);
+      // "Soft keyboard is up" = the visual viewport is >100px shorter than the
+      // tallest one seen at this window width (keyed by width so rotation gets
+      // its own baseline).  Drives the hide-the-top-bar-while-typing chrome.
+      const w = window.innerWidth;
+      this._vvBase ||= {};
+      this._vvBase[w] = Math.max(this._vvBase[w] || 0, h);
+      const kbOpen = this._vvBase[w] - h > 100;
+      if (kbOpen !== this._kbOpen) { this._kbOpen = kbOpen; this._updateEditingChrome?.(); }
     };
     set();
     window.addEventListener('resize', set);
@@ -658,6 +632,29 @@ export class App {
     return `<div id="uf-pane-switch" role="tablist" aria-label="Switch pane"></div>`;
   }
 
+  /**
+   * Hide the phone top bar while typing so the keyboard-shortened viewport goes
+   * to the text (`data-editing` on the shell → CSS).  Mirrors uPub's rule:
+   * editor focused AND the soft keyboard genuinely open (visual-viewport
+   * heuristic in _trackViewportHeight; focus alone where there's no
+   * visualViewport) AND a coarse pointer — an iPad with a hardware keyboard
+   * keeps its bar.  The bar returns when the keyboard is dismissed (iOS's own
+   * accessory-bar ✓ blurs the editor).  The action button stays put.
+   */
+  _bindEditingChrome(root) {
+    this._updateEditingChrome = () => {
+      const focused = !!this._components.editor?.hasFocus();
+      const kb = window.visualViewport ? !!this._kbOpen : true;
+      const editing = _isMobile() && focused && kb && window.matchMedia('(pointer: coarse)').matches;
+      root.toggleAttribute('data-editing', editing);
+    };
+    state.on('editor-focus', () => this._updateEditingChrome());
+    document.addEventListener('focusin', () => this._updateEditingChrome());
+    document.addEventListener('focusout', () => setTimeout(() => this._updateEditingChrome(), 50));
+    _mql.addEventListener('change', () => this._updateEditingChrome());
+    this._updateEditingChrome();
+  }
+
   _setupMobilePanes() {
     this._trackViewportHeight();
     this._lockWindowScroll();
@@ -689,6 +686,8 @@ export class App {
     // The bottom bar is an in-flow flex child at the end of the `100dvh`
     // #unifile-app column (see app.css), so it sits flush at the true visible
     // bottom with no JS — no visualViewport pinning needed.
+
+    this._bindEditingChrome(root);
 
     // Open on the editor; re-assert a valid pane whenever we (re)enter mobile.
     if (_isMobile()) setPane('editor'); else root.removeAttribute('data-mobile-pane');
@@ -1088,13 +1087,6 @@ const _isMobile = () => _mql.matches;
 // ---------------------------------------------------------------------------
 // Divider icon helpers
 // ---------------------------------------------------------------------------
-
-/** Play or pause glyph for the floating mobile play button. */
-function _playIcon(playing) {
-  return playing
-    ? `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="2" width="4" height="12" rx="1"/><rect x="9" y="2" width="4" height="12" rx="1"/></svg>`
-    : `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><polygon points="4,2 13,8 4,14"/></svg>`;
-}
 
 /** Single right-pointing chevron — used for divider-to-split in PREVIEW mode.
  *  CSS flips it (scaleX(-1)) when data-mode="editor". */

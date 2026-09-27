@@ -20,7 +20,7 @@ import { EditorView, keymap, Decoration,
          rectangularSelection, crosshairCursor,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder, Text } from '@codemirror/state';
-import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { history, defaultKeymap, historyKeymap, indentWithTab, undo, redo } from '@codemirror/commands';
 import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
@@ -524,10 +524,9 @@ const baseExtensions = [
   bracketMatching(),
   closeBrackets(),
   autocompletion(),
-  // NOTE: line wrapping intentionally omitted — long DSL lines scroll
-  // horizontally inside the editor (cm-scroller) rather than wrapping. On mobile
-  // this nests inside the pane scroll-snap strip: swiping the code scrolls it,
-  // and at the edge the gesture chains out to snap to the next pane.
+  // NOTE: line wrapping is a per-DSL choice — abcjs turns it on in its
+  // getEditorExtensions() (music wraps; one measure per line via the formatter).
+  // Other DSLs keep horizontal scrolling inside cm-scroller.
 
   // DSL range highlight (e.g. from clicking a note in ABC preview)
   dslHighlightField,
@@ -541,8 +540,8 @@ const baseExtensions = [
   // Shebang line decoration (#! section headers appear muted/italic)
   shebangDecoField,
 
-  // Collapsible front-matter / ABC-header sections (default-collapsed on load
-  // so the music body is what you see first).
+  // Collapsible front-matter section (default-collapsed on load so the body is
+  // what you see first).
   sectionCollapseExtension,
 
   // Inject the catppuccin highlight CSS rules so sectionSyntaxField's
@@ -572,7 +571,7 @@ function makeUnifileKeymap() {
         return true;
       }
     },
-    // Format: align measures/voices when the active DSL provides a formatter.
+    // Format the source when the active DSL provides a formatter (ABC: one measure per line).
     { key: 'Alt-Shift-f', preventDefault: true, run: (view) => alignActiveDsl(view) },
     { key: 'Alt-1', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.EDITOR);  return true; } },
     { key: 'Alt-2', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.SPLIT);   return true; } },
@@ -581,7 +580,7 @@ function makeUnifileKeymap() {
 }
 
 /**
- * Run the active DSL's source formatter (e.g. ABC voice alignment) over the whole
+ * Run the active DSL's source formatter (ABC: one measure per line) over the whole
  * document, preserving the caret's line/column as best we can. Returns true when
  * handled (so a keybinding stops here), false when the DSL has no formatter.
  * @param {EditorView} view
@@ -830,6 +829,10 @@ export class Editor {
     const langExts = this._getDslExtensions(dslId);
 
     const updateListener = EditorView.updateListener.of((update) => {
+      // Focus in/out → the phone shell hides its top bar while typing
+      // (app.js _bindEditingChrome) and the action button keeps its state.
+      if (update.focusChanged) state.emit('editor-focus', { focused: update.view.hasFocus });
+
       // Map thread char-offset positions through any document change BEFORE
       // broadcasting the new content so subscribers see fresh positions.
       if (update.docChanged) {
@@ -1021,10 +1024,15 @@ export class Editor {
   }
 
   focus() { this._view?.focus(); }
+  hasFocus() { return !!this._view?.hasFocus; }
+
+  /** Undo / redo through CM's history (the phone action button's Undo/Redo). */
+  undo() { return this._view ? undo(this._view) : false; }
+  redo() { return this._view ? redo(this._view) : false; }
 
   /**
-   * Run the active DSL's source formatter (ABC voice/measure alignment) over the
-   * document. Returns true when a formatter ran. Used by the mobile align button;
+   * Run the active DSL's source formatter (ABC: one measure per line) over the
+   * document. Returns true when a formatter ran. Used by the mobile format button;
    * the Alt-Shift-F keybinding calls the same logic.
    */
   alignActiveDsl() { return alignActiveDsl(this._view); }

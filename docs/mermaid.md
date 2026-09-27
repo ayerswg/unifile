@@ -1,6 +1,6 @@
 ---
 layout: page
-title: Mermaid
+title: "{diagram}"
 type: mermaid
 permalink: /mermaid/
 nav_exclude: true

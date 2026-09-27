@@ -1,43 +1,36 @@
 /**
- * Collapsible document sections
+ * Collapsible front-matter section
  *
- * Splits the document into labelled, collapsible sections — visually similar to
- * the commit-group headers in the blame view — so the actual music is what you
- * see by default.
+ * The leading `---`…`---` YAML block gets a labelled, collapsible bar (visually
+ * similar to the commit-group headers in the blame view) so the document body
+ * — the prose, the diagram, the music — is what you see by default.
  *
- * Sections are recognised only once written in as valid:
- *   • `frontmatter` — the leading `---`…`---` YAML block (valid once the closing
- *     fence exists, i.e. parseGlobalFrontMatter reports a body offset).
- *   • `abcheader`   — the ABC tune header (X:/T:/M:/…), everything up to and
- *     including the required `K:` line. Only for abcjs documents.
- *   • `music`       — the measures after the `K:` line (only when non-empty).
- *
- * Bars are shown ONLY when the document splits into more than one section — a
- * lone section (e.g. front matter by itself) reads as no sections at all.
- *
- * Each section renders a header bar:
- *   • expanded  → a thin bar ABOVE the section (block widget, side -1) with a
+ * The block is recognised only once written in as valid (the closing fence
+ * exists, i.e. parseGlobalFrontMatter reports a body offset). It renders a
+ * header bar:
+ *   • expanded  → a thin bar ABOVE the block (block widget, side -1) with a
  *     caret; click to collapse.
- *   • collapsed → the section's lines are replaced by a single bar (block
+ *   • collapsed → the block's lines are replaced by a single bar (block
  *     replace) showing the label + a line count; click to expand.
  *
- * On load everything is collapsed EXCEPT the last section — the music (or, if no
- * music has been written yet, whatever the last section is). Sections that
- * become valid later, while the user is typing them, are NOT auto-collapsed —
- * they appear expanded with their new header bar. Collapse state is per-editor
- * and toggled by clicking a bar; `resetCollapseEffect` re-applies the load-time
- * defaults (dispatched when a different document is loaded via checkout / branch
- * switch / open).
+ * On load the front matter is collapsed. A block that becomes valid later,
+ * while the user is typing it, is NOT auto-collapsed — it appears expanded with
+ * its new header bar. Collapse state is per-editor and toggled by clicking the
+ * bar; `resetCollapseEffect` re-applies the load-time default (dispatched when a
+ * different document is loaded via checkout / branch switch / open).
+ *
+ * Deliberately NOT split any further: the ABC tune header and the music used
+ * to be separate sections; that division was removed (2026-09) — an ABC tune
+ * is edited as one piece of text.
  */
 
 import { EditorView, Decoration, WidgetType } from '@codemirror/view';
 import { StateField, StateEffect, RangeSetBuilder } from '@codemirror/state';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
-import { state } from './state.js';
 
 /** Toggle one section's collapsed state by id. */
 export const toggleSectionEffect = StateEffect.define();
-/** Re-apply the load-time default collapse (collapse all but the last section). */
+/** Re-apply the load-time default collapse (front matter collapsed). */
 export const resetCollapseEffect = StateEffect.define();
 /** Rebuild the section decorations without touching the collapse set (e.g. on
  *  orientation change, where bars are suppressed in landscape then restored). */
@@ -54,92 +47,34 @@ export const landscapePhoneMql = window.matchMedia(
 // Section detection
 // ---------------------------------------------------------------------------
 
-function _docDslType() {
-  return state.data?.dslType ?? 'markdown';
-}
-
-/** A tune-header line: a column-0 info field (`X:`, `T:`, `K:`, …), a comment
- *  (`%`) or a stylesheet directive (`%%`). Music/notes lines never match. */
-function _isAbcHeaderLine(line) {
-  return /^[A-Za-z]:/.test(line) || /^%/.test(line);
-}
-
-/**
- * Find the end of the ABC tune header. The header is the contiguous run of
- * header lines at the top of the tune body, and it must contain the required
- * `K:` line. Crucially the run can extend PAST `K:`: info fields the user
- * writes after the key (e.g. a `T:` title) are still header metadata and belong
- * in the header group, not the music. The run ends at the first line that isn't
- * a header line (the first actual music line, or a blank line).
- * @returns {number|null} end offset (after the last header line's newline), or
- *   null when there is no `K:` line in the leading run yet.
- */
-function _abcHeaderEnd(text, from) {
-  let cursor = from;
-  let sawK = false;
-  let headerEnd = null;                         // end of the last header line
-  for (const rawLine of text.slice(from).split('\n')) {
-    const lineEnd = cursor + rawLine.length;    // position before the newline
-    if (!_isAbcHeaderLine(rawLine)) break;      // body (music) starts here
-    if (/^K:/.test(rawLine)) sawK = true;
-    // Include this line's trailing newline so the collapse consumes it.
-    headerEnd = Math.min(lineEnd + 1, text.length);
-    cursor = lineEnd + 1;                        // + newline
-  }
-  return sawK ? headerEnd : null;
-}
-
 /** Number of source lines covered by [from, to). */
 function _lineCount(text, from, to) {
   return text.slice(from, to).replace(/\n$/, '').split('\n').length;
 }
 
 /**
- * The collapsible sections present in `text` for the document's DSL.
- *
- * Bars only make sense when a document is split into MORE THAN ONE section, so
- * a single detected section (e.g. front matter alone) yields nothing. For an
- * abcjs document the body is further split into the tune header and the music
- * (measures), so a complete tune has up to three sections.
+ * The collapsible sections present in `text`: the front matter, when valid.
+ * (Kept as a list so a future section kind slots in.)
  *
  * @returns {Array<{id:string,label:string,from:number,to:number,lines:number}>}
  */
-function detectSections(text, dslType) {
+function detectSections(text) {
   // Landscape phone: pretend there are no sections (bars hidden). The field's
   // collapse Set is untouched, so portrait restores the previous state.
   if (landscapePhoneMql.matches) return [];
 
   const raw = [];
-  const docLen = text.length;
-
   const { bodyFrom } = parseGlobalFrontMatter(text);
   if (bodyFrom > 0) {
     raw.push({ id: 'frontmatter', label: 'Front matter', from: 0, to: bodyFrom });
   }
-
-  const bodyStart = bodyFrom;   // 0 when there is no front matter
-  if (dslType === 'abcjs') {
-    const kEnd = _abcHeaderEnd(text, bodyStart);
-    if (kEnd !== null && kEnd > bodyStart) {
-      raw.push({ id: 'abcheader', label: 'Tune header', from: bodyStart, to: kEnd });
-      // The measures after the K: line — their own section, default-open.
-      if (text.slice(kEnd).trim().length > 0) {
-        raw.push({ id: 'music', label: 'Music', from: kEnd, to: docLen });
-      }
-    }
-  }
-
-  // Only surface bars when the document actually splits into multiple sections.
-  if (raw.length < 2) return [];
   for (const s of raw) s.lines = _lineCount(text, s.from, s.to);
   return raw;
 }
 
-/** Default collapse set: every section except the last (the music / content). */
+/** Default collapse set: every section (i.e. the front matter) starts collapsed. */
 function defaultCollapsed(sections) {
-  const set = new Set();
-  for (let i = 0; i < sections.length - 1; i++) set.add(sections[i].id);
-  return set;
+  return new Set(sections.map(s => s.id));
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +137,7 @@ class SectionHeaderWidget extends WidgetType {
 
 function buildDecorations(edState, collapsed) {
   const text = edState.doc.toString();
-  const sections = detectSections(text, _docDslType());
+  const sections = detectSections(text);
   const builder = new RangeSetBuilder();
   for (const s of sections) {
     if (collapsed.has(s.id)) {
@@ -229,7 +164,7 @@ function buildDecorations(edState, collapsed) {
 
 const sectionCollapseField = StateField.define({
   create(edState) {
-    const sections = detectSections(edState.doc.toString(), _docDslType());
+    const sections = detectSections(edState.doc.toString());
     const collapsed = defaultCollapsed(sections);
     return { collapsed, deco: buildDecorations(edState, collapsed) };
   },
@@ -245,7 +180,7 @@ const sectionCollapseField = StateField.define({
         else collapsed.add(e.value);
         recompute = true;
       } else if (e.is(resetCollapseEffect)) {
-        const sections = detectSections(tr.state.doc.toString(), _docDslType());
+        const sections = detectSections(tr.state.doc.toString());
         collapsed = defaultCollapsed(sections);
         recompute = true;
       } else if (e.is(refreshSectionsEffect)) {

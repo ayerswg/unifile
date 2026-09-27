@@ -1,0 +1,442 @@
+/**
+ * uDraft — the udraft variant's stylesheet.
+ *
+ * Imports uPub's stylesheet wholesale (esbuild bundles the @import): the two
+ * variants share the whole shell — fixed column, title bar, scroller, sheets,
+ * slash menu, history, toasts — and uPub's wr-* rules ARE that shell.  What
+ * follows only adds uDraft's own surfaces: statement token colours, the
+ * blueprint preview pane (floor tabs, issue strip, themed plan svg), and the
+ * autocomplete popup (#ud-auto, a second slash-menu instance).
+ */
+
+@import "./upub.css";
+
+/* ── Editor token colours (spans from udraft/syntax.js) ───────────────────── */
+
+.wr-line .kw   { color: var(--accent); font-weight: 600; }
+.wr-line .dir  { color: #2aa876; }
+.wr-line .len  { color: #b0762a; }
+.wr-line .id   { color: var(--fg); font-weight: 500; }
+.wr-line .fix  { color: #8e6bc8; }
+.wr-line .op   { color: var(--fg-mut); }
+.wr-line .str  { color: #2aa876; }
+.wr-line .cmt  { color: var(--dim); font-style: italic; }
+.t-comment     { color: var(--dim); font-style: italic; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-wr-theme="light"]) .wr-line .dir,
+  :root:not([data-wr-theme="light"]) .wr-line .str { color: #57c99a; }
+  :root:not([data-wr-theme="light"]) .wr-line .len { color: #d99a52; }
+  :root:not([data-wr-theme="light"]) .wr-line .fix { color: #b295e0; }
+}
+:root[data-wr-theme="dark"] .wr-line .dir,
+:root[data-wr-theme="dark"] .wr-line .str { color: #57c99a; }
+:root[data-wr-theme="dark"] .wr-line .len { color: #d99a52; }
+:root[data-wr-theme="dark"] .wr-line .fix { color: #b295e0; }
+
+/* ── Blueprint preview pane ───────────────────────────────────────────────── */
+
+#wr-preview { display: flex; flex-direction: column; padding: 0; }
+#wr-preview[hidden] { display: none; }   /* display:flex would defeat [hidden] */
+
+#ud-ptabs {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px 0;
+  overflow-x: auto;
+}
+#ud-ptabs[hidden] { display: none; }
+#ud-ptabs button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-mut);
+  font: 500 13px/1 -apple-system, system-ui, sans-serif;
+  padding: 8px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-ptabs button.active { color: var(--accent); border-color: var(--accent); }
+
+/* ── Context bar — breadcrumb + object inspector ──────────────────────────── */
+
+#ud-ctxbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 14px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  min-height: 40px;
+}
+#ud-ctxbar[hidden] { display: none; }
+#ud-ctxbar button {
+  appearance: none;
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-mut);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-ctxbar button:active { background: var(--bg-alt); color: var(--accent); }
+#ud-ctx-back { font: 600 20px/1 -apple-system, system-ui, sans-serif; }
+#ud-ctx-src  { font: 600 12px/1 ui-monospace, "SF Mono", Menlo, monospace; }
+#ud-ctx-text {
+  flex: 1;
+  min-width: 0;
+  font: 500 14px/1.35 -apple-system, system-ui, sans-serif;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#ud-ctx-text .ud-crumbs { display: flex; align-items: baseline; gap: 2px; min-width: 0; }
+/* The crumbs are real buttons — undo the bar's 36px icon-button sizing. */
+#ud-ctxbar button.ud-crumb-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: 400 13.5px/1.3 -apple-system, system-ui, sans-serif;
+  width: auto;
+  height: auto;
+  display: inline-block;
+  padding: 2px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.ud-crumb-btn:active { background: var(--bg-alt); }
+.ud-crumb-sep { color: var(--dim); padding: 0 1px; }
+
+
+#ud-issues {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px 0;
+  max-height: 30%;
+  overflow-y: auto;
+}
+#ud-issues[hidden] { display: none; }
+.ud-issue {
+  appearance: none;
+  border: 0;
+  text-align: left;
+  background: var(--code-bg);
+  color: var(--fg-mut);
+  font: 400 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 7px 10px;
+  border-left: 3px solid var(--pending);
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ud-issue.ud-error { border-left-color: var(--danger); }
+.ud-issue b { color: var(--fg); font-weight: 600; margin-right: 6px; }
+
+#ud-plan {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;       /* zoom/pan owns this surface — no native scroll */
+  touch-action: none;     /* one finger pans, two pinch (app.js _bindZoom) */
+  -webkit-touch-callout: none;   /* long-press = jump to source, not iOS menu */
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 14px;
+  cursor: grab;
+}
+#ud-plan:active { cursor: grabbing; }
+/* The svg fills the pane and the VIEWBOX is the zoom window (crisp at any
+   depth — CSS-transform scaling would rasterize and blur). */
+#ud-plan svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.ud-empty { color: var(--fg-mut); font-size: 15px; padding: 20px 8px; }
+.ud-empty code { background: var(--code-bg); border-radius: 4px; padding: 1px 5px; }
+
+/* Plan stats button flags issues. */
+#wr-count.ud-has-issues { color: var(--danger); }
+
+/* ── The plan itself (mirror of svg.js baseStyles, themed via vars) ───────── */
+
+#ud-plan .ud-walls   { fill: var(--fg); }
+#ud-plan .ud-gap     { fill: var(--bg); }
+#ud-plan .ud-paper   { fill: var(--bg); }
+#ud-plan .ud-sym     { stroke: var(--fg); stroke-width: 20; fill: none; stroke-linecap: round; }
+#ud-plan .ud-thin    { stroke: var(--fg-mut); stroke-width: 12; fill: none; }
+#ud-plan .ud-dash    { stroke-dasharray: 120 80; }
+#ud-plan .ud-arc     { stroke-width: 12; }
+#ud-plan .ud-txt     { fill: var(--fg); stroke: none; }
+#ud-plan .ud-label   { font-size: 280px; font-weight: 600; letter-spacing: 0.08em; }
+#ud-plan .ud-area    { font-size: 200px; fill: var(--fg-mut); }
+#ud-plan .ud-note    { font-size: 190px; fill: var(--fg-mut); font-style: italic; }
+#ud-plan .ud-dim-txt { font-size: 200px; fill: var(--fg-mut); }
+#ud-plan .ud-fix-txt { font-size: 170px; fill: var(--fg-mut); }
+#ud-plan .ud-stair-txt { font-size: 180px; fill: var(--fg-mut); font-weight: 600; }
+
+/* Site plan classes (svg.js renderSiteSvg): colours only — pen weights and
+   text sizes travel as attributes, scaled to the sheet's own ratio. */
+#ud-plan .ud-s-ln    { stroke: var(--fg); fill: none; stroke-linecap: round; stroke-linejoin: round; }
+#ud-plan .ud-s-mut   { stroke: var(--fg-mut); }
+#ud-plan .ud-s-fill  { fill: var(--fg); fill-opacity: 0.10; stroke: none; }
+#ud-plan .ud-s-paper { stroke: var(--bg); }
+#ud-plan .ud-s-txt   { fill: var(--fg); stroke: none; }
+#ud-plan .ud-s-txt.ud-s-mut { fill: var(--fg-mut); stroke: none; }
+#ud-plan .ud-s-halo  { paint-order: stroke; stroke: var(--bg); stroke-linejoin: round; }
+#ud-plan .ud-s-bold  { font-weight: 600; letter-spacing: 0.06em; }
+
+#ud-plan .ud-ent { cursor: pointer; }
+#ud-plan .ud-hit { pointer-events: all; }
+#ud-plan .ud-room-hit { pointer-events: all; cursor: pointer; }
+#ud-plan .ud-ent:hover .ud-sym,
+#ud-plan .ud-ent:hover .ud-thin,
+#ud-plan .ud-ent:hover .ud-s-ln:not(.ud-s-paper) { stroke: var(--accent); }
+#ud-plan .ud-ent:hover .ud-txt,
+#ud-plan .ud-ent:hover .ud-s-txt { fill: var(--accent); }
+/* Hovering a room's interior shouldn't light the label if the label is its
+   own target (a `label` statement) — the inner group re-scopes the hover. */
+#ud-plan .ud-ent.ud-roomlabel:hover .ud-txt { fill: var(--accent); }
+
+/* Selected object: accent linework + a dashed marquee over its hit area. */
+#ud-plan .ud-selected .ud-sym,
+#ud-plan .ud-selected .ud-thin,
+#ud-plan .ud-selected .ud-s-ln:not(.ud-s-paper) { stroke: var(--accent); }
+#ud-plan .ud-selected .ud-txt,
+#ud-plan .ud-selected .ud-s-txt { fill: var(--accent); }
+/* Site hit shapes are lines/paths as well as rects — the marquee follows. */
+#ud-plan .ud-site-svg .ud-selected > .ud-hit {
+  stroke: var(--accent);
+  stroke-dasharray: none;
+  stroke-opacity: 0.35;
+  fill: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+#ud-plan .ud-selected > .ud-hit {
+  stroke: var(--accent);
+  stroke-width: 18;
+  stroke-dasharray: 90 60;
+  fill: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* Room context: the in-plan label moves up into the context bar, and the
+   interior gets a whisper of tint so the focus reads.  (The hit path and the
+   label are separate top-level layers — see svg.js — so ud-ctx lands on both.) */
+#ud-plan .ud-roomlabel.ud-ctx { display: none; }
+#ud-plan .ud-room-hit.ud-ctx { fill: color-mix(in srgb, var(--accent) 5%, transparent); }
+
+/* ── Live scope annotations (dimensions drawn on the blueprint) ───────────── */
+
+#ud-plan .ud-anno { pointer-events: none; }
+#ud-plan .ud-anno-ln { stroke: var(--accent); stroke-width: 14; fill: none; }
+#ud-plan .ud-anno-txt {
+  fill: var(--accent);
+  stroke: none;
+  font-size: 190px;
+  font-weight: 600;
+}
+
+/* Neighbour arrows — the isolation view's wayfinding (tappable). */
+#ud-plan .ud-nbr-ln { stroke: var(--fg-mut); stroke-width: 16; fill: none; }
+#ud-plan .ud-nbr .ud-nbr-txt { fill: var(--fg-mut); font-size: 200px; font-weight: 600; letter-spacing: 0.06em; }
+#ud-plan .ud-nbr:hover .ud-nbr-ln { stroke: var(--accent); }
+#ud-plan .ud-nbr:hover .ud-nbr-txt { fill: var(--accent); }
+
+/* ── Scope editor — bottom collapse/expand bar for the scoped statement ───── */
+
+#ud-edit {
+  flex: none;
+  padding: 8px 14px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--bg-elev);
+}
+#ud-edit[hidden] { display: none; }
+#ud-edit-chip {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-edit-chip[hidden] { display: none; }
+#ud-edit-chip code {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg);
+  font: 400 13px/1.3 ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ud-edit-pencil { flex: none; color: var(--fg-mut); font-size: 13px; }
+#ud-edit-body { display: flex; gap: 8px; align-items: flex-start; }
+#ud-edit-body[hidden] { display: none; }
+/* The scope editor is a second instance of the shared line editor — same
+   classes, same syntax colours; just boxed, capped and scrollable here. */
+#ud-edit-host {
+  flex: 1;
+  min-width: 0;
+  max-height: 30vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+#ud-edit-host .wr-editor {
+  font-size: 16px;   /* ≥16px stops iOS focus-zoom */
+  line-height: 1.55;
+}
+#ud-edit-close {
+  appearance: none;
+  flex: none;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg-mut);
+  width: 42px;
+  border-radius: 10px;
+  font-size: 16px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The zoom pad rides above the collapsed scope editor, and gets out of the
+   way entirely while the pane is expanded (its height is content-driven). */
+#wr-preview:has(#ud-edit:not([hidden])) #ud-zoomctl {
+  bottom: calc(72px + env(safe-area-inset-bottom));
+}
+#wr-preview:has(#ud-edit-body:not([hidden])) #ud-zoomctl { display: none; }
+
+/* ── Zoom controls (bottom-right of the preview) ──────────────────────────── */
+
+#ud-zoomctl {
+  position: absolute;
+  right: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  display: flex;
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--line);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+#ud-zoomctl button {
+  appearance: none;
+  border: 0;
+  width: 42px;
+  height: 40px;
+  background: var(--bg-elev);
+  color: var(--fg-mut);
+  font: 500 18px/1 -apple-system, system-ui, sans-serif;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-zoomctl button:active { background: var(--bg-alt); color: var(--accent); }
+
+/* ── Autocomplete popup — same look as the slash menu ─────────────────────── */
+
+#ud-auto {
+  position: absolute;
+  z-index: 40;
+  min-width: 180px;
+  max-width: min(280px, calc(100% - 16px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  padding: 5px;
+}
+#ud-auto[hidden] { display: none; }
+#ud-auto button {
+  appearance: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font: 400 14px/1.2 ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#ud-auto button.active,
+#ud-auto button:hover { background: var(--bg-alt); }
+#ud-auto .sl-label { flex: 1; }
+#ud-auto .sl-hint {
+  flex: none;
+  color: var(--dim);
+  font: 500 11px/1 -apple-system, system-ui, sans-serif;
+}
+
+/* ── Desktop editor: full-width DSL column + line numbers ─────────────────── */
+
+/* uPub's 70ch measure is a prose choice; a plan's statements are code and a
+   desktop window has the room, so above phone width the column runs the full
+   pane and a numbered gutter appears.  Numbers are CSS counters in ::before
+   pseudo-elements — NOT DOM text — so the editor's invariant
+   (textContent(line div) === source line) holds, copy/paste never picks
+   them up, and the caret can't land in them.  Scoped to #wr-scroll: the
+   scope editor (#ud-edit) shows scattered doc lines, where 1..n would lie.
+   Phones (< 700px) keep the plain, unnumbered surface. */
+@media (min-width: 700px) {
+  #wr-sheet {
+    max-width: none;
+    padding-left: 12px;
+    padding-right: 24px;
+  }
+  #wr-scroll .wr-editor {
+    counter-reset: ud-line;
+    padding-left: 4.5ch;
+  }
+  #wr-scroll .wr-line {
+    position: relative;
+    counter-increment: ud-line;
+  }
+  #wr-scroll .wr-line::before {
+    content: counter(ud-line);
+    position: absolute;
+    left: -4.5ch;
+    top: 0;
+    width: 3.5ch;
+    text-align: right;
+    text-indent: 0;
+    color: var(--dim);
+    font-size: 0.85em;
+    line-height: inherit;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
+  }
+}

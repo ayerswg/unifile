@@ -1021,11 +1021,9 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   position: relative;   /* anchor the floating mobile align button */
 }
 
-/* Floating "align voices" button — mobile only, and only for a DSL that ships a
-   source formatter (ABC → #unifile-app gets .abc-active from the transport). */
-.uf-align-btn { display: none; }
-/* Floating play/pause button — phones only (transport bar is hidden there). */
-.uf-play-btn { display: none; }
+/* Phone action button (action-fab.js) and its grid/ghosts — phones only;
+   desktop keeps the transport bar + top bar. */
+.uf-fab, .uf-fab-targets, .uf-fab-grid, .uf-fab-scrim, .uf-fab-tip { display: none; }
 
 /* Commit-log pane: a mobile-only far-left pane; hidden entirely on desktop
    (where the commit history lives in the topbar dropdown instead). */
@@ -1063,56 +1061,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-mobile-pane="render"] #uf-preview-wrap {
     display: flex !important;
   }
-
-  /* Align-voices FAB: bottom-right of the editor pane. Shown only for ABC
-     (.abc-active); sits ABOVE the play FAB so the two stack in the corner. */
-  #unifile-app.abc-active #uf-editor-wrap .uf-align-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: absolute;
-    right: 12px;
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
-    z-index: 6;
-    width: 40px;
-    height: 40px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--bg-overlay);
-    color: var(--accent);
-    box-shadow: 0 2px 8px rgba(0,0,0,.35);
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  #unifile-app.abc-active #uf-editor-wrap .uf-align-btn:active { transform: scale(.94); }
-  #unifile-app.abc-active #uf-editor-wrap .uf-align-btn svg { width: 20px; height: 20px; }
-
-  /* Play/pause FAB: bottom-right, global so it covers editor + render panes.
-     Hidden on the commit pane and (below) in landscape, where the pane dock
-     carries its own play control. */
-  #unifile-app.abc-active:not([data-mobile-pane="commit"]) .uf-play-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: absolute;
-    right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    z-index: 8;
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    border: none;
-    border-radius: 999px;
-    background: var(--accent);
-    color: var(--bg);
-    box-shadow: 0 2px 10px rgba(0,0,0,.4);
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  #unifile-app .uf-play-btn:active { transform: scale(.94); }
-  #unifile-app .uf-play-btn svg { width: 18px; height: 18px; }
-
   #uf-commit-log {
     flex-direction: column;
     overflow-y: auto;
@@ -1123,106 +1071,264 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* The drag-to-resize divider has no meaning when a single pane is shown. */
   #uf-divider { display: none !important; }
 
-  /* ── Pane switcher: a thick segmented slider (commit · code · render). ──
-     Shared look here; portrait lays it out horizontally under the top bar,
-     landscape pins it vertically to the far right (orientation blocks below).
-     A `.ps-thumb` slides behind the active button, driven by data-mobile-pane. */
+  /* ── Top bar: ( branch )  {mark} Title ⌄  ( eye ) ──────────────────────
+     The whole top chrome on phones, portrait AND landscape (the landscape dock
+     is gone).  The circles switch panes and fill (accent) while their pane is
+     up; the centre opens the one dropdown with every menu option.  Hidden
+     while typing — app.js sets data-editing when the editor has focus and the
+     soft keyboard is up — so the shortened viewport goes to the text. */
   #uf-pane-switch {
     display: flex;
+    align-items: center;
+    gap: 10px;
     flex-shrink: 0;
+    order: -1;                     /* first in the column, under the safe area */
+    height: 56px;
+    padding: 0 10px;
     position: relative;
-    z-index: 60;                   /* so the dropdown menus paint above #uf-main */
-    background: var(--bg-alt);
-    box-shadow: 0 1px 0 var(--border);
+    z-index: 60;                   /* the dropdown paints above #uf-main */
+    background: var(--bg);         /* blends into the page, iA-style — no bar, no rule */
+    /* A held tap must never start an iOS text selection on the title/mark. */
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
   }
-  /* Dock-only chrome (collapse grip + play/align/roll) — landscape shows these;
-     the portrait top bar must not, or they'd steal flex space from the tabs. */
-  .ps-handle, .ps-play, .ps-align, .ps-roll { display: none; }
-  /* The editor tab shows its title in the portrait bar; the dock shows an icon
-     instead (title is too wide), so the icon is hidden here and shown below. */
-  .ps-code-icon { display: none; }
-  .ps-btn {
-    flex: 1 1 0;
+  #unifile-app[data-editing] #uf-pane-switch { display: none; }
+
+  .ps-circle {
+    flex: 0 0 auto;
+    position: relative;
+    width: 42px;
+    height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: var(--bg-surface);
+    color: var(--text-sub);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background .15s ease, color .15s ease, transform .1s ease;
+  }
+  .ps-circle svg { width: 20px; height: 20px; display: block; }
+  .ps-circle:active { transform: scale(.94); }
+  .ps-circle.active { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  /* Uncommitted work: the dot rides the branch circle. */
+  .ps-dirty-dot {
+    position: absolute; top: 0; right: 0;
+    width: 11px; height: 11px; border-radius: 999px;
+    background: var(--pending);
+    box-shadow: 0 0 0 2px var(--bg);
+  }
+  .ps-dirty-dot[hidden] { display: none; }
+  .ps-dirty-dot.detached { background: var(--warning, #d20f39); }
+
+  .ps-title-btn {
+    flex: 1 1 auto;
     min-width: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 7px;
+    height: 42px;
+    padding: 0 4px;
     background: none;
     border: none;
-    padding: 0 18px;               /* clear the absolute caret */
-    color: var(--text-muted);
+    color: var(--text);
     font-family: var(--font-ui);
-    font-size: 13px;
+    font-size: 16px;
+    font-weight: 500;
     cursor: pointer;
-    position: relative;
-    z-index: 1;                    /* above the sliding thumb */
     -webkit-tap-highlight-color: transparent;
-    transition: color .18s ease;
   }
-  .ps-render-icon svg { width: 19px; height: 19px; display: block; }
-  .ps-branch-icon { display: inline-flex; flex: 0 0 auto; }
-  .ps-branch-icon svg { width: 12px; height: 12px; display: block; opacity: .8; }
-  .ps-branch-name, .ps-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ps-btn[aria-selected="true"] { color: var(--accent); }
-  .ps-btn:not([aria-selected="true"]):active { color: var(--text); }
-
-  /* Dirty dot sits inline, right after the branch name (rendered only when
-     there are uncommitted changes). The soft ring echoes git's modified state. */
-  .ps-dirty-dot {
-    flex: 0 0 auto;
-    width: 8px; height: 8px; border-radius: 999px; background: var(--pending);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pending) 22%, transparent);
-  }
-  .ps-dirty-dot.detached { background: var(--warning, #d20f39); }
-
-  /* Caret (chevron) appears only on the active segment — it opens a menu. */
+  .ps-mark { flex: 0 0 auto; font-family: var(--font-mono); font-size: 15px; color: var(--text-sub); white-space: pre; }
+  .ps-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ps-caret {
-    position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
-    display: inline-flex; opacity: 0; pointer-events: none;
-    transition: opacity .15s ease;
+    flex: 0 0 auto;
+    width: 24px; height: 24px; border-radius: 999px;
+    background: var(--bg-surface); color: var(--text-sub);
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: transform .15s ease;
   }
-  .ps-caret svg { width: 13px; height: 13px; display: block; }
-  .ps-btn.active .ps-caret { opacity: .85; }
+  .ps-caret svg { width: 14px; height: 14px; display: block; }
+  .ps-title-btn.open .ps-caret { transform: rotate(180deg); }
+  .ps-diff-title { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+  .ps-diff-role { color: var(--accent); font-weight: 700; }
+  .ps-diff-arrow { color: var(--text-muted); }
 
-  .ps-thumb {
-    position: absolute;
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
-    border-radius: 8px;
-    transition: transform .2s ease;
-    pointer-events: none;
-  }
-
-  /* ── Dropdown menus — open below the active segment ── */
+  /* ── The dropdown — under the centre control, one list, grouped ── */
   .ps-menu {
     display: none;
-    position: absolute; top: 100%; margin-top: 4px;
-    min-width: 210px; max-width: min(88vw, 360px);
+    position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    margin-top: 2px;
+    width: min(92vw, 380px);
     background: var(--bg-alt); border: 1px solid var(--border);
     border-radius: var(--radius-sm); box-shadow: 0 8px 26px rgba(0,0,0,.4);
-    padding: 4px; z-index: 60; max-height: 70vh; overflow-y: auto;
+    padding: 4px; z-index: 60;
+    max-height: min(72vh, calc(var(--app-height, 100vh) - 80px));
+    overflow-y: auto; overscroll-behavior: contain;
   }
   .ps-menu.open { display: block; }
-  .ps-menu-commit { left: 4px; }
-  .ps-menu-code   { left: 50%; transform: translateX(-50%); }
-  .ps-menu-render { right: 4px; }
   .ps-menu-label {
     font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
-    color: var(--text-muted); padding: 6px 10px 4px;
+    color: var(--text-muted); padding: 8px 10px 3px;
   }
+  .ps-menu-label:not(:first-child) { border-top: 1px solid var(--border); margin-top: 4px; }
+  .ps-menu-sublabel { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 5px 10px 2px; }
   .ps-menu-item {
-    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
     background: none; border: none; color: var(--text); font-family: var(--font-ui);
-    font-size: 15px; padding: 11px 10px; border-radius: var(--radius-sm); cursor: pointer;
+    font-size: 15px; padding: 10px 10px; border-radius: var(--radius-sm); cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
   .ps-menu-item:active, .ps-menu-item.current { background: color-mix(in srgb, var(--accent) 14%, transparent); }
   .ps-menu-item.disabled { opacity: .4; pointer-events: none; }
-  .ps-menu-item.ps-menu-accent, .ps-menu-accent .ps-menu-ic { color: var(--accent); }
-  .ps-menu-ic { flex: 0 0 auto; width: 14px; text-align: center; color: var(--accent); font-size: 12px; }
+  .ps-menu-ic { flex: 0 0 auto; width: 20px; text-align: center; color: var(--accent); font-family: var(--font-mono); font-size: 13px; white-space: pre; }
   .ps-menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ps-menu-hash { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
-  .ps-menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
   .ps-menu-empty { padding: 10px; color: var(--text-muted); font-size: 13px; font-style: italic; }
+
+  /* ── Action button: a `{glyph}` circle in a corner (action-fab.js) ──────
+     Tap = primary action · hold = the grid of every action · drag = snap to
+     a corner.  The top corners sit under the top bar (--uf-fab-top, measured
+     by JS: 0 while the bar is hidden for typing). */
+  .uf-fab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    z-index: 70;
+    width: 50px;
+    height: 50px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -.02em;
+    box-shadow: 0 3px 12px rgba(0,0,0,.4);
+    cursor: grab;
+    touch-action: none;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .uf-fab-mark { white-space: pre; }
+  .uf-fab[hidden] { display: none; }
+  /* History view: the bubble stretches into a pill naming the branch. */
+  .uf-fab.wide { width: auto; max-width: min(60%, 260px); padding: 0 16px 0 13px; gap: 8px; }
+  .uf-fab-text {
+    font-family: var(--font-ui); font-size: 14px; font-weight: 600; letter-spacing: 0;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .uf-fab.pressed { transform: scale(.94); }
+  .uf-fab.playing {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent), 0 3px 12px rgba(0,0,0,.4);
+  }
+  .uf-fab.dragging {
+    cursor: grabbing;
+    transform: scale(1.08);
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    right: auto !important; bottom: auto !important;   /* JS positions via left/top */
+  }
+  .uf-fab.snapped { animation: uf-fab-snap .28s ease; }
+  @keyframes uf-fab-snap { 0% { transform: scale(1.12); } 60% { transform: scale(.96); } 100% { transform: scale(1); } }
+
+  .uf-fab[data-corner="br"], .uf-fab-target[data-corner="br"] {
+    right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .uf-fab[data-corner="bl"], .uf-fab-target[data-corner="bl"] {
+    left: calc(12px + env(safe-area-inset-left, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .uf-fab[data-corner="tr"], .uf-fab-target[data-corner="tr"] {
+    right: calc(12px + env(safe-area-inset-right, 0px)); top: calc(var(--uf-fab-top, 0px) + 10px); }
+  .uf-fab[data-corner="tl"], .uf-fab-target[data-corner="tl"] {
+    left: calc(12px + env(safe-area-inset-left, 0px)); top: calc(var(--uf-fab-top, 0px) + 10px); }
+
+  /* Corner ghosts — shown only while dragging; the nearest one grows. */
+  .uf-fab-targets { display: none; position: absolute; inset: 0; pointer-events: none; z-index: 69; }
+  #unifile-app[data-fab-drag] .uf-fab-targets { display: block; }
+  .uf-fab-target {
+    position: absolute; width: 50px; height: 50px; border-radius: 999px;
+    border: 2px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    transition: transform .12s ease, background .12s ease;
+  }
+  .uf-fab-target.near { transform: scale(1.25); border-style: solid; background: color-mix(in srgb, var(--accent) 28%, transparent); }
+
+  /* The grid (long-press): every action, alphabetical, primary ringed. */
+  .uf-fab-scrim { display: none; position: absolute; inset: 0; z-index: 71; background: rgba(0,0,0,.28); }
+  #unifile-app[data-fab-open] .uf-fab-scrim { display: block; }
+  #unifile-app[data-fab-open] .uf-fab { z-index: 73; }
+  .uf-fab-grid {
+    display: none;
+    position: absolute; z-index: 72;
+    width: min(calc(100% - 24px), 400px);
+    max-height: calc(var(--app-height, 100vh) - 150px);
+    overflow-y: auto; overscroll-behavior: contain;
+    background: var(--bg-alt); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: 0 12px 36px rgba(0,0,0,.45);
+    padding: 10px;
+  }
+  #unifile-app[data-fab-open] .uf-fab-grid { display: block; }
+  .uf-fab-grid[data-corner="br"] { right: 12px; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  .uf-fab-grid[data-corner="bl"] { left: 12px;  bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  .uf-fab-grid[data-corner="tr"] { right: 12px; top: calc(var(--uf-fab-top, 0px) + 70px); }
+  .uf-fab-grid[data-corner="tl"] { left: 12px;  top: calc(var(--uf-fab-top, 0px) + 70px); }
+  .uf-fab-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .uf-fab-tile {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 4px;
+    min-height: 78px; padding: 9px 4px 6px;
+    border-radius: 10px; background: var(--bg-surface);
+    border: 1px solid transparent; color: var(--text);
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    -webkit-touch-callout: none;
+  }
+  .uf-fab-tile:active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .uf-fab-tile.primary { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .uf-fab-tile.disabled { opacity: .4; pointer-events: none; }
+  .t-mark { font-family: var(--font-mono); font-size: 17px; font-weight: 600; color: var(--accent); white-space: pre; line-height: 1.2; }
+  .t-label {
+    font-family: var(--font-ui); font-size: 11px; line-height: 1.2; text-align: center; color: var(--text-sub);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .t-star {
+    position: absolute; top: 0; right: 0; width: 26px; height: 26px; padding: 0;
+    border: none; background: none; color: var(--text-muted); font-size: 13px; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .uf-fab-tile.primary .t-star { color: var(--accent); }
+  .uf-fab-tile.current { border-color: var(--accent); }
+  .uf-fab-tile.current .t-mark { color: var(--accent); }
+  .uf-fab-glabel {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--text-muted); padding: 0 2px 6px;
+  }
+  .uf-fab-hint { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .uf-fab-hint-text { flex: 1; font-size: 12px; line-height: 1.35; color: var(--text-muted); }
+  .uf-fab-hint-text b { color: var(--text-sub); font-weight: 600; }
+  /* A 2×2 corner picker: tap a square to send the button there. */
+  .uf-fab-corners {
+    flex: 0 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+    width: 46px; height: 46px; padding: 3px; border-radius: 8px; background: var(--bg-surface);
+  }
+  .uf-fab-cbtn { padding: 0; border: 1px dashed var(--text-muted); border-radius: 4px; background: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .uf-fab-cbtn.current { background: var(--accent); border-color: var(--accent); }
+
+  /* First-run caption beside the (default, bottom-right) button. */
+  .uf-fab-tip {
+    display: block;
+    position: absolute; z-index: 70;
+    right: calc(70px + env(safe-area-inset-right, 0px)); bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 10px; border-radius: 8px;
+    background: var(--bg-alt); border: 1px solid var(--border); color: var(--text-sub);
+    font-family: var(--font-ui); font-size: 12px; white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0,0,0,.3); pointer-events: none;
+    animation: uf-fab-tip-in .3s ease;
+  }
+  @keyframes uf-fab-tip-in { from { opacity: 0; transform: translateX(6px); } to { opacity: 1; transform: none; } }
 
   /* In diff mode the switcher stays: its segments become the diff pickers
      (commit · middle/target · right/source).  On mobile the diff is three
@@ -1291,134 +1397,28 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   input, select, textarea { font-size: 16px; }
 }
 
-/* ── Pane switcher — PORTRAIT: horizontal bar under the top bar ── */
-@media (max-width: 640px) {
-  #uf-pane-switch {
-    order: -1;                 /* pinned rail directly below the collapsible title bar */
-    flex-direction: row;
-    height: 38px;
-  }
-  .ps-thumb {
-    top: 4px;
-    bottom: 4px;
-    left: 0;
-    width: 33.3333%;
-    transform: translateX(0);
-  }
-  #unifile-app[data-mobile-pane="editor"] .ps-thumb { transform: translateX(100%); }
-  #unifile-app[data-mobile-pane="render"] .ps-thumb { transform: translateX(200%); }
-}
-
-/* ── Pane switcher — LANDSCAPE (phone on its side): a COLLAPSIBLE DOCK pinned to
-   the top-right. Collapsed (the default) it's just a small grip that takes no
-   real space; tapping the grip drops the controls down (pane tabs + play +
-   align). Switching a pane tucks it away again. It overlays content rather than
-   reserving a gutter, so the editor keeps full width. ── */
+/* ── LANDSCAPE (phone on its side): the same top bar, just shorter.  The old
+   collapsible dock is gone; its play/align/roll buttons live on the action
+   button's grid.  Side safe-area insets land on the bar's padding. ── */
 @media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
-  /* No reserved right gutter — the dock floats over the corner. */
   #uf-main { padding-right: 0; }
-
-  /* The dock carries play + align in landscape, so hide the standalone FABs
-     here (they're the portrait affordance) — otherwise they show twice. */
-  .uf-play-btn, .uf-align-btn { display: none !important; }
-
   #uf-pane-switch {
-    position: absolute;
-    top: calc(6px + env(safe-area-inset-top, 0px));
-    right: calc(6px + env(safe-area-inset-right, 0px));
-    transform: none;
-    width: 46px;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-    padding: 5px;
-    border-radius: 12px;
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    box-shadow: 0 4px 16px rgba(0,0,0,.28);
-    max-height: calc(100% - 12px - env(safe-area-inset-top, 0px));
-    overflow: hidden;
-    z-index: 50;
+    height: 46px;
+    padding: 0 calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px));
   }
-
-  /* The grip handle — always visible in the dock; it opens/closes the cluster. */
-  .ps-handle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    height: 36px;
-    width: 100%;
-    padding: 0;
-    border: none;
-    border-radius: 8px;
-    background: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .ps-handle:active { color: var(--text); }
-  .ps-handle svg { width: 16px; height: 16px; display: block; }
-
-  /* No sliding thumb in the dock — the active tab just gets a filled background. */
-  .ps-thumb { display: none; }
-  .ps-btn {
-    flex: 0 0 auto;
-    height: 44px;
-    width: 100%;
-    padding: 0;
-    border-radius: 8px;
-  }
-  .ps-btn.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
-  .ps-btn .ps-title, .ps-btn .ps-branch-name { display: none; }  /* icons only in the dock */
-  .ps-code-icon { display: inline-flex; }
-  .ps-code-icon svg { width: 19px; height: 19px; display: block; }
-  .ps-caret { display: none; }
-
-  /* Play + align + piano roll live at the bottom of the dock (ABC only). */
-  .ps-play, .ps-align, .ps-roll {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    height: 44px;
-    width: 100%;
-    padding: 0;
-    border: none;
-    border-radius: 8px;
-    background: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .ps-play:active, .ps-align:active, .ps-roll:active { background: var(--bg-surface); }
-  .ps-play svg, .ps-align svg, .ps-roll svg { width: 18px; height: 18px; display: block; }
-  .ps-play.playing { color: var(--accent); }
-  .ps-roll.on { color: var(--accent); }
-
-  /* Dropdown menus open to the LEFT of the dock (it hugs the right edge). */
-  .ps-menu { right: calc(100% + 8px); left: auto; top: 0; }
-
-  /* Collapsed (default): only the grip shows; the dock shrinks to it and drops
-     its chrome so it's an unobtrusive corner handle. */
-  #uf-pane-switch.ps-dock-collapsed {
-    background: none;
-    border-color: transparent;
-    box-shadow: none;
-    padding: 0;
-  }
-  /* The lone grip reads as a tappable pill when the dock is closed. */
-  #uf-pane-switch.ps-dock-collapsed .ps-handle {
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    box-shadow: 0 2px 8px rgba(0,0,0,.28);
-    color: var(--text-sub);
-  }
-  #uf-pane-switch.ps-dock-collapsed .ps-btn,
-  #uf-pane-switch.ps-dock-collapsed .ps-play,
-  #uf-pane-switch.ps-dock-collapsed .ps-align,
-  #uf-pane-switch.ps-dock-collapsed .ps-roll,
-  #uf-pane-switch.ps-dock-collapsed .ps-menu { display: none; }
+  .ps-circle { width: 36px; height: 36px; }
+  .ps-circle svg { width: 18px; height: 18px; }
+  .ps-title-btn { height: 36px; font-size: 15px; }
+  /* The piano roll is full-screen in landscape — it IS the app while open. */
+  #unifile-app[data-piano-roll] #uf-pane-switch { display: none; }
+  /* Little height to spend: the action grid goes wide and shallow. */
+  .uf-fab-grid { width: min(calc(100% - 24px), 640px); max-height: calc(var(--app-height, 100vh) - 84px); padding: 8px; }
+  .uf-fab-grid[data-corner="br"], .uf-fab-grid[data-corner="bl"] { bottom: calc(66px + env(safe-area-inset-bottom, 0px)); }
+  .uf-fab-grid[data-corner="tr"], .uf-fab-grid[data-corner="tl"] { top: calc(var(--uf-fab-top, 0px) + 64px); }
+  .uf-fab-tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; }
+  .uf-fab-tile { min-height: 62px; padding: 6px 3px 4px; gap: 2px; }
+  .t-mark { font-size: 15px; }
+  .uf-fab-hint { margin-top: 6px; padding-top: 6px; }
 }
 
 /* ── Commit-log pane contents ─────────────────────────────────── */
@@ -2642,7 +2642,9 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 #unifile-app[data-diff] #uf-diff-bar { display: block; }
 #unifile-app[data-diff] #uf-transport,
 #unifile-app[data-diff] #uf-commit-bar,
-#unifile-app[data-diff] .uf-play-btn { display: none !important; }
+#unifile-app[data-diff] .uf-fab,
+#unifile-app[data-diff] .uf-fab-grid,
+#unifile-app[data-diff] .uf-fab-scrim { display: none !important; }
 
 .dv-head { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--border); }
 .dv-head-label {
@@ -4578,11 +4580,11 @@ noscript .noscript-wrap {
 }
 
 /* ── Phones ─────────────────────────────────────────────────── */
-/* Portrait: unavailable (the toggle only exists on desktop + landscape dock). */
+/* Portrait: unavailable (the toggle only exists on desktop + the landscape action grid). */
 @media (max-width: 640px) and (orientation: portrait) {
   #uf-piano-roll { display: none !important; }
 }
-/* Landscape: a bottom overlay above the panes, toggled from the pane dock. */
+/* Landscape: a bottom overlay above the panes, toggled from the action button's grid. */
 @media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
   /* The phone rules blank #uf-bottom (display:none) — a fixed child of a
      hidden parent doesn't render, so reopen it as a zero-height shell while

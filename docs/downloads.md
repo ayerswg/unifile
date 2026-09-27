@@ -17,4 +17,4 @@ Everything is offline-first. **Downloads** are a single `.html` file you save an
 {% endfor %}
 </ul>
 
-Tip: anywhere on the site, just start typing in the command bar (`>`) to jump straight to any of these.
+Not sure which shape to pick? The [front page](/) has an INSTALL walkthrough for each app, step by step for your device.

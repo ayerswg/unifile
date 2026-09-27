@@ -8,6 +8,18 @@ time to find. Keep it up to date as the design evolves.
 
 ## What unifile is
 
+**The brand is `{…}` — curly braces in a monospaced font.** Every app has two
+spellings, both from the single source `src/core/brand.js` (`APPS`, `appName()`,
+`appMark()`): a *name* in braces (`{document}`, `{diagram}`, `{compose}`,
+`{write}`, `{draft}`) and a *mark* — one UTF-8 TEXT glyph (never an emoji) in
+braces (`{¶}`, `{◇}`, `{♪}`, `{✎}`, `{⌂}`). The mark IS the app icon
+(`build/icons.mjs` renders it as SVG text; `gen-icons.mjs` rasterizes the PNGs),
+heads the phone title bar, and sits beside the name on the site. Build ids stay
+`markdown` / `mermaid` / `abcjs` / `upub` / `udraft`; "uPub"/"uDraft"/"uDoc"/
+"uDraw"/"uNote" in older comments and plans are the retired u-codenames of the
+same apps. Glyphs were picked for having no emoji presentation; action glyphs
+that do (▶ ⏸ ⚙) get U+FE0E appended (`actions.js`).
+
 A **single-file, fully-offline** document editor with **built-in git-style version
 history**. A document is plain text; its sections declare their own format
 (Markdown, ABC music notation, Mermaid, Fountain…) via `#!shebang` lines.
@@ -44,23 +56,31 @@ src/
     doc-sections.js  Parses `#!dslId@ver+ext` shebang sections
     abc-voices.js    Parses ABC `V:` voice lines (voiceIdOfLine / buildVoiceMap) — shared by the gutter + abcjs.js for mute/solo
     hash.js, crypto.js
+    brand.js         `{name}` / `{glyph}` per app — THE naming source (site, manifests, icons, title bar)
     (assets/piano-soundfont.js — committed FluidR3 acoustic grand, ~2.5MB, note→dataURI)
   dsl/               One module per format; self-registers via registry.js
     markdown.js, abcjs.js, mermaid.js, marp.js, fountain.js
     registry.js      registerDSL / getDSL / listDSLs
     abcjs-piano-loader.js  CommonJS drop-in for abcjs's ./load-note (offline soundfont)
-  writer/            The Writer variant's own shell (no CodeMirror — see "Unifile Writer")
+  upub/              The uPub variant's own shell (no CodeMirror — see "uPub")
     main.js, app.js, editor.js, syntax.js, epub.js, zip.js, preview.js, guide-content.js
+    (editor.js = the SHARED custom line editor: `syntax:` option plugs in a
+     classifier/renderer; uDraft reuses it — see "uDraft")
+  udraft/            The uDraft variant's own shell (see "uDraft")
+    main.js, app.js, syntax.js, guide-content.js
+  core/udraft/       uDraft's pure engine (Node-tested, no DOM): parse.js, layout.js, svg.js
   model/registry.js  Document "models" (flow | grid | spatial | timeline | graph) — chosen via front-matter `model:`
   layout/            Renderers for models + flow layouts (webpage/document/slides)
   ui/                App shell + everything DOM
     app.js           App singleton: shell, mounting, init, save, mobile panes, data file load/save
     state.js         AppState (EventBus): state.update/emit/on, VIEW_MODES, PANELS, diff, pendingCommit
     editor.js        CodeMirror 6 setup: gutter, per-section highlighting, comments, front-matter tint
-    editor-sections.js  Collapsible front-matter / ABC-header section bars (default-collapsed on load)
+    editor-sections.js  Collapsible front-matter bar (default-collapsed on load; the only section kind)
     preview.js       Renders the active model/DSL to the preview pane
-    topbar.js        Title, DSL menu, VCS pills (desktop); mobile top bar = menu + centred title + dirty dot; commit-log pane (pending node + export marker). Also `showDslHelpModal` = the per-DSL syntax reference (grouped, navigable sidebar; `DSL_HELP[dsl].sections[]` with optional `group`)
-    commit-bar.js    Mobile commit-pane bottom bar = branch selector (drop-up). Commit composing moved into the log's pending node.
+    topbar.js        Title, DSL menu, VCS pills (desktop only); commit-log pane (pending node + export marker). Also `showDslHelpModal` = the per-DSL syntax reference (grouped, navigable sidebar; `DSL_HELP[dsl].sections[]` with optional `group`)
+    pane-switch.js   PHONE top bar: (branch circle) {mark} Title ⌄ (eye circle) + the one dropdown (see Mobile)
+    actions.js       The phone actions: listMenuActions (title dropdown, file level) + listBubbleActions (bubble, per view)
+    action-fab.js    The draggable `{glyph}` action bubble, contextual per pane: tap = primary · hold = grid · drag = snap to a corner; `{⑂} branch` pill in the history view
     commit-dialog.js Full commit dialog (identity + message + tag)
     diff-view.js     DiffView overlay + DiffBar (read-only commit diff)
     dsl-footer.js    ABC transport (play/scrub/time)
@@ -72,8 +92,13 @@ build/
   build.mjs          esbuild pipeline (one quine + PWA per dedicated DSL variant)
   sync-site.mjs      Builds variants + copies into docs/ + writes docs/version.json
   render-site.mjs    No-Ruby site renderer (docs/ → docs/_site); Cloudflare's production build
+  icons.mjs          App icons = the `{glyph}` mark as SVG <text> on a dark tile (re-exports
+                     src/core/brand.js; also the site favicon `{}`)
+  gen-icons.mjs      One-off: rasterize icons.mjs → templates/icons/<abbrev>/*.png via
+                     headless Chromium (committed, like the soundfont — CI never needs a browser;
+                     resolves the mono stack to DejaVu Sans Mono, which covers every glyph)
   gen-soundfont.mjs  One-off: fetch FluidR3 piano → src/assets/piano-soundfont.js (network!)
-templates/           quine.html, pwa.html, sw.js, manifest.json
+templates/           quine.html, pwa.html, sw.js, manifest.json, icons/<abbrev>/*.png
 docs/                The website (Cloudflare Pages; rendered by render-site.mjs) + committed build artifacts
 dist/                Build output (gitignored)
 ```
@@ -85,8 +110,9 @@ dist/                Build output (gitignored)
 esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 - **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
-- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `writer`(wr). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
-- A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `writer` variant uses this (see "Unifile Writer" below) — no CodeMirror, no DSL registry, its own CSS.
+- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `upub` and `udraft` variants use this (see below) — no CodeMirror, no DSL registry, their own CSS.
+- `npm test` → `node --test test/**` — the uDraft core (parser/layout/SVG) unit tests; pure Node, no browser.
 - `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
 - Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model.
@@ -95,7 +121,7 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 - `UNIFILE_MODE` = `"quine"` | `"pwa"` → `IS_QUINE` in storage.js.
 - `UNIFILE_VERSION` = the git tag (see Versioning).
 
-**Two build targets per variant:** `buildQuine()` embeds the JS **gzip+base64** into the HTML template's `<script id="unifile-data">` region (so plain-text grep won't find code strings in a quine — grep the PWA's `app.js` instead). `buildPWA()` writes plain files + a service worker whose cache name is namespaced per type (`unifile-abc`, etc.) with a content hash so updates supersede cleanly.
+**Two build targets per variant:** `buildQuine()` embeds the JS **gzip+base64** into the HTML template's `<script id="unifile-data">` region (so plain-text grep won't find code strings in a quine — grep the PWA's `app.js` instead). `buildPWA()` writes plain files + a service worker whose cache name is namespaced per type (`unifile-abc`, etc.) with a content hash so updates supersede cleanly. Each PWA also gets its **per-variant `{glyph}` icons** (copied from `templates/icons/<abbrev>/`, stamped into the manifest + `<link rel="apple-touch-icon">`; the manifest `name`/`short_name`/`<title>`/apple title are the `{name}` — `DSL_META.label = appName(id)`; regenerate icons with `npm run gen:icons` after editing `build/icons.mjs` or `src/core/brand.js`), and `templates/pwa.html` carries a self-contained **pre-install banner** (shows only outside `display-mode: standalone`, per-device install walkthrough, `beforeinstallprompt` when available, dismissal persisted per path in localStorage — template-level so it covers the standard shell AND uPub).
 
 **Direction (2026-07):** dedicated per-content-type builds only — the universal multi-DSL app and the runtime drag-drop plugin system were removed. `npm run build:abcjs` is the flagship (ships the offline piano).
 
@@ -116,9 +142,11 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 **Models & layouts** — front-matter `model:` (flow|grid|spatial|timeline|graph) picks a renderer (`model/registry.js` + `layout/`). `flow` is default; its `layout:` (webpage|document|slides) controls presentation. Preview.js dispatches to the right renderer.
 
-**Editor (`editor.js`)** — CodeMirror 6. Custom **single gutter** (`commentLineNumbersExt`) — a thin rail (desktop + mobile; line numbers are hidden via CSS) that tints comment lines yellow, the active line accent, and shows a per-voice **M**/**S** mute/solo mark. Clicking the rail opens a line-options menu (see below). **Per-section syntax highlighting** (`sectionSyntaxField`) runs each section's DSL parser through the catppuccin highlight; the front-matter block is highlighted as YAML instead of the DSL. **Comments are line-level only** (see below). Line wrapping is intentionally OFF (DSL scrolls horizontally). **Vertical (column) selection** via CM's `rectangularSelection()` + `crosshairCursor()` (Alt+drag, the VS Code/Sublime convention; multiple selections were already enabled). The updateListener also emits **`editor-type` `{pos, ch}`** for single-character `input.type` insertions (multi-char inserts = paste-like, deliberately silent) — consumed by the abcjs note audition (below).
+**Editor (`editor.js`)** — CodeMirror 6. Custom **single gutter** (`commentLineNumbersExt`) — a thin rail (desktop + mobile; line numbers are hidden via CSS) that tints comment lines yellow, the active line accent, and shows a per-voice **M**/**S** mute/solo mark. Clicking the rail opens a line-options menu (see below). **Per-section syntax highlighting** (`sectionSyntaxField`) runs each section's DSL parser through the catppuccin highlight; the front-matter block is highlighted as YAML instead of the DSL. **Comments are line-level only** (see below). **Line wrapping is a per-DSL choice**: abcjs turns it on in its `getEditorExtensions()` (`EditorView.lineWrapping` — music wraps, no horizontal scroll, 2026-09); the other DSLs still scroll horizontally. **Vertical (column) selection** via CM's `rectangularSelection()` + `crosshairCursor()` (Alt+drag, the VS Code/Sublime convention; multiple selections were already enabled). The updateListener also emits **`editor-type` `{pos, ch}`** for single-character `input.type` insertions (multi-char inserts = paste-like, deliberately silent) — consumed by the abcjs note audition (below).
 
-**Collapsible sections (`editor-sections.js`)** — the document is split into labelled, collapsible bars (styled like the blame view's commit-group headers): the **front matter** (`---`…`---`, recognised once the closing fence exists) and, for abcjs docs, the **tune header** (up to and including the required `K:` line) and the **music** (the measures after `K:`, when non-empty). Bars appear **only when the document splits into more than one section** — a lone section (e.g. front matter by itself) shows nothing. Each section renders a bar — expanded = a thin bar above it (block widget, `side:-1`); collapsed = a block-`replace` bar showing the label + line count. **Block `replace` must end at a line END, not the next line's start** — ending on the next line's start collides with the following section's expanded header widget (anchored there, `side:-1`) and CM drops it, so the collapse backs up over the section's trailing newline. **On load everything is collapsed except the last section** — normally the music (`defaultCollapsed` collapses all but the last in the list); `resetCollapseEffect` (dispatched from `Editor.setValue`) re-applies this on checkout/branch-switch/open. A section that becomes valid *while typing* is NOT auto-collapsed (it's not in the collapsed set) so it appears expanded as you write it. Collapse state is a per-editor `Set` of section ids toggled by clicking a bar. **Section bars are suppressed entirely in landscape phone** (`landscapePhoneMql` — no vertical room); `detectSections` returns `[]` there while the collapse `Set` is preserved, and `refreshSectionsEffect` (dispatched on the mql `change`) rebuilds so rotating back to portrait restores the previous state. This is deliberately NOT the old generic `@codemirror/language` fold (removed as "too confusing", see Mobile section) — it's a purpose-built, labelled, default-collapsed section model.
+**Collapsible front matter (`editor-sections.js`)** — the leading `---`…`---` block (recognised once the closing fence exists) gets a labelled, collapsible bar (styled like the blame view's commit-group headers): expanded = a thin bar above it (block widget, `side:-1`); collapsed = a block-`replace` bar showing the label + line count. **Block `replace` must end at a line END, not the next line's start** — ending on the next line's start collides with an adjacent expanded header widget (anchored there, `side:-1`) and CM drops it, so the collapse backs up over the block's trailing newline. **On load the front matter is collapsed**; `resetCollapseEffect` (dispatched from `Editor.setValue`) re-applies this on checkout/branch-switch/open. A block that becomes valid *while typing* is NOT auto-collapsed (it's not in the collapsed set) so it appears expanded as you write it. Collapse state is a per-editor `Set` of section ids toggled by clicking the bar. **Bars are suppressed entirely in landscape phone** (`landscapePhoneMql` — no vertical room); `detectSections` returns `[]` there while the collapse `Set` is preserved, and `refreshSectionsEffect` (dispatched on the mql `change`) rebuilds so rotating back to portrait restores the previous state. **The ABC tune header / music split was removed (2026-09)** — an ABC tune is edited as one piece of text; the front matter is the only section kind now (the module keeps a list so another kind can slot in). This is deliberately NOT the old generic `@codemirror/language` fold (removed as "too confusing", see Mobile section).
+
+**ABC "one measure per line" formatter (`dsl/abc-align.js`, `alignSource` on the abcjs DSL; Alt-Shift-F, the mobile FAB `.uf-align-btn`, the landscape dock `.ps-align`)** — reflows every music line so each measure sits on its own source line (2026-09; it replaced the column-padding voice aligner, which drifted once lines wrap). **Staff-line breaks are preserved** with the ABC ` \` line continuation: every measure except the last of its original line ends in ` \`, and both engines honour it (abc2svg joins continued lines; abcjs rewrites `\`+newline in place, so `startChar` offsets stay stable and a following `w:` lyric line still binds to the joined line). Idempotent. Fields/comments/`#!`/front matter pass through; the `buildVoiceMap` char→voice lookup is unaffected because a continuation line inherits the last `[V:]`/`V:` boundary before it. Unit-tested in `test/abc-align.test.mjs`.
 
 **Preview (`preview.js`)** renders the active model/DSL. Clicking a rendered ABC note highlights the source (`abc-play-cursor`/`dsl-select`) without flipping panes on mobile.
 
@@ -221,25 +249,214 @@ touch-first editing mode: single tap on empty = add, single tap on an active-voi
   and setTimeout is throttled to ~1 s ticks — dispatch double-taps synchronously or the 350 ms
   pair window can't be hit.
 
-## Unifile Writer (`src/writer/` + `src/styles/writer.css`)
+## uPub (`src/upub/` + `src/styles/upub.css`)
 
-A dedicated **writing** variant (abbrev `wr`) — a minimal, distraction-free writing app; mobile/iOS-first, EPUB export. It deliberately does **NOT** use CodeMirror or the standard `ui/` shell: `DSL_META.writer` points the build at `src/writer/main.js` + `styles/writer.css` (see Build system). It reuses `core/` (storage, vcs, diff, hash, front-matter) so its data object round-trips as a normal `.unifile.json`. PWA docId is `'writer'` (the shared per-origin IDB).
+A dedicated **writing** variant (abbrev `upub`; formerly "Unifile Writer", abbrev `wr` — renamed 2026-08, old `/writer/` URLs + `pwa-wr` installs deliberately not preserved) — a minimal, distraction-free writing app; mobile/iOS-first, EPUB export. It deliberately does **NOT** use CodeMirror or the standard `ui/` shell: `DSL_META.upub` points the build at `src/upub/main.js` + `styles/upub.css` (see Build system). It reuses `core/` (storage, vcs, diff, hash, front-matter) so its data object round-trips as a normal `.unifile.json`. PWA docId is `'upub'` (the shared per-origin IDB). Internal DOM ids / CSS classes keep the historical `wr-` prefix on purpose (pure namespacing — renaming them buys nothing).
 
-- **Editor (`writer/editor.js` + `writer/syntax.js`)** — a custom contenteditable, one `<div class="wr-line">` per source line. The reason it exists: **hanging indent on wrapped list/quote lines** (`--hang: Nch` + `padding-left/text-indent`), exact because the editor font is monospaced. `syntax.js` classifies lines (stateful: fences + leading front matter) and renders inline spans; its hard invariant is **textContent(rendered line) === source line** — rendering may only wrap text, never change it. Editing model: character-level input runs **natively** (intercepting breaks iOS autocorrect/dictation) and is *reconciled* afterwards (extract DOM text → diff → re-render changed lines → restore caret by absolute offset); structural input (Enter, paste, Cmd+B/I, undo) is intercepted in `beforeinput`. **Never touch the DOM during composition** (`isComposing`) — reconcile on `compositionend`. Undo is a custom snapshot stack (`historyUndo`/`historyRedo` intercepted — that's also iOS shake-to-undo). NBSPs from contenteditable are normalised back to spaces on extraction. **Swipe indent (`_bindSwipe`)** — the iOS-Notes gesture: a one-finger horizontal drag on a bullet/ordered/task/quote line (gated on `infos[].type`, so listy text in fences/front matter never triggers) indents right / outdents left via `indentLines()`, which is deliberately selection-free — `_setSelOffsets` on an unfocused contenteditable would focus it and pop the iOS keyboard mid-swipe (caret rides along only when already focused). Latched once |dx|>16px, clearly horizontal (dx ≥ 2·dy; vertical-first = scroll, cancels) AND within 300 ms of touchstart (slower = iOS long-press/loupe — abandoned). The gesture yields to the iOS text system: it never arms on a touch near the caret (caret drag) or near a selection's endpoints (handle drags; the middle of a selection still block-swipes), an unlatched gesture dies on any `selectionchange`, and a model replacement mid-gesture (autocorrect commit — `this.lines` identity check) cancels rather than indenting shifted line indexes. The drag then SNAPS between 2ch detents (one per 48px — the indent grid itself, so `translateX(2ch·level)` is exactly where the re-indented text renders; `.wr-line`'s 0.16s transform transition animates each snap), clamped so an impossible outdent never previews. Nothing is edited mid-drag: the whole preview lands as one edit on release (multi-level coalesced into ONE undo snapshot via `{coalesce}`), transform cleared transition-less in the same frame so the swap is pixel-identical. A multi-line selection containing the touched line swipes as a block. `/indent` + `/outdent` slash items are the discoverable fallback; hardware Tab/⇧Tab unchanged.
-- **EPUB (`writer/epub.js` + `writer/zip.js`)** — EPUB 3 + NCX fallback, built in-browser: chapters split on `#` h1s (outside fences), marked(GFM) → DOMPurify → DOM transforms (task-checkbox inputs → glyph spans; `data:` images extracted into archive files) → XMLSerializer for well-formed XHTML. `zip.js` is a hand-rolled stored-only ZIP (the `mimetype` entry must be FIRST and uncompressed). Metadata from the leading front matter (`title/author/language/description/identifier`).
-- **Shell (`writer/app.js` + `writer/slash-menu.js`)** — title bar (word count + preview + ⋯; auto-hides while editing on touch devices — `data-editing`, driven by editor focus + a visual-viewport keyboard heuristic; the header returns when the keyboard is dismissed via iOS's own accessory-bar ✓ — a floating dismiss button and a custom keyboard toolbar were both tried and scrapped as redundant with that native bar, which a web app cannot hide) + editor + bottom sheets (menu/history/export/settings/guide/about). **There is no toolbar**: formatting/insertion is the `/` slash menu — the editor reports a slash context (`slashContext()`: `/` at line start or after whitespace, never in code/fence/front-matter, collapsed caret; trailing word = filter query) after every edit/caret move, and the app opens `SlashMenu` at the caret (block items only when the `/` starts its line; picking removes the `/query` then runs the action; menu taps preventDefault so the iOS keyboard stays up). History UI is linear (commit + restore on `main`); branching/merge stays in the full apps. Copies the load-bearing iOS viewport handling from `ui/app.js` (`--app-height` via visualViewport, window-scroll lock — see Mobile section). **Tap-to-focus scroll guard (`_guardFocusScroll`)** — iOS/WebKit's focus-time "reveal the focused element" scroll (plus a keyboard-open scroll-anchoring bug) targets the contenteditable's TOP rect, and the writer's editor is one contenteditable spanning the whole document — so tapping to edit yanked `#wr-scroll` to the first line while the caret stayed where tapped (real bug). The guard records the scroller position at `pointerdown` and, for ~900 ms after the editor gains focus, restores it whenever a scroll leaves the caret outside the pane; a scroll that keeps the caret visible (iOS's legit lift above the keyboard) is never touched, and `touchmove`/`wheel` cancel the guard so the user's own flick wins. Exports go through the share sheet on iOS (`shareOrDownloadFile`, plus a binary Blob variant in app.js for `.epub`).
-- **Self-updating PWA (`_bindServiceWorker` in writer/app.js)** — the writer registers its SW with `updateViaCache:'none'` and calls `reg.update()` at launch + on every return to foreground; since templates/sw.js self-skipWaiting()s and claims, a new build takes control as soon as it's seen, and the app's `controllerchange` listener then flushes the document to IDB and reloads ONCE (first-install claim doesn't reload). A launch-time version.json check additionally shows a tappable update toast. The manual path stays in About (version + `UNIFILE_BUILT` build stamp + Check for updates → `_applyUpdate`, which never blind-reloads on a timer).
-- **Docs** — the full user guide lives ONCE in `writer/guide-content.js` (plain-string ESM): the app renders it in the Guide sheet, and `build/render-site.mjs` imports it and emits `/writer/guide/`. Keep it current when changing writer behaviour. Site front door: `docs/writer.md` (+ `types.yml`/`apps.yml` entries).
+- **Editor (`upub/editor.js` + `upub/syntax.js`)** — a custom contenteditable, one `<div class="wr-line">` per source line. The reason it exists: **hanging indent on wrapped list/quote lines** (`--hang: Nch` + `padding-left/text-indent`), exact because the editor font is monospaced. `syntax.js` classifies lines (stateful: fences + leading front matter) and renders inline spans; its hard invariant is **textContent(rendered line) === source line** — rendering may only wrap text, never change it. Editing model: character-level input runs **natively** (intercepting breaks iOS autocorrect/dictation) and is *reconciled* afterwards (extract DOM text → diff → re-render changed lines → restore caret by absolute offset); structural input (Enter, paste, Cmd+B/I, undo) is intercepted in `beforeinput`. **Never touch the DOM during composition** (`isComposing`) — reconcile on `compositionend`. Undo is a custom snapshot stack (`historyUndo`/`historyRedo` intercepted — that's also iOS shake-to-undo). NBSPs from contenteditable are normalised back to spaces on extraction. **Swipe indent (`_bindSwipe`)** — the iOS-Notes gesture: a one-finger horizontal drag on a bullet/ordered/task/quote line (gated on `infos[].type`, so listy text in fences/front matter never triggers) indents right / outdents left via `indentLines()`, which is deliberately selection-free — `_setSelOffsets` on an unfocused contenteditable would focus it and pop the iOS keyboard mid-swipe (caret rides along only when already focused). Latched once |dx|>16px, clearly horizontal (dx ≥ 2·dy; vertical-first = scroll, cancels) AND within 300 ms of touchstart (slower = iOS long-press/loupe — abandoned). The gesture yields to the iOS text system: it never arms on a touch near the caret (caret drag) or near a selection's endpoints (handle drags; the middle of a selection still block-swipes), an unlatched gesture dies on any `selectionchange`, and a model replacement mid-gesture (autocorrect commit — `this.lines` identity check) cancels rather than indenting shifted line indexes. The drag then SNAPS between 2ch detents (one per 48px — the indent grid itself, so `translateX(2ch·level)` is exactly where the re-indented text renders; `.wr-line`'s 0.16s transform transition animates each snap), clamped so an impossible outdent never previews. Nothing is edited mid-drag: the whole preview lands as one edit on release (multi-level coalesced into ONE undo snapshot via `{coalesce}`), transform cleared transition-less in the same frame so the swap is pixel-identical. A multi-line selection containing the touched line swipes as a block. `/indent` + `/outdent` slash items are the discoverable fallback; hardware Tab/⇧Tab unchanged.
+- **EPUB (`upub/epub.js` + `upub/zip.js`)** — EPUB 3 + NCX fallback, built in-browser: chapters split on `#` h1s (outside fences), marked(GFM) → DOMPurify → DOM transforms (task-checkbox inputs → glyph spans; `data:` images extracted into archive files) → XMLSerializer for well-formed XHTML. `zip.js` is a hand-rolled stored-only ZIP (the `mimetype` entry must be FIRST and uncompressed). Metadata from the leading front matter (`title/author/language/description/identifier`).
+- **Shell (`upub/app.js` + `upub/slash-menu.js`)** — title bar (word count + preview + ⋯; auto-hides while editing on touch devices — `data-editing`, driven by editor focus + a visual-viewport keyboard heuristic; the header returns when the keyboard is dismissed via iOS's own accessory-bar ✓ — a floating dismiss button and a custom keyboard toolbar were both tried and scrapped as redundant with that native bar, which a web app cannot hide; the bar ALSO slides away IN STEP with scrolling down and back in with scrolling up, Safari-toolbar-style — `_bindScrollChrome` drives `--wr-hide` (0…1; the header's margin-top/opacity are calc()'d from it) from clamped scroll deltas on `#wr-scroll`/`#wr-preview`, suppresses the transition while a scroll is live (`data-scroll-tracking`) so it tracks 1:1, and snaps a partial bar to the nearer edge when scrolling idles (near the top the snap always shows; progress is also capped at scrollTop/47 so the top of the doc reveals the whole bar). `data-scroll-hidden` now only marks the fully-hidden state (pointer-events). Independent of `data-editing`, whose rule out-specifies the calc(). LANDMINE: the hide GROWS the scroller — flex column — so hiding while at the bottom clamps scrollTop and fires fake "scroll up" events that made the header bounce; an upward delta landing AT the bottom edge is the clamp's exact signature and is dropped — a real up-scroll always lands above the edge) + editor + bottom sheets (menu/history/export/settings/guide/about). **There is no toolbar**: formatting/insertion is the `/` slash menu — the editor reports a slash context (`slashContext()`: `/` at line start or after whitespace, never in code/fence/front-matter, collapsed caret; trailing word = filter query) after every edit/caret move, and the app opens `SlashMenu` at the caret (block items only when the `/` starts its line; picking removes the `/query` then runs the action; menu taps preventDefault so the iOS keyboard stays up). History UI is linear (commit + restore on `main`); branching/merge stays in the full apps. Copies the load-bearing iOS viewport handling from `ui/app.js` (`--app-height` via visualViewport, window-scroll lock — see Mobile section). **Tap-to-focus scroll guard (`_guardFocusScroll`)** — iOS/WebKit's focus-time "reveal the focused element" scroll (plus a keyboard-open scroll-anchoring bug) targets the contenteditable's TOP rect, and uPub's editor is one contenteditable spanning the whole document — so tapping to edit yanked `#wr-scroll` to the first line while the caret stayed where tapped (real bug). The guard records the scroller position at `pointerdown` and, for ~900 ms after the editor gains focus, restores it whenever a scroll leaves the caret outside the pane; a scroll that keeps the caret visible (iOS's legit lift above the keyboard) is never touched, and `touchmove`/`wheel` cancel the guard so the user's own flick wins. Exports go through the share sheet on iOS (`shareOrDownloadFile`, plus a binary Blob variant in app.js for `.epub`).
+- **Self-updating PWA (`_bindServiceWorker` in upub/app.js)** — the app registers its SW with `updateViaCache:'none'` and calls `reg.update()` at launch + on every return to foreground; since templates/sw.js self-skipWaiting()s and claims, a new build takes control as soon as it's seen, and the app's `controllerchange` listener then flushes the document to IDB and reloads ONCE (first-install claim doesn't reload). A launch-time version.json check additionally shows a tappable update toast. The manual path stays in About (version + `UNIFILE_BUILT` build stamp + Check for updates → `_applyUpdate`, which never blind-reloads on a timer).
+- **Docs** — the full user guide lives ONCE in `upub/guide-content.js` (plain-string ESM): the app renders it in the Guide sheet, and `build/render-site.mjs` imports it and emits `/upub/guide/`. Keep it current when changing uPub behaviour. Site front door: `docs/upub.md` (+ `types.yml`/`apps.yml` entries).
+
+## uDraft (`src/udraft/` + `src/core/udraft/` + `src/styles/udraft.css`)
+
+A dedicated **architectural drafting** variant (abbrev `dft`): floor plans for
+homes/buildings from a plain-text DSL — rooms in, blueprint out. Full design
+rationale in `plans/udraft-dsl.md`; user-facing reference in
+`src/udraft/guide-content.js` (rendered in-app AND emitted as `/udraft/guide/`
+— keep it current). Like uPub it ships its own shell (`DSL_META.udraft.entry`
+= `udraft/main.js`, css = `styles/udraft.css`) and reuses `core/` for
+storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
+
+- **The DSL is strictly one statement per line** (that property is what makes
+  line diffs, click-to-source, and a future direct-manipulation canvas work —
+  hold it). Room-first declarative: `room kitchen 12' x 10' east of living,
+  align north` — compass-only directions, **interior-clear dimensions**
+  (walls are implicit: derived between/around rooms), `outline E 8' S 6' …
+  close` walks for irregular shapes, `at x, y` as the absolute escape hatch.
+  Openings reference walls as `roomA/roomB` (shared) or `room side`
+  (exterior). Layout is a **deterministic single pass** in declaration order —
+  forward references are errors, never solved; diagnostics are line-mapped.
+  `fixture` places symbols on a wall (`on north at 2'`) or **free-standing**
+  (`centered`, or `at x, y` from the room's NW interior corner; `facing`
+  turns it, front south by default — that's how a kitchen `island` stands;
+  `w x d` overrides any type's footprint). `define <id> <w> x <d> ["Label"]`
+  declares a **document-global reusable object type** (a piano defined once
+  places on every floor) — handled at document level like `floor` (never
+  opens an implicit floor), define-before-use enforced at parse exactly like
+  room refs, and the scene carries `defines` (autocomplete + the scope
+  editor, which pulls a custom object's define line in beside its placement).
+  **Custom shapes** on `define` (2026-09): `shape <name>` borrows any built-in
+  symbol (`grand-piano`, `upright-piano`, `sofa`, `chair`, `tub`, … — the
+  `SHAPE_NAMES` list, plus `round`/`box`); `outline <walk> close` replaces
+  `w x d` with the room walk grammar (footprint = the walk's bbox); `path M/L/H/V/C/Q/Z …`
+  is the SVG-style escape hatch in the object's own lengths. All three end
+  up as a `def.path` command list (or `def.shape` name) NORMALIZED to the
+  unit box, so a `fixture` size override scales the drawing — the furniture
+  built-ins are `UNIT_SHAPES` in svg.js drawn the same way (`scalePath`),
+  which is what lets `shape` reuse them. Fixture label text counter-rotates
+  by the group angle so it reads upright (a south-wall REF, a west-facing
+  piano). Room labels dodge the room's fixture rects when a clear band fits
+  the text block (a `centered` island sits exactly where the label goes).
+- **Everything geometric is integer µm** (1" = 25400) — shared-wall detection
+  is exact equality of face distances (a face pair exactly `walls.interior`
+  apart with overlapping intervals = ONE shared wall), so no float epsilons.
+  LEXER LANDMINE: `"` immediately after a digit is the inch mark (`12'6"`),
+  not a string quote — label strings are the only other double-quote context.
+- **`core/udraft/` is pure** (parse.js → layout.js → svg.js, no DOM) and unit
+  tested (`npm test`, `test/udraft-core.test.mjs`). Wall rendering = ONE
+  nonzero-winding path over all wall band rects + per-corner squares (the
+  abc2svg staff-veil union trick — overlaps fill once); opening gaps are
+  paper-coloured rects punched on top, symbols draw over them. Every entity
+  carries `data-doc-from/to` (absolute char offsets of its source line) —
+  we emit the SVG ourselves, so no anno-rect archaeology.
+- **The editor is uPub's, shared not forked**: `upub/editor.js` takes a
+  `syntax:` option ({classifyDoc, renderLineHtml, lineClass}, defaulting to
+  uPub's Markdown module) + an `onCaret` callback. uDraft's `syntax.js` holds
+  the same invariant — `textContent(rendered line) === source line` — and the
+  Markdown-specific commands/swipe-indent are gated on line types uDraft never
+  emits, so they're inert. Deliberately NO parse-error underlines in the
+  editor (half-typed lines are always "wrong"); diagnostics live in the
+  preview's issue strip + the header stats button.
+- **Floors**: `floor <n> "Title"` blocks; **room ids are scoped per floor**
+  (each storey can have its own `bath`; openings resolve within their floor).
+  All floors share one origin, so identical relative placements stack rooms —
+  that's how stair shafts align. Preview tabs sort by floor number (basement
+  `0`/negative left). `crossFloorStairsCheck` warns when an `up`/`down`
+  flight has no stairs overlapping its footprint on the adjacent floor.
+- **The eye toggles the blueprint** (uPub's preview pattern): floor tabs when
+  multiple `floor` blocks exist, issue strip (tap → source line). Plan
+  interaction is STRICTLY HIERARCHICAL (`_bindPlanNav`, one setter
+  `_setScope(roomId, from)`): at floor level every tap resolves to a ROOM
+  (tapping a door first enters the room it belongs to — `_roomOfRec`).
+  Entering a room renders it in ISOLATION (`opts.isolate` in
+  `renderFloorSvg`): only that room's walls (wallRects carry `rooms:` owner
+  ids for the filter), openings and fixtures — no labels, no floor dims —
+  its interior dims drawn OUTSIDE the walls (`annotationMarkup`), plus
+  labelled NEIGHBOUR ARROWS (`neighborMarkup`, placed at the connecting
+  opening when one exists) that are themselves room tap targets, so rooms
+  chain. Inside a room, tapping its objects selects them: zoom to
+  `scopeExtent` + the object's width/position/depth annotated beside it
+  (`ud-anno`, accent, never in exports). The top bar `#ud-ctxbar` is
+  BREADCRUMBS ONLY (Floor › ROOM › OBJECT — upper levels are buttons back
+  up); dimensions are drawn, not written in the bar. **LONG-PRESS (550 ms,
+  <8 px) = EDIT**: it focuses the pressed thing and opens the SCOPE EDITOR
+  `#ud-edit` — a SECOND UPubEditor instance (multi-line, uDraft syntax
+  highlighting) holding the scope's statements (object → its line; room →
+  its `room` line + every statement referencing the room). Each keystroke
+  reconciles pane rows back into the doc by prefix/suffix diff
+  (`_paneChanged` — rows are anchored to doc line indexes, so scattered
+  source lines edit in place; Enter inserts a doc line after its pane
+  predecessor, joins delete); undo coalesces as typing, and scope state is
+  NOT dropped while the pane has focus, so a half-typed statement doesn't
+  collapse the view. There is deliberately no jump-to-full-DSL from the
+  plan (the issue strip still jumps). State survives live re-renders via
+  `_entIndex` (records keyed by statement offset).
+  **Every entity is a real tap target** — thin strokes are hopeless taps, so
+  interactive renders add invisible `ud-hit` rects per entity (transparent
+  fill still hit-tests); exports carry none of it. **LAYERING IS LOAD-BEARING**:
+  room interior hit paths render just above the walls and label groups render
+  LAST — rendering room hits late shadowed every object inside the room (real
+  bug; a label group targets its `label` statement when one exists, else the
+  `room` line). **Do NOT setPointerCapture on pointerdown** — capture
+  retargets the compatibility `click` to the captured element, so taps never
+  reach entity groups (real bug; capture only once a drag latches).
+  **Zoom/pan rewrites the svg VIEWBOX, not a CSS transform**
+  (transform-scaled svg rasterizes at layout size and blurs; a narrowed
+  viewBox stays vector-crisp): wheel zooms at the cursor, one pointer pans,
+  two pinch, −/⛶/+ buttons (`_bindZoom`; `this._view` survives live
+  re-renders while typing, resets on floor switch, ⛶ = fit). A drag sets
+  `_planDragged` so the trailing click doesn't jump to source.
+  **Autocomplete is a second `SlashMenu`
+  instance** (`#ud-auto`) fed context-aware candidates (keywords at line
+  start; declared room ids after `of`/`/`/`swing` and as first argument of
+  door/window/…; sides after `align/from/on/along/facing`; fixture types) —
+  same touch/keyboard machinery, the autocomplete menu gets keydown routing
+  priority over the slash menu. Slash items insert statement templates with
+  the first placeholder pre-selected.
+- **Exports**: SVG (concrete-colour `<style>` embedded — `exportStyles`), PNG
+  (canvas rasterize), and **PDF at true drawing scale** — `renderPrintBody`
+  sizes each floor's svg in real inches from `scale:` front matter (default
+  `1/4in` = 1/4":1'-0"), print window `@page { margin: 0 }` + body padding.
+  In-app the plan themes via CSS vars (`udraft.css` mirrors
+  `svg.js baseStyles` — keep the `ud-*` class lists in sync).
+- **Site plans (2026-09) — `site` sheets** beside the floors (same `floors[]`
+  array, `kind:'site'`; every floor consumer sees empty `rooms/walls/…` and
+  stays oblivious). Parsed like `floor` blocks (`site ["Title"] [scale 1"=30' |
+  1:500 | 30] [north up|left|right|down|<deg>]`); a site statement outside a
+  site opens an implicit site, a floor statement inside one opens an implicit
+  floor. Statements: `lot [id] ["Label"] [at x,y | from <lot> corner n] [courses…]`
+  + `course <bearing> <dist> ["monument"]` (metes and bounds, clockwise from
+  the point of beginning = the site origin, x east / y south), `setback <d>
+  [course n]`, `contour <elev> [index] <pts…>`, `line ["Label"] [dashed]
+  [smooth] <pts…>`, `building [id] (<w> x <d> | from floor [n|"Title"]) at x,y
+  [rotate deg] ["Label"]`, `road "Name" along course n [width d] ["sub"]`,
+  `driveway <w> from x,y to x,y…`, `feature <type|define-id> [w x d] at x,y
+  [rotate] ["Label"]` (every `SITE_FEATURES` type — well, septic, drainfield,
+  shed… — also works as a bare keyword: `well at …`), `tree [caliper] ["sp"]
+  at x,y [canopy d]`, `note at x,y "text"`. **Bearing tokens** (`N 87°35'24" E`,
+  `N87-35-24E`, `N 87d35m24s E`, `N 87.59 E`) lex ONLY on `lot`/`course` lines
+  (`tokenizeLine(line, {bearings:true})`; syntax.js does the same by `info.kw`)
+  — elsewhere `N 8 E 6` must stay an outline walk. `layoutSite` is FLOAT
+  geometry rounded to integer µm per construction (courses run at any angle;
+  nothing needs the walls' exact-equality tests): the figure always closes
+  visually on the origin, a closure miss > 0.5' is a WARNING with the
+  distance; setbacks = `offsetPolygon` (per-edge inward offset, consecutive
+  offset lines intersected); a building whose rotated corners leave the lot or
+  cross the setback polygon warns (`pointInPoly`). **Floors lay out first,
+  sites after** so `building from floor N` can stamp the laid-out floor's
+  `wallRects` + room polys onto the lot (translate NW wall corner → `at`,
+  rotate about it). Rendering (`renderSiteSvg`): the sheet has ITS OWN SCALE
+  (`floor.ratio`, model mm per paper mm; default 1"=20'), so every pen weight /
+  text size is a PAPER-mm spec × ratio emitted as SVG ATTRIBUTES — the
+  stylesheet's `ud-s-*` rules only colour (a CSS stroke-width would override
+  the attribute; keep it that way). The whole drawing sits in
+  `<g class="ud-site" transform="rotate(θ)">`; `stext()` handles orientation:
+  upright text counter-rotates, along-line text (bearings, contours) is
+  normalised so it never reads upside down after the rotation, and offsets are
+  SCREEN-space (`down()` / `lift`) — a model +y offset becomes a sideways shift
+  once the sheet rotates (real bug). Contours are Catmull-Rom smoothed and
+  labelled at both ends; driveways = a wide fg stroke under a paper-coloured
+  stroke (two edge lines on any curve; the lot line draws after them so it
+  survives the crossing). North arrow + graphic scale bar are drawn in screen
+  space outside the rotated group. `scopeExtent` returns SCREEN-space boxes for
+  site records (`rotatedBox`); `annotationMarkup` is empty for sites. App: site
+  sheets are FLAT (no room level — `_tapEnt`/long-press select the record
+  outright); `_entIndex` = `siteRecords()` (courses first so a lot with inline
+  courses on the same line wins); the scope editor for a lot = its line + every
+  course/setback line. Print/PDF sizes a site sheet by its own ratio
+  (`siteScaleLabel`). **Headless-Chromium screenshot landmine:** the viewport
+  is ~90 px shorter than `--window-size`, so the bottom of a tall sheet (the
+  scale bar) is cut off in screenshots — it is not a rendering bug.
+- **`styles/udraft.css` `@import`s `upub.css`** (esbuild bundles it): the
+  wr-* shell rules ARE the shared shell — uPub shell changes intentionally
+  flow into uDraft. Theme attribute stays `data-wr-theme` for that reason
+  (prefs key is `udTheme`). **Desktop editor (≥700px, uDraft only)**: the
+  70ch prose measure is lifted (`#wr-sheet { max-width:none }`) and a line
+  number gutter appears — CSS counters in `.wr-line::before` (NOT DOM text,
+  so the editor's textContent invariant, copy/paste and caret placement are
+  untouched), scoped to `#wr-scroll` so the scope editor's scattered rows
+  stay unnumbered. Phones keep uPub's plain surface.
 
 ## Mobile / iOS (hard-won — read before touching layout)
 
-The app is a `100dvh`-ish flex column. On phones (`@media max-width:640px`) **the top bar is hidden entirely** (`#uf-topbar { display:none }`) — the **pane switcher (`#uf-pane-switch`) is the sole top chrome**, sitting directly below the site-nav (if present) under the safe-area inset (which lives on `#unifile-app` padding-top). Only the active one of three panes (**commit-log · editor · render**) is displayed; `App._setupMobilePanes()` tracks the pane into `#unifile-app[data-mobile-pane]`.
+The app is a `100dvh`-ish flex column. On phones (`@media max-width:640px`, OR landscape `(orientation: landscape) and (max-height: 500px) and (pointer: coarse)`) **the desktop top bar is hidden entirely** (`#uf-topbar { display:none }`) and the **phone top bar (`#uf-pane-switch`, `src/ui/pane-switch.js`) is the sole top chrome**, sitting directly below the site-nav (if present) under the safe-area inset (which lives on `#unifile-app` padding-top). Only the active one of three panes (**commit-log · editor · render**) is displayed; `App._setupMobilePanes()` tracks the pane into `#unifile-app[data-mobile-pane]`.
 
-**The pane switcher is a component (`src/ui/pane-switch.js`, `PaneSwitch`)** — each of the three segments does three jobs: (1) **switch pane** when not active; (2) **show context** — commit segment = orange dirty dot (far-left, `--pending`) · branch icon · branch name; code segment = the document title (ellipsised); render segment = the DSL render icon; (3) **become a dropdown menu** when it IS the active pane (a caret appears): commit → branch picker (switch / new branch), code → the old hamburger items (new doc, help, blame, save/open data file, import & merge, extensions, archived comments, settings), render → rendered exports (SVG/PDF/MIDI) + export-as-app. So on mobile there is **no top bar, no hamburger, and no commit-pane bottom bar** — it all lives in the switcher. Desktop is unchanged (classic top bar + VCS pills; the switcher is `display:none`). The old `commit-bar.js` (branch selector bottom bar) was removed.
+**Phone top bar (2026-09 redesign): `( ⑂ )   {♪} Title ⌄   ( ◉ )`.** Three controls, portrait AND landscape (the old segmented slider + the landscape collapsible dock are gone):
+- **Left circle = branch icon.** Tap → the commit/history pane; the circle FILLS (accent) while that pane is up; tap again → back to the editor. Carries the dirty dot (`--pending`; red when detached).
+- **Centre = `{mark}` + document title + caret — ALWAYS the title, same menu in every view** (the branch name lives on the bubble in the history view, never here). The mark is `appMark(data.dslType)` in mono. Tap → the ONE dropdown (`.ps-menu`) with the FILE-LEVEL options only, grouped: Document, File, Export, More (settings) — **`src/ui/actions.js` `listMenuActions(ctx)`**. Editing verbs and branches are deliberately NOT in it.
+- **The bar blends into the page** (`background: var(--bg)`, no rule — iA-style) and is **`user-select:none`/`-webkit-touch-callout:none`**: a slightly held tap on the title/mark otherwise started an iOS text selection ("tapping the branch circle edits the top-left text" — real bug). The skeleton is **built once per mode and PATCHED** on state changes (`_build`/`render`) — rebuilding the buttons under a finger mid-tap (state changes land between touchstart and click) hands the tap to whatever is underneath.
+- **Right circle = eye.** Tap → the rendered DSL pane; filled while showing; tap again → editor. Always the eye (not a per-DSL render icon).
+- **Diff mode:** circles unchanged; the centre reads `L <hash> ↔ R <hash>` and its dropdown holds both side pickers.
+- **Hidden while typing:** `App._bindEditingChrome()` sets `#unifile-app[data-editing]` (→ `#uf-pane-switch { display:none }`) when the editor has focus (`editor-focus` from CM's `focusChanged` + document focusin/out) AND the soft keyboard is genuinely up (`_kbOpen`: the visual viewport is >100px shorter than the tallest seen at this window width, tracked in `_trackViewportHeight`; focus alone where there's no visualViewport) AND `pointer: coarse`. Mirrors uPub's rule; iOS's own keyboard ✓ blurs the editor and brings the bar back. Can't be seen in desktop Chromium (no keyboard) — verify by setting the attribute by hand.
 
-**Phones drop the transport bar** (`#uf-transport` is `display:none` on phones — it ate scarce vertical space, worst in landscape with the keyboard up). Playback is a **floating play/pause button** instead: a global `.uf-play-btn` FAB (bottom-right, over editor + render panes) in **portrait**, and inside the landscape dock in **landscape**. Both just `state.emit('abc-play')` and reflect `abc-play-state`. The align FAB stacks above the play FAB in the editor pane.
-
-**Landscape = a collapsible dock.** In landscape (`(orientation: landscape) and (max-height: 500px) and (pointer: coarse)`) the pane switcher becomes a top-right **dock**: a grip (`.ps-handle`) that's **collapsed by default** (just the grip, no reserved gutter — it overlays the corner) and drops the controls down when tapped: the three pane tabs (icons only — the code tab uses `.ps-code-icon`), then play + align (`.ps-play`/`.ps-align`, ABC only, NOT `.ps-btn` so the portrait bar ignores them). Switching a pane re-collapses the dock so it stops covering text. `pointer: coarse` means this can't be seen in the desktop Chromium preview — verify geometry by temporarily dropping the pointer gate, then test on device.
+**Phones have NO transport bar and NO per-verb FABs.** Editing verbs live on the **action bubble (`src/ui/action-fab.js`, `.uf-fab`)** — one round `{glyph}` circle (mono, accent), `position:absolute` in `#unifile-app`, z-index 70, phone-only via CSS. **It is CONTEXTUAL to the pane showing** (`listBubbleActions(ctx, view)`, re-rendered by a MutationObserver on `data-mobile-pane`): **editor** = play · one measure per line · piano roll (ABC) + undo · redo; **render** = play/pause (ABC only — with no actions the bubble HIDES, e.g. Markdown render); **history** = the branch list (● current; tap = switch), New branch…, Commit… (`composeCommit` → scrolls the log to the pending node and focuses its message). File-level operations and settings are never on the bubble — they're the title dropdown.
+- **Tap = the PRIMARY action** (default: `play` for ABC, `undo` in the editor, else the grid itself — `defaultPrimary(dsl, view)`; persisted per DSL+view in `localStorage.uf_fab_primary:<dsl>:<view>`; `'menu'` = tap opens the grid). The bubble shows the primary's glyph in braces (`{▶}`, `{↶}`), pulses a ring while playing. **In the history view it elongates into a pill `{⑂} main`** (`.uf-fab.wide`) and a tap opens the branch grid.
+- **Long-press (480 ms, <8 px) = the grid** (`.uf-fab-grid` + `.uf-fab-scrim`, `#unifile-app[data-fab-open]`): the view's actions alphabetical (sorted by the stable `key`, so Play/Pause doesn't jump; branches sort first by name), 4 columns portrait / 6 landscape, the primary ringed; tile tap = run; the tile's ☆ = make it the primary (`star:false` rows — branches — have none). A hint row explains tap/hold/drag and holds a 2×2 corner picker.
+- **Drag = move**; on release it SNAPS to the nearest of the four corners (`data-corner` tl/tr/bl/br, persisted in `localStorage.uf_fab_corner`, default `br`). While dragging (`#unifile-app[data-fab-drag]`) four dashed ghost circles mark the corners and the nearest grows. Top corners sit under the top bar via `--uf-fab-top` (= `#uf-main.offsetTop`, re-measured on resize + a MutationObserver on `data-editing`, so it drops to 0 while typing). A one-time caption ("Hold for all actions · drag to a corner") shows until first use (`uf_fab_seen`).
+- **Focus is preserved:** `pointerdown`/`mousedown` are `preventDefault()`ed on the button AND the grid tiles, so Undo/Redo/Play never blur the editor or drop the keyboard. `setPointerCapture` is try/caught (stale/synthetic ids throw). The button hides in diff mode; the piano roll (z 120) covers it in landscape and has its own close.
+- The piano-roll toggle (landscape only) is the `roll` action in the editor grid; align = `align`; the landscape `.ps-roll/.ps-play/.ps-align` dock buttons are gone.
 
 Institutional knowledge — **do not silently "simplify" these; each fixed a real device bug:**
 
@@ -247,8 +464,8 @@ Institutional knowledge — **do not silently "simplify" these; each fixed a rea
 - **The "chin gap" was `apple-mobile-web-app-status-bar-style: black-translucent` + `height:100%`.** That meta is REMOVED from `pwa.html`; `html,body` use `100vh`. Don't re-add black-translucent.
 - **Document must never scroll.** `App._lockWindowScroll()` snaps `window`/`scrollingElement` back to (0,0); `overscroll-behavior` contains inner scrollers. iOS otherwise scrolls the whole doc when the keyboard is up and shifts the bars.
 - **Bottom bar (`#uf-bottom`) is an in-flow flex child**, not `position:fixed` + JS pinning (that pushed it off-screen). It sits flush because the column is exactly the visible height.
-- **The pane switcher is the sole top chrome on mobile** (top bar hidden). Its dropdown menus (`.ps-menu`) open below the active segment; `#uf-pane-switch` needs `z-index` above `#uf-main` because it's DOM-first (paints under main otherwise). The **safe-area inset is on `#unifile-app` itself** (`padding-top: env(safe-area-inset-top)` + `background:var(--bg-alt)`, border-box keeps `--app-height`), so the switcher sits below the notch. Rail is **compact 38px**. (Historical: an earlier iteration had an auto-hiding title bar collapsing above a pinned switcher — superseded by folding everything into the switcher.)
-- **VCS UX (mobile), redesigned:** the old draft/commit/back-up **banners are gone** — replaced by passive markers. Uncommitted work → the dirty dot + a **pending node** at the top of the commit log (dashed hollow node with an inline, optional message + version + Commit, so a commit is composed where it lands). Durability → an **"exported" marker** on the commit matching `loadBackupMark(scope)` (the last state written out to a `.unifile.json`), so committed-but-in-sandbox is visibly distinct from durably-saved. **Commit messages are optional** (dialog + pending node). The commit pane's bottom bar (`commit-bar.js`) is now a **branch selector** (drop-up: switch/create branch), not a composer.
+- **The phone top bar is the sole top chrome on mobile** (desktop top bar hidden). Its dropdown (`.ps-menu`) opens centred under the title; `#uf-pane-switch` needs `z-index` above `#uf-main` because it's DOM-first (paints under main otherwise). The **safe-area inset is on `#unifile-app` itself** (`padding-top: env(safe-area-inset-top)` + `background:var(--bg-alt)`, border-box keeps `--app-height`), so the bar sits below the notch. Bar is **56px portrait / 46px landscape** and hides while typing (`data-editing`). (Historical: a segmented three-tab slider with per-segment menus, and before it an auto-hiding title bar — superseded by the circles + title dropdown.)
+- **VCS UX (mobile), redesigned:** the old draft/commit/back-up **banners are gone** — replaced by passive markers. Uncommitted work → the dirty dot (on the branch circle) + a **pending node** at the top of the commit log (dashed hollow node with an inline, optional message + version + Commit, so a commit is composed where it lands). Durability → an **"exported" marker** on the commit matching `loadBackupMark(scope)` (the last state written out to a `.unifile.json`), so committed-but-in-sandbox is visibly distinct from durably-saved. **Commit messages are optional** (dialog + pending node). Branch switching/creation lives on the action bubble in the history view (`actions.js switchBranch/newBranch`); `commit-bar.js` is gone.
 - **Document title is the single source of truth.** The centred top-bar title edits `data.title`; ABC derives its `T:` from it (a DOM heading in the live preview so char-positions still map 1:1; `_withDerivedTitle` string-injects for exports). An explicit `T:` in the source overrides. Preview re-renders on rename (`preview.js` tracks `_lastTitle`).
 - **Mobile gutter is one thin rail** (no line numbers, no fold column): current line = accent segment, commented line = yellow, front-matter lines = grey. Buffer between rail and code lives on `.cm-line` padding-left (not `.cm-content`) so the active-line highlight covers it (no dark sliver).
 - **Zoom fix:** viewport `maximum-scale=1, user-scalable=no, viewport-fit=cover`; `.cm-content`/inputs forced to `font-size:16px` to stop Safari focus-zoom.
@@ -259,7 +476,7 @@ iOS-specific behavior can't be verified in the local Chromium preview — verify
 
 ## Versioning & releases
 
-Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`detectVersion` in build.mjs; `sync-site.mjs` mirrors this for `version.json`'s channels), stamped into the bundle (`UNIFILE_VERSION`) and `docs/version.json`. This means the release-flow bump (`npm version X.Y.Z --no-git-tag-version`) takes effect immediately — builds stamp the bumped version even before the tag is cut, and on Cloudflare Pages (whose checkout has no tags) `package.json` is the only source anyway. So `package.json` MUST be bumped for each release, or the deployed `version.json`/`UNIFILE_VERSION` will be stale (and the in-app update prompt won't fire). Builds also stamp `UNIFILE_BUILT` (build timestamp) so two builds of the same version are distinguishable (shown in Writer's About), and `UNIFILE_COMMIT`/`UNIFILE_COMMIT_AT` (7-char commit hash + commit time, from `CF_PAGES_COMMIT_SHA` on Cloudflare else `git rev-parse`) — shown in both Abouts and in `version.json` (`commit`/`commitAt`). The hash exists for the **dev channel**: `dev.unifile.app` is a proxied CNAME to `dev.unifile-8yt.pages.dev`, the `dev` branch's Pages preview alias (the hostname had to be registered under the Pages project's Custom domains first, then the record's target edited to the branch alias — a bare CNAME 522s). Every push to `dev` deploys there with no version bump, so About's commit hash is the only build identity on that channel; PWAs installed from dev.unifile.app are origin-scoped (own SW, IDB, version.json) and thus subscribe to dev.
+Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`detectVersion` in build.mjs; `sync-site.mjs` mirrors this for `version.json`'s channels), stamped into the bundle (`UNIFILE_VERSION`) and `docs/version.json`. This means the release-flow bump (`npm version X.Y.Z --no-git-tag-version`) takes effect immediately — builds stamp the bumped version even before the tag is cut, and on Cloudflare Pages (whose checkout has no tags) `package.json` is the only source anyway. So `package.json` MUST be bumped for each release, or the deployed `version.json`/`UNIFILE_VERSION` will be stale (and the in-app update prompt won't fire). Builds also stamp `UNIFILE_BUILT` (build timestamp) so two builds of the same version are distinguishable (shown in uPub's About), and `UNIFILE_COMMIT`/`UNIFILE_COMMIT_AT` (7-char commit hash + commit time, from `CF_PAGES_COMMIT_SHA` on Cloudflare else `git rev-parse`) — shown in both Abouts and in `version.json` (`commit`/`commitAt`). The hash exists for the **dev channel**: `dev.unifile.app` is a proxied CNAME to `dev.unifile-8yt.pages.dev`, the `dev` branch's Pages preview alias (the hostname had to be registered under the Pages project's Custom domains first, then the record's target edited to the branch alias — a bare CNAME 522s). Every push to `dev` deploys there with no version bump, so About's commit hash is the only build identity on that channel; PWAs installed from dev.unifile.app are origin-scoped (own SW, IDB, version.json) and thus subscribe to dev.
 
 **Release flow:** `npm version X.Y.Z --no-git-tag-version` (bump package.json) → `git tag vX.Y.Z` → `npm run build:site` → commit → `git push origin main vX.Y.Z`. The site is served by **Cloudflare Pages** (project `unifile`, `unifile-8yt.pages.dev`), which auto-builds on push with `npm run build:site && npm run site:preview` → `docs/_site`.
 **Release candidates:** tag `vX.Y.Z-rc.N` per candidate, cut the bare `vX.Y.Z` when ready. (RC channel precedence needs the git tag list, which Cloudflare lacks — RCs are exercised locally / on GitHub where tags exist.)
@@ -276,9 +493,9 @@ Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`
 
 **Hosted on Cloudflare Pages** (as of 2026-07; migrated off GitHub Pages, which was flaky/queue-stuck). Project `unifile` → `unifile-8yt.pages.dev`, custom domain **`unifile.app`**. Cloudflare **auto-builds on every push to `main`** with build command `npm run build:site && npm run site:preview` and output dir **`docs/_site`**. No queue, no Ruby. GitHub Pages is unpublished; `docs/CNAME` was removed (Cloudflare manages the custom domain via a proxied `CNAME` record in its own DNS — the domain's DNS lives on Cloudflare, registrar stays Namecheap).
 
-**The site is rendered by `build/render-site.mjs`** (`npm run site:preview`) — a **no-Ruby Node renderer** (uses `marked`) that reads `docs/` (top-level `*.md` pages, `_posts`, `_data/{apps,types}.yml`, the `launcher` include), writes rendered HTML + `search.json` into `docs/_site`, and copies through `assets/`, `dl/`, `pwa-{md,mer,abc}/`, `version.json`. It was formerly just a local preview mirror; **it is now the production build**, so if you change layouts/includes you must update `render-site.mjs` (it only understands a small hand-rolled Liquid subset — the post/app-list loops + the launcher include — not full Jekyll). `docs/_site/` is a build output (gitignored). Note: `npm run build:site` still regenerates + commits `docs/dl/*` and `docs/pwa-*/`, but Cloudflare rebuilds them from source anyway, so committing them is now redundant (candidate cleanup).
+**The site is rendered by `build/render-site.mjs`** (`npm run site:preview`) — a **no-Ruby Node renderer** (uses `marked`) that reads `docs/` (top-level `*.md` pages, `_posts`, `_data/{apps,types}.yml`; the `{% include launcher.html %}` token in hub pages is rendered by `renderLauncher()` — there is no include file), writes rendered HTML + `search.json` into `docs/_site`, and copies through `assets/`, `dl/`, `pwa-{md,mer,abc,upub}/`, `version.json`. **It is the production build** — all layouts live as template strings inside it (the Jekyll `_layouts`/`_includes`/`_config.yml`/`Gemfile` were deleted in the 2026-08 redesign). `docs/_site/` is a build output (gitignored). Note: `npm run build:site` still regenerates + commits `docs/dl/*` and `docs/pwa-*/`, but Cloudflare rebuilds them from source anyway, so committing them is now redundant (candidate cleanup).
 
-Navigation is a **command-bar** (type to jump; index = `docs/search.json`). Per-type front doors (`/get/`=Markdown, `/mermaid/`, `/abc/`) device-detect and route via `launcher.html` + `assets/js/launch.js` (install PWA on mobile; PWA or `.html` on desktop).
+**Design (2026-09 redesign): a plain white document shown as Markdown source** — the iA Writer "edit mode" look: white background, IBM Plex Mono, ONE font size for everything (headings are just bold), and the Markdown syntax marks left visible in light grey via CSS pseudo-elements (`h1::before` = `#` hanging in a `--gutter` to the left so text aligns; `strong` keeps `**`, `em` `*`, `code` its backticks, `pre` its fence lines, list items their `-`/`1.`, blockquotes `>`, tables their pipes). The one exception is **links: plain old-school blue underlined hyperlinks, no brackets**. No theme toggle, no dark mode; the apps keep their own theming. (The 2026-08 green-phosphor terminal look is gone.) Chrome = a one-line `nav` (unifile · apps · posts · about) and a `footer` (`---` rule, version, guide links). The **home page is the app listing**: one list item per type — its `{glyph}` mark and `{name}` as plain mono TEXT (`appMark()`/`appName()` from `src/core/brand.js`; `types.yml` titles are the `{name}`s, `APPS[id].edits` says what it edits) — and three actions — Install / Open / Download (a `button.link` + two links). **Install opens the per-device walkthrough modal** (`assets/js/install.js`, `[data-install]` triggers, tabs for iPhone/Android/Desktop defaulting to the visitor's platform; step 1 is always "open the app" because a PWA can only be installed from its own scope — the PWA's own pre-install banner takes over from there). `search.json` is still generated (the in-app site-nav fetches it); the committed Jekyll-era `docs/search.json` source file is gone. Per-type front doors (`/get/`=Markdown, `/mermaid/`, `/abc/`, `/upub/`, `/udraft/`) keep the device-aware `assets/js/launch.js` buttons (styled as links; `.launch-btn + .launch-btn::before` draws the `·` separators as an inline-block so the link underline doesn't run through them) and also link the walkthrough modal.
 
 **Cloudflare clean-URL gotcha:** Pages 308-redirects `/foo.html` → `/foo`, which would strip the `.html` off a downloaded quine. The download links therefore set an explicit `download="unifile.<abbrev>.html"` (in `launch.js` + both no-JS launcher fallbacks) so the saved filename is preserved.
 

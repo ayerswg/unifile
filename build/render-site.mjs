@@ -1,31 +1,43 @@
 /**
- * Local static renderer for the docs/ site — a no-Ruby way to PREVIEW the
- * command-bar site without installing Jekyll (this machine's Ruby is too old).
+ * Static renderer for the docs/ site — **this is the production site build**
+ * (Cloudflare Pages runs `npm run build:site && npm run site:preview` and
+ * serves docs/_site).  No Jekyll, no Ruby: plain Node + `marked`.
  *
  *   npm run site:preview      → renders docs/ into docs/_site/
  *   then serve docs/_site (e.g. python3 -m http.server --directory docs/_site)
  *
- * NOTE: production still builds with real Jekyll on GitHub Pages.  This renderer
- * mirrors the same layouts/output for local visual checks; if you change the
- * Jekyll layouts substantially, update the templates here too.  It uses `marked`
- * (already a dependency) for Markdown and reads docs/_data/apps.yml for the
- * downloads/PWA list.
+ * Design: a plain white document rendered the way a DSL editor shows Markdown
+ * source — one monospaced size, the syntax marks (`#`, `**`, backticks, list
+ * dashes) left visible in grey via CSS pseudo-elements, links as plain blue
+ * hyperlinks (see assets/css/style.css).  The home page is a static listing of
+ * the apps — each row shows its `{glyph}` mark + `{name}` (src/core/brand.js:
+ * `{♪} {compose}`, `{¶} {document}`…) and three actions: Install (per-device
+ * walkthrough modal, assets/js/install.js), Open (the PWA) and Download (the
+ * single-file quine).
  */
 
 import { readFile, writeFile, mkdir, readdir, rm, cp, access } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { marked } from 'marked';
-import { GUIDE_MD } from '../src/writer/guide-content.js';
+import { GUIDE_MD } from '../src/upub/guide-content.js';
+import { GUIDE_MD as UDRAFT_GUIDE_MD } from '../src/udraft/guide-content.js';
+import { APPS, appMark, appName, faviconSvg } from './icons.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const DOCS = join(ROOT, 'docs');
 const OUT  = join(DOCS, '_site');
 
-const SITE = { title: 'Unifile', description: 'A universal file format for ideas', baseurl: '' };
+const SITE = { title: '{unifile}', description: 'Single-file, offline, version-controlled document apps', baseurl: '' };
 const rel = (p) => SITE.baseurl + p;
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// types.yml ids → icons.mjs keys (which are DSL ids).
+const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs', udraft: 'udraft' };
+
+// Site favicon: the bare `{}`, black on white.
+const FAVICON = 'data:image/svg+xml,' + encodeURIComponent(faviconSvg());
 
 // ── front matter ───────────────────────────────────────────────────────────
 function parseFrontMatter(raw) {
@@ -59,69 +71,8 @@ async function loadApps() {
   }
 }
 
-// ── layouts (mirror docs/_layouts/*.html) ───────────────────────────────────
-function pageHead(title) {
-  const full = title && title !== SITE.title ? `${title} — ${SITE.title}` : SITE.title;
-  return `<!DOCTYPE html><html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(full)}</title>
-<script>(function(){var t=localStorage.getItem('uf-theme')||'light';document.documentElement.setAttribute('data-theme',t);})();</script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="${rel('/assets/css/style.css')}">
-</head><body>`;
-}
-function pageFoot() {
-  return `<script>window.SITE_BASEURL = ${JSON.stringify(SITE.baseurl)};</script>
-<script src="${rel('/assets/js/search.js')}"></script></body></html>`;
-}
-const navBar = () => `<nav id="site-nav">
-  <span class="prompt-glyph">&gt;</span>
-  <div class="nav-search-wrap">
-    <span id="nav-display"></span>
-    <input id="nav-search-input" type="text" autocomplete="off" spellcheck="false" placeholder="type to navigate..." style="display:none">
-  </div>
-  <button id="theme-toggle" aria-label="Toggle theme"></button>
-</nav>`;
-
-function layoutHome() {
-  return pageHead(SITE.title) + `
-<button id="home-theme-toggle" aria-label="Toggle theme"></button>
-<div id="home-wrap">
-  <div id="home-wordmark">unifile.app</div>
-  <div id="home-prompt-row">
-    <span id="home-prompt-glyph">&gt;</span>
-    <div id="home-search-wrap">
-      <input id="home-search-input" type="text" autocomplete="off" spellcheck="false" placeholder="type to navigate...">
-    </div>
-  </div>
-  <div id="home-hint">↑↓ to move &nbsp;·&nbsp; ↵ to go &nbsp;·&nbsp; esc to clear</div>
-</div>` + pageFoot();
-}
-function layoutPage(meta, contentHtml) {
-  const nav = navBar().replace('<span id="nav-display"></span>', `<span id="nav-display">${esc(meta.url)}</span>`);
-  const dateLine = meta.date ? `<div class="post-meta">${esc(meta.date)}</div>` : '';
-  return pageHead(meta.title) + nav +
-    `<div class="page-body"><h1>${esc(meta.title)}</h1>${dateLine}<div class="content">${contentHtml}</div></div>` +
-    pageFoot();
-}
-
-// ── content special-cases (Liquid for-loops the renderer fills in) ───────────
-function renderPostList(posts) {
-  const items = posts.map(p =>
-    `<li><span class="post-date">${esc(p.dateISO)}</span><a href="${rel(p.url)}">${esc(p.title)}</a></li>`
-  ).join('\n');
-  return `<ul class="post-list">\n${items}\n</ul>`;
-}
-function renderAppList(apps) {
-  const items = apps.map(a =>
-    `<li><a href="${rel(a.url)}">${esc(a.title)}</a> <span class="app-kind app-kind--${esc(a.kind)}">${esc(a.kind)}</span> <span class="app-desc">${esc(a.excerpt)}</span></li>`
-  ).join('\n');
-  return `<ul class="app-list">\n${items}\n</ul>`;
-}
-
 // Minimal parser for _data/types.yml (list of maps with a folded `overview:` and
-// a nested `features:` list) — enough to mirror the launcher include locally.
+// a nested `features:` list).
 async function loadTypes() {
   const raw = await readFile(join(DOCS, '_data', 'types.yml'), 'utf8');
   const types = [];
@@ -149,15 +100,138 @@ async function loadTypes() {
   return types;
 }
 
+// ── version (footer stamp) ──────────────────────────────────────────────────
+async function loadVersion() {
+  try { return JSON.parse(await readFile(join(DOCS, 'version.json'), 'utf8')).version || ''; }
+  catch { return ''; }
+}
+let VERSION = '';
+
+// ── shared page chrome ──────────────────────────────────────────────────────
+function pageHead(title) {
+  const full = title && title !== SITE.title ? `${title} — ${SITE.title}` : SITE.title;
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${esc(full)}</title>
+<meta name="description" content="${esc(SITE.description)}">
+<link rel="icon" href="${FAVICON}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="${rel('/assets/css/style.css')}">
+</head><body>`;
+}
+function pageFoot() {
+  return `<script src="${rel('/assets/js/install.js')}" defer></script></body></html>`;
+}
+
+/** Footer on every page: a rule, the version, the guides. */
+function footer() {
+  const v = VERSION ? `unifile v${esc(VERSION)} <span class="sep">·</span> ` : '';
+  return `<footer class="foot"><hr>
+  <p>${v}<a href="${rel('/upub/guide/')}">${esc(appName('upub'))} guide</a> <span class="sep">·</span> <a href="${rel('/udraft/guide/')}">${esc(appName('udraft'))} guide</a></p>
+</footer>`;
+}
+
+/** Top line on every page: the site name + its few pages. */
+function nav() {
+  return `<nav class="nav">
+  <a class="nav-home" href="${rel('/')}">{unifile}</a>
+  <a href="${rel('/')}">apps</a>
+  <a href="${rel('/posts/')}">posts</a>
+  <a href="${rel('/about/')}">about</a>
+</nav>`;
+}
+
+// ── home: the app list ──────────────────────────────────────────────────────
+function layoutHome(types) {
+  const rows = types.map((t) => {
+    const id = TYPE_TO_ICON[t.id];
+    const name = APPS[id] ? appName(id) : t.title;     // {compose}
+    const mark = APPS[id] ? appMark(id) : '{}';        // {♪}
+    const hub = t.id === 'markdown' ? '/get/' : `/${t.id}/`;
+    const dlName = (t.download || '').split('/').pop();
+    // What it edits (the install modal's "Install Markdown" heading too).
+    const kind = APPS[id]?.edits || t.title;
+    // The intro already says FULLY OFFLINE — drop the taglines' redundant suffix.
+    const desc = (t.tagline || '').replace(/\s*[—-]\s*(fully\s+)?offline\.?\s*$/i, '.');
+    return `<li class="app">
+  <a class="app-name" href="${rel(hub)}" title="About ${esc(name)}"><span class="app-icon">${esc(mark)}</span><strong>${esc(name)}</strong></a> ${esc(kind)} — ${esc(desc)}
+  <span class="app-links"><button class="link" data-install data-app="${esc(name)}"
+      data-pwa="${rel(t.pwa)}" data-dl="${rel(t.download)}">Install</button>
+    <span class="sep">·</span> <a href="${rel(t.pwa)}">Open</a>
+    <span class="sep">·</span> <a href="${rel(t.download)}" download="${esc(dlName)}">Download</a></span>
+</li>`;
+  }).join('\n');
+
+  return pageHead(SITE.title) + `
+<div class="doc">
+  ${nav()}
+  <div class="content">
+  <h1>{unifile}</h1>
+  <p>Single-file document apps with built-in version history. Fully offline: no server, no account, nothing leaves your device.</p>
+
+  <h2>Apps</h2>
+  <ul class="apps">
+${rows}
+  </ul>
+
+  <h2>Notes</h2>
+  <ul>
+    <li><strong>Install</strong> — a step-by-step guide for your device. The app goes on your home screen or dock and works with no connection.</li>
+    <li><strong>Open</strong> — run it in the browser; you can install it from there too.</li>
+    <li><strong>Download</strong> — one <code>.html</code> file that <em>is</em> the whole app plus your document and its history. Open it anywhere.</li>
+  </ul>
+  </div>
+  ${footer()}
+</div>` + pageFoot();
+}
+
+// ── inner pages ─────────────────────────────────────────────────────────────
+function layoutPage(meta, contentHtml) {
+  const dateLine = meta.date ? `<p class="dim post-meta">${esc(meta.date)}</p>` : '';
+  return pageHead(meta.title) + `
+<div class="doc">
+  ${nav()}
+  <div class="content"><h1>${esc(meta.title)}</h1>${dateLine}${contentHtml}</div>
+  ${footer()}
+</div>` + pageFoot();
+}
+
+// ── content special-cases (Liquid for-loops the renderer fills in) ───────────
+function renderPostList(posts) {
+  const items = posts.map(p =>
+    `<li><span class="post-date">${esc(p.dateISO)}</span><a href="${rel(p.url)}">${esc(p.title)}</a></li>`
+  ).join('\n');
+  return `<ul class="post-list">\n${items}\n</ul>`;
+}
+function renderAppList(apps) {
+  const items = apps.map(a =>
+    `<li><a href="${rel(a.url)}">${esc(a.title)}</a> <span class="app-kind app-kind--${esc(a.kind)}">${esc(a.kind)}</span> — <span class="app-desc">${esc(a.excerpt)}</span></li>`
+  ).join('\n');
+  return `<ul class="app-list">\n${items}\n</ul>`;
+}
+
 function renderLauncher(t) {
   if (!t) return '<p>(unknown type)</p>';
+  const id = TYPE_TO_ICON[t.id];
+  const name = APPS[id] ? appName(id) : t.title;
+  const mark = APPS[id] ? appMark(id) : '{}';
   const feats = (t.features || []).map(f => `<li>${esc(f)}</li>`).join('\n');
+  const dlName = (t.download || '').split('/').pop();
   return `<div class="launcher">
-  <p class="launch-tagline">${esc(t.tagline || '')}</p>
+  <div class="launch-identity">
+    <span class="launch-icon">${esc(mark)}</span>
+    <div>
+      <div><strong>${esc(name)}</strong></div>
+      <p class="launch-tagline"><em>${esc(t.tagline || '')}</em></p>
+    </div>
+  </div>
   <div id="launch" class="launch-actions" data-pwa="${rel(t.pwa)}" data-download="${rel(t.download)}" data-title="${esc(t.title)}">
     <a class="launch-btn primary" href="${rel(t.pwa)}">Open / install the app</a>
-    <a class="launch-btn" href="${rel(t.download)}" download="${esc((t.download || '').split('/').pop())}">Download single .html</a>
+    <a class="launch-btn" href="${rel(t.download)}" download="${esc(dlName)}">Download single .html</a>
   </div>
+  <p class="launch-howto">Not sure how to install it?
+    <a href="#" data-install data-app="${esc(name)}" data-pwa="${rel(t.pwa)}" data-dl="${rel(t.download)}">Step-by-step guide for your device</a>.</p>
   <div class="launch-overview"><p>${esc(t.overview || '')}</p>
     <ul class="launch-features">\n${feats}\n</ul>
   </div>
@@ -178,6 +252,7 @@ async function main() {
 
   const apps = await loadApps();
   const types = await loadTypes();
+  VERSION = await loadVersion();
 
   // Posts (filename: YYYY-MM-DD-slug.md → /posts/slug/).
   const postFiles = (await readdir(join(DOCS, '_posts'))).filter(f => f.endsWith('.md')).sort().reverse();
@@ -201,13 +276,14 @@ async function main() {
     pages.push({ ...meta, url, body, isHome, file: f });
   }
 
-  // Synthetic page: the Writer guide is authored ONCE in src/writer/guide-content.js
+  // Synthetic page: the uPub guide is authored ONCE in src/upub/guide-content.js
   // (the app renders the same Markdown in its Guide sheet) and published here.
-  pages.push({ title: 'Writer Guide', url: '/writer/guide/', body: GUIDE_MD, isHome: false, file: '(generated)' });
+  pages.push({ title: `${appName('upub')} guide`, url: '/upub/guide/', body: GUIDE_MD, isHome: false, file: '(generated)' });
+  pages.push({ title: `${appName('udraft')} guide`, url: '/udraft/guide/', body: UDRAFT_GUIDE_MD, isHome: false, file: '(generated)' });
 
   // Render pages.
   for (const p of pages) {
-    if (p.isHome) { await write('index.html', layoutHome()); continue; }
+    if (p.isHome) { await write('index.html', layoutHome(types)); continue; }
     let body = p.body;
     if (/\{%\s*for\s+post/.test(body)) body = body.replace(/\{%\s*for[\s\S]*?\{%\s*endfor\s*%\}/, renderPostList(posts));
     if (/\{%\s*for\s+app/.test(body))  body = body.replace(/<ul class="app-list">[\s\S]*?<\/ul>/, renderAppList(apps));
@@ -226,7 +302,8 @@ async function main() {
     await write(p.url.replace(/^\//, '') + 'index.html', layoutPage(p, html));
   }
 
-  // search.json (pages + posts + apps) — mirrors docs/search.json output.
+  // search.json — still published: the in-app site-nav strip (src/ui/site-nav.js)
+  // fetches it from the hosted origin to offer quick links.
   const idx = [];
   for (const p of pages) { if (p.nav_exclude === 'true' || p.nav_exclude === true) continue; idx.push({ title: p.title, url: p.url, excerpt: '', date: null, type: 'page', pinned: p.pinned === 'true' || p.pinned === true }); }
   for (const p of posts) idx.push({ title: p.title, url: p.url, excerpt: '', date: p.dateISO, type: 'post', pinned: false });
@@ -235,7 +312,7 @@ async function main() {
 
   // Static passthrough: assets + downloads + PWAs + CNAME.
   await cp(join(DOCS, 'assets'), join(OUT, 'assets'), { recursive: true });
-  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-wr']) {
+  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-upub', 'pwa-dft']) {
     if (await exists(join(DOCS, d))) await cp(join(DOCS, d), join(OUT, d), { recursive: true });
   }
   if (await exists(join(DOCS, 'CNAME'))) await cp(join(DOCS, 'CNAME'), join(OUT, 'CNAME'));

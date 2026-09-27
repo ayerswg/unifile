@@ -1,4 +1,5 @@
-# Unifile types — one entry per "product". Each drives a front-door hub page
+# unifile types — one entry per app (titles are the `{name}` brand spellings,
+# see src/core/brand.js). Each drives a front-door hub page
 # (_includes/launcher.html + assets/js/launch.js) that detects the device and
 # routes the visitor to the right artifact, plus an overview of the type.
 #
@@ -6,7 +7,7 @@
 #   download → standalone single-file .html
 
 - id: markdown
-  title: Unifile Markdown
+  title: "{document}"
   tagline: Markdown notes with built-in version history — fully offline.
   overview: >
     A dedicated Markdown editor in a single file that works with no server and
@@ -19,7 +20,7 @@
   download: /dl/unifile.md.html
 
 - id: mermaid
-  title: Unifile Mermaid
+  title: "{diagram}"
   tagline: Diagrams as text — versioned, live, and offline.
   overview: >
     A dedicated Mermaid diagram editor with a live preview, in a single file
@@ -31,8 +32,8 @@
   pwa: /pwa-mer/
   download: /dl/unifile.mer.html
 
-- id: writer
-  title: Unifile Writer
+- id: upub
+  title: "{write}"
   tagline: A quiet Markdown writing app that exports real e-books — fully offline.
   overview: >
     A distraction-free writing app built for phones. Plain Markdown
@@ -42,11 +43,26 @@
     - Works 100% offline — no server, no account, no sync
     - EPUB 3 export — every "#" heading becomes a chapter
     - Built-in git-style commits, history and restore
-  pwa: /pwa-wr/
-  download: /dl/unifile.wr.html
+  pwa: /pwa-upub/
+  download: /dl/unifile.upub.html
+
+- id: udraft
+  title: "{draft}"
+  tagline: Architectural blueprints from plain text — fully offline.
+  overview: >
+    A drafting app for floor plans. Describe rooms, doors, and windows in a
+    readable text language and {draft} draws the blueprint — wall poché, door
+    swings, dimension strings — with git-style version history inside the
+    document and PDF export at true drawing scale.
+  features:
+    - Works 100% offline — no server, no account, no sync
+    - Rooms in, blueprint out — walls, swings & dimensions drawn for you
+    - PDF export at true scale (1/4" = 1'-0") + SVG/PNG
+  pwa: /pwa-dft/
+  download: /dl/unifile.dft.html
 
 - id: abc
-  title: ABC Notation
+  title: "{compose}"
   tagline: Write music, hear it, route it — offline.
   overview: >
     A dedicated ABC notation editor with a bundled offline acoustic piano, a

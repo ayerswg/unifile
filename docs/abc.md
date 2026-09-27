@@ -1,6 +1,6 @@
 ---
 layout: page
-title: ABC Notation
+title: "{compose}"
 type: abc
 permalink: /abc/
 nav_exclude: true
