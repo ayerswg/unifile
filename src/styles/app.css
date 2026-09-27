@@ -172,17 +172,40 @@
 [data-theme="light"] .cm-editor.cm-focused .cm-selectionBackground { background: rgba(30,102,245,.26) !important; }
 [data-theme="light"] .cm-cursor         { border-left-color: #1e66f5 !important; }
 [data-theme="light"] .cm-tooltip        { background: #dce0e8 !important; border-color: #ccd0da !important; color: #4c4f69 !important; }
-[data-theme="light"] .cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments { background: rgba(223,142,29,.18) !important; color: #df8e1d !important; }
+[data-theme="light"] #uf-editor-wrap { --uf-comment-mark: #df8e1d; }
 
 /* Editor gutter = a SINGLE thin rail (no line numbers), on desktop AND mobile.
-   The current line shows as a full-width accent segment and a commented line
-   yellow. Click/tap the rail for line options (comment; mute/solo on ABC voice
-   lines). The rail is wide enough to hold a single mute/solo mark character. */
+   It is TRANSPARENT — same background as the text, no border, no tinted
+   column (the old faded strip + solid blocks are gone).  It carries marks only:
+     • current line   → a 2px accent bar at the rail's left edge
+     • commented line → a small yellow dot (accent-ringed while its accordion
+                        is folded out)
+     • ABC voice line → the M / S mute-solo letter
+   Tap the rail → the comment accordion folds out under that line (tap again
+   to fold it back); no floating menu. */
+#uf-editor-wrap { --uf-comment-mark: #f9e2af; }
 .cm-comment-ln .cm-ln-text { display: none; }
 #uf-editor-wrap .cm-comment-ln { min-width: 0; padding: 0; }
-#uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; margin: 0; min-width: 14px; }
-#uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
-#uf-editor-wrap .cm-comment-ln .cm-has-comments { background: #f9e2af !important; }
+#uf-editor-wrap .cm-comment-ln .cm-gutterElement {
+  position: relative; padding: 0; margin: 0; min-width: 18px; cursor: pointer;
+}
+#uf-editor-wrap .cm-gutters,
+#uf-editor-wrap .cm-comment-ln .cm-activeLineGutter,
+#uf-editor-wrap .cm-comment-ln .cm-has-comments { background: transparent !important; }
+#uf-editor-wrap .cm-comment-ln .cm-activeLineGutter::before {
+  content: ''; position: absolute; left: 0; top: 2px; bottom: 2px; width: 2px;
+  border-radius: 2px; background: var(--accent);
+}
+#uf-editor-wrap .cm-comment-ln .cm-has-comments::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
+  margin: -3.5px 0 0 -3.5px; border-radius: 999px; background: var(--uf-comment-mark);
+}
+/* A commented voice line carries both: dot up top, the M/S letter under it. */
+#uf-editor-wrap .cm-comment-ln .cm-has-comments:has(.cm-ln-mark)::after { top: 4px; margin-top: 0; width: 6px; height: 6px; margin-left: -3px; }
+#uf-editor-wrap .cm-comment-ln .cm-has-comments .cm-ln-mark { padding-top: 9px; line-height: 1.1; }
+#uf-editor-wrap .cm-comment-ln .cm-accordion-active::after {
+  background: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
 
 /* Mute (M) / Solo (S) mark shown in the rail for an ABC voice line. */
 .cm-comment-ln .cm-ln-mark {
@@ -194,9 +217,9 @@
 }
 .cm-comment-ln .cm-ln-mark.mark-M { color: var(--error); }
 .cm-comment-ln .cm-ln-mark.mark-S { color: var(--success); }
-/* Drop the border + container padding so the rail cell fills the gutter fully
-   (no dark sliver between the rail and the code). */
-#uf-editor-wrap .cm-gutters { border-right: none; padding: 0; }
+/* No border or container padding on the rail (the theme overrides above set
+   them with !important, hence the repeat). */
+#uf-editor-wrap .cm-gutters { border-right: none !important; padding: 0; }
 /* Buffer lives INSIDE the line (not the content) so the active-line highlight
    covers it — no un-highlighted strip. Start flush at the top. */
 #uf-editor-wrap .cm-content { padding-top: 0; padding-left: 0; }
@@ -1349,7 +1372,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
      shown, the pane switcher once the title bar collapses. `background` colours
      that inset strip like the header. box-sizing:border-box keeps the fixed
      `--app-height` intact (content just shrinks by the inset). */
-  #unifile-app { padding-top: env(safe-area-inset-top, 0px); background: var(--bg-alt); }
+  #unifile-app { padding-top: env(safe-area-inset-top, 0px); background: var(--bg); }  /* the island strip matches the (blended) top bar */
 
   #uf-site-nav { order: -3; }
   /* The whole top bar is gone on mobile — its title, hamburger menu and dirty
@@ -1626,12 +1649,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     background: #eff1f5;
     color: #4c4f69;
   }
-  #uf-editor-wrap .cm-gutters {
-    background: #e6e9ef;
-    color: #9ca0b0;
-    border-right-color: #ccd0da;
-  }
-  #uf-editor-wrap .cm-activeLineGutter { background: #dce0e8; color: #1e66f5; }
+  #uf-editor-wrap { --uf-comment-mark: #df8e1d; }
+  #uf-editor-wrap .cm-gutters { color: #9ca0b0; }
   #uf-editor-wrap .cm-cursor { border-left-color: #1e66f5; }
   #uf-editor-wrap .cm-selectionBackground              { background: rgba(30,102,245,.18); }
   #uf-editor-wrap.cm-focused .cm-selectionBackground  { background: rgba(30,102,245,.26); }
@@ -3502,6 +3521,18 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   transition: border-color .15s, color .15s; white-space: nowrap;
 }
 .ct-archive-btn:hover { border-color: var(--warning, #df8e1d); color: var(--warning, #df8e1d); }
+
+/* ABC voice line: Mute / Solo for that voice, at the top of the fold-out. */
+.ct-voice-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); padding: 7px 12px 0; }
+.ct-voice-label { margin-right: 2px; }
+.ct-voice-btn {
+  background: none; border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text-sub); font-size: 11px; padding: 2px 9px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ct-voice-btn.on { border-color: var(--accent); color: var(--accent); }
+.ct-voice-btn[data-v="mute"].on { border-color: var(--error); color: var(--error); }
+.ct-voice-btn[data-v="solo"].on { border-color: var(--success); color: var(--success); }
 
 /* New thread form */
 .ct-acc-body   { resize: none; font-size: 12px !important; width: 100%; overflow: hidden; }
