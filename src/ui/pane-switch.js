@@ -8,16 +8,22 @@
  *                    filled (accent) while that pane is showing; tap again →
  *                    back to the editor.  Carries the dirty dot.
  *   • CENTRE       — the app mark in braces + the document title + a caret.
- *                    Tap → ONE dropdown with every menu option (branches,
- *                    document, file, export, more).  While the history pane
- *                    is up the label is the branch name instead.
+ *                    ALWAYS the title (never the branch name — that lives on
+ *                    the action bubble in the history view).  Tap → the ONE
+ *                    dropdown with the file-level options: Document, File,
+ *                    Export, More (settings).  Same menu in every view.
  *   • RIGHT circle — the eye.  Tap → the rendered DSL; filled while showing;
  *                    tap again → back to the editor.
  *
- * The bar hides while typing (app.js sets `data-editing` on the shell) so the
- * keyboard-shortened viewport goes to the text.  Editing verbs (play, undo,
- * align…) live on the floating action button (action-fab.js); this menu is
- * the list of menu options, built from the same registry (actions.js).
+ * The bar blends into the page (same background as the panes, iA-style) and
+ * hides while typing (app.js sets `data-editing` on the shell).  Editing verbs
+ * (play, undo, align…) and branches live on the floating action button
+ * (action-fab.js); this menu is file level only (actions.js listMenuActions).
+ *
+ * The DOM is built ONCE per mode and PATCHED on state changes — rebuilding the
+ * buttons under a finger mid-tap (state changes land between touchstart and
+ * click on iOS) is how taps end up on whatever sits underneath.  The bar is
+ * also user-select:none so a held tap can't start an iOS text selection.
  *
  * Desktop keeps the classic top bar; this component is display:none there.
  * In diff mode the centre becomes the L ↔ R commit picker.
@@ -26,30 +32,28 @@
 import { state } from './state.js';
 import { shortHash } from '../core/hash.js';
 import { appMark } from '../core/brand.js';
-import {
-  listActions, GROUP_LABELS, switchBranch, esc,
-} from './actions.js';
+import { listMenuActions, GROUP_LABELS, MENU_GROUPS, esc } from './actions.js';
 
 const PANES = ['commit', 'editor', 'render'];
 const WORKING = 'WORKING';
-const MENU_GROUPS = ['branch', 'document', 'file', 'export', 'more'];
 
 export class PaneSwitch {
-  /** @param {HTMLElement} el  @param {object} ctx  { handlers, editor, openTopMenu } */
+  /** @param {HTMLElement} el  @param {object} ctx  { handlers, editor } */
   constructor(el, ctx = {}) {
     this.el = el;
     this.ctx = ctx;
     this._active = 'editor';
-    this._openMenu = null;         // 'main' | 'left' | 'right' | null
+    this._menuOpen = false;
+    this._mode = null;             // 'normal' | 'diff' — which skeleton is built
 
     for (const ev of ['change', 'content-change', 'branch-switch', 'checkout', 'active-section-change']) {
       state.on(ev, () => this.render());
     }
-    state.on('diff-change', () => { this._openMenu = null; this.render(); });
+    state.on('diff-change', () => { this._menuOpen = false; this.render(); });
 
-    // Outside tap closes any open menu.
+    // Outside tap closes the menu.
     document.addEventListener('click', (e) => {
-      if (this._openMenu && !this.el.contains(e.target)) this._closeMenu();
+      if (this._menuOpen && !this.el.contains(e.target)) this._setMenu(false);
     });
 
     this.render();
@@ -60,120 +64,140 @@ export class PaneSwitch {
     if (!PANES.includes(pane)) pane = 'editor';
     if (pane === this._active) return;
     this._active = pane;
-    this._openMenu = null;
+    this._menuOpen = false;
     this.render();
   }
 
-  /** Open the centre dropdown (the action button's "Switch branch…" lands here). */
-  openMenu() {
-    if (state.diff) return;
-    this._openMenu = 'main';
+  /** Open the centre dropdown programmatically. */
+  openMenu() { this._setMenu(true); }
+
+  _setMenu(open) {
+    if (this._menuOpen === open) return;
+    this._menuOpen = open;
     this.render();
-    this.el.querySelector('.ps-menu')?.scrollTo?.(0, 0);
+    if (open) this.el.querySelector('.ps-menu')?.scrollTo?.(0, 0);
   }
 
-  _closeMenu() { if (this._openMenu) { this._openMenu = null; this.render(); } }
-
   // ---------------------------------------------------------------------------
-  // Render
+  // Skeleton (built once per mode) + patch
   // ---------------------------------------------------------------------------
 
-  render() {
-    if (state.diff) { this._renderDiff(); return; }
-
-    const dirty = state.isDirty;
-    const detached = state.isDetached;
-    const branch = detached ? '⚠ detached' : state.currentBranch;
-    const dslType = state.data?.dslType ?? 'markdown';
-    const commitActive = this._active === 'commit';
-    const renderActive = this._active === 'render';
-    const label = commitActive ? branch : state.title;
-    const menuOpen = this._openMenu === 'main';
-
+  _build(mode) {
+    this._mode = mode;
     this.el.innerHTML = `
-      <button type="button" class="ps-circle ps-branch${commitActive ? ' active' : ''}" data-pane="commit"
-        aria-label="${commitActive ? 'Back to the editor' : 'History and branches'}" aria-pressed="${commitActive}">
+      <button type="button" class="ps-circle ps-branch" data-pane="commit">
         ${_iconBranch()}
-        ${dirty || detached ? `<span class="ps-dirty-dot${detached ? ' detached' : ''}" aria-hidden="true"></span>` : ''}
+        <span class="ps-dirty-dot" aria-hidden="true" hidden></span>
       </button>
-      <button type="button" class="ps-title-btn${menuOpen ? ' open' : ''}" aria-haspopup="menu" aria-expanded="${menuOpen}">
-        <span class="ps-mark" aria-hidden="true">${esc(appMark(dslType))}</span>
-        <span class="ps-title">${esc(label)}</span>
+      <button type="button" class="ps-title-btn" aria-haspopup="menu" aria-expanded="false">
+        <span class="ps-mark" aria-hidden="true"></span>
+        <span class="ps-title"></span>
         <span class="ps-caret" aria-hidden="true">${_iconCaret()}</span>
       </button>
-      <button type="button" class="ps-circle ps-eye${renderActive ? ' active' : ''}" data-pane="render"
-        aria-label="${renderActive ? 'Back to the editor' : 'Show the rendered document'}" aria-pressed="${renderActive}">
-        ${_iconEye()}
-      </button>
-      <div class="ps-menu${menuOpen ? ' open' : ''}" role="menu">
-        ${menuOpen ? this._renderMainMenu() : ''}
-      </div>`;
+      <button type="button" class="ps-circle ps-eye" data-pane="render">${_iconEye()}</button>
+      <div class="ps-menu" role="menu"></div>`;
 
-    this._bind();
+    this._n = {
+      branch: this.el.querySelector('.ps-branch'),
+      dot:    this.el.querySelector('.ps-dirty-dot'),
+      titleBtn: this.el.querySelector('.ps-title-btn'),
+      mark:   this.el.querySelector('.ps-mark'),
+      title:  this.el.querySelector('.ps-title'),
+      eye:    this.el.querySelector('.ps-eye'),
+      menu:   this.el.querySelector('.ps-menu'),
+    };
+
+    this.el.querySelectorAll('.ps-circle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const pane = btn.dataset.pane;
+        this._menuOpen = false;
+        // Tapping the active circle goes back to the editor.
+        state.emit('mobile-goto-pane', pane === this._active ? 'editor' : pane);
+      });
+    });
+    this._n.titleBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._setMenu(!this._menuOpen);
+    });
+    // One delegated listener for the menu — its rows are re-rendered per open.
+    this._n.menu.addEventListener('click', (e) => {
+      const item = e.target.closest('.ps-menu-item');
+      if (!item) return;
+      e.stopPropagation();
+      if (item.classList.contains('disabled')) return;
+      this._onMenuAction(item.dataset);
+    });
   }
 
+  render() {
+    const mode = state.diff ? 'diff' : 'normal';
+    if (mode !== this._mode) this._build(mode);
+    const n = this._n;
+
+    const commitActive = this._active === 'commit';
+    const renderActive = this._active === 'render';
+    n.branch.classList.toggle('active', commitActive);
+    n.branch.setAttribute('aria-pressed', String(commitActive));
+    n.branch.setAttribute('aria-label', commitActive ? 'Back to the editor' : 'History and branches');
+    n.eye.classList.toggle('active', renderActive);
+    n.eye.setAttribute('aria-pressed', String(renderActive));
+    n.eye.setAttribute('aria-label', renderActive ? 'Back to the editor' : 'Show the rendered document');
+
+    const dirty = state.isDirty, detached = state.isDetached;
+    n.dot.hidden = !(dirty || detached);
+    n.dot.classList.toggle('detached', detached);
+
+    if (mode === 'diff') {
+      const d = state.diff;
+      const L = d.left === WORKING ? 'Current' : shortHash(d.left);
+      const R = d.right === WORKING ? 'Current' : shortHash(d.right);
+      n.mark.textContent = '';
+      n.mark.hidden = true;
+      n.title.className = 'ps-title ps-diff-title';
+      n.title.innerHTML = `<span class="ps-diff-role">L</span> ${esc(L)} <span class="ps-diff-arrow">↔</span> <span class="ps-diff-role">R</span> ${esc(R)}`;
+    } else {
+      n.mark.hidden = false;
+      n.mark.textContent = appMark(state.data?.dslType ?? 'markdown');
+      n.title.className = 'ps-title';
+      n.title.textContent = state.title;
+    }
+
+    n.titleBtn.classList.toggle('open', this._menuOpen);
+    n.titleBtn.setAttribute('aria-expanded', String(this._menuOpen));
+    n.menu.classList.toggle('open', this._menuOpen);
+    n.menu.innerHTML = this._menuOpen
+      ? (mode === 'diff' ? this._renderDiffMenu() : this._renderMainMenu())
+      : '';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Menu contents
+  // ---------------------------------------------------------------------------
+
   _renderMainMenu() {
-    const actions = listActions(this.ctx).filter(a => a.menu !== false);
+    const actions = listMenuActions(this.ctx);
     const byGroup = {};
     for (const a of actions) (byGroup[a.group] ||= []).push(a);
-
     const item = (a) => `
       <button class="ps-menu-item${a.disabled ? ' disabled' : ''}" data-act="${esc(a.id)}" role="menuitem">
         <span class="ps-menu-ic">${esc(a.glyph)}</span>
         <span class="ps-menu-name">${esc(a.label)}</span>
       </button>`;
-
     let html = '';
     for (const g of MENU_GROUPS) {
       const rows = byGroup[g] || [];
-      if (!rows.length && g !== 'branch') continue;
-      html += `<div class="ps-menu-label">${esc(GROUP_LABELS[g])}</div>`;
-      if (g === 'branch') html += this._renderBranchRows();
-      html += rows.map(item).join('');
+      if (!rows.length) continue;
+      html += `<div class="ps-menu-label">${esc(GROUP_LABELS[g])}</div>` + rows.map(item).join('');
     }
     return html;
   }
 
-  _renderBranchRows() {
-    const vcs = state.vcs;
-    const branches = vcs?.listBranches?.() ?? [];
-    const detached = state.isDetached;
-    return branches.map(b => `
-      <button class="ps-menu-item${b.isCurrent && !detached ? ' current' : ''}" data-act="branch" data-branch="${esc(b.name)}" role="menuitem">
-        <span class="ps-menu-ic">${b.isCurrent && !detached ? '●' : '○'}</span>
-        <span class="ps-menu-name">${esc(b.name)}</span>
-        <span class="ps-menu-hash">${b.head ? esc(shortHash(b.head)) : ''}</span>
-      </button>`).join('');
-  }
-
-  // ---------------------------------------------------------------------------
-  // Diff mode — circles unchanged (history pane / right diff pane); the centre
-  // shows `L ↔ R` and its dropdown carries both side pickers.
-  // ---------------------------------------------------------------------------
-
-  _renderDiff() {
-    const diff = state.diff;
-    const leftLabel  = diff.left  === WORKING ? 'Current' : shortHash(diff.left);
-    const rightLabel = diff.right === WORKING ? 'Current' : shortHash(diff.right);
-    const commitActive = this._active === 'commit';
-    const renderActive = this._active === 'render';
-    const menuOpen = this._openMenu === 'main';
-
-    this.el.innerHTML = `
-      <button type="button" class="ps-circle ps-branch${commitActive ? ' active' : ''}" data-pane="commit"
-        aria-label="History" aria-pressed="${commitActive}">${_iconBranch()}</button>
-      <button type="button" class="ps-title-btn ps-diff${menuOpen ? ' open' : ''}" aria-haspopup="menu" aria-expanded="${menuOpen}">
-        <span class="ps-title ps-diff-title"><span class="ps-diff-role">L</span> ${esc(leftLabel)} <span class="ps-diff-arrow">↔</span> <span class="ps-diff-role">R</span> ${esc(rightLabel)}</span>
-        <span class="ps-caret" aria-hidden="true">${_iconCaret()}</span>
-      </button>
-      <button type="button" class="ps-circle ps-eye${renderActive ? ' active' : ''}" data-pane="render"
-        aria-label="Right side" aria-pressed="${renderActive}">${_iconEye()}</button>
-      <div class="ps-menu${menuOpen ? ' open' : ''}" role="menu">
-        ${menuOpen ? `<div class="ps-menu-label">Left side</div>${this._renderSidePicker('left')}
-                      <div class="ps-menu-label">Right side</div>${this._renderSidePicker('right')}` : ''}
-      </div>`;
-
-    this._bind();
+  _renderDiffMenu() {
+    return `<div class="ps-menu-label">Left side</div>${this._renderSidePicker('left')}
+            <div class="ps-menu-label">Right side</div>${this._renderSidePicker('right')}`;
   }
 
   /** A commit picker for one diff side: "Current" (left only) + all commits, all branches. */
@@ -181,14 +205,12 @@ export class PaneSwitch {
     const vcs = state.vcs;
     const cur = side === 'left' ? state.diff.left : state.diff.right;
     const branches = vcs?.listBranches?.() ?? [];
-
     const item = (hash, name) => `
       <button class="ps-menu-item${hash === cur ? ' current' : ''}" data-act="pick" data-side="${side}" data-hash="${esc(hash)}" role="menuitem">
         <span class="ps-menu-ic">${hash === cur ? '●' : '○'}</span>
         <span class="ps-menu-name">${esc(name)}</span>
         <span class="ps-menu-hash">${hash === WORKING ? '' : esc(shortHash(hash))}</span>
       </button>`;
-
     let html = '';
     if (side === 'left') html += item(WORKING, 'Current');
     for (const b of branches) {
@@ -200,44 +222,15 @@ export class PaneSwitch {
     return html || '<div class="ps-menu-empty">No commits.</div>';
   }
 
-  // ---------------------------------------------------------------------------
-  // Events
-  // ---------------------------------------------------------------------------
-
-  _bind() {
-    this.el.querySelectorAll('.ps-circle').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const pane = btn.dataset.pane;
-        this._openMenu = null;
-        // Tapping the active circle goes back to the editor.
-        state.emit('mobile-goto-pane', pane === this._active ? 'editor' : pane);
-      });
-    });
-    this.el.querySelector('.ps-title-btn')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this._openMenu = this._openMenu === 'main' ? null : 'main';
-      this.render();
-    });
-    this.el.querySelectorAll('.ps-menu-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (item.classList.contains('disabled')) return;
-        this._onMenuAction(item.dataset);
-      });
-    });
-  }
-
   _onMenuAction(ds) {
     if (ds.act === 'pick') {
       if (ds.side === 'left') state.openDiff(ds.hash, state.diff.right);
       else state.openDiff(state.diff.left, ds.hash);
-      this._closeMenu();
+      this._setMenu(false);
       return;
     }
-    if (ds.act === 'branch') { switchBranch(ds.branch); this._closeMenu(); return; }
-    const act = listActions(this.ctx).find(a => a.id === ds.act);
-    this._closeMenu();
+    const act = listMenuActions(this.ctx).find(a => a.id === ds.act);
+    this._setMenu(false);
     if (act && !act.disabled) act.run();
   }
 }

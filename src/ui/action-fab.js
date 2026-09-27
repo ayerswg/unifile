@@ -1,14 +1,22 @@
 /**
- * The phone action button — one round `{glyph}` button that does three things:
+ * The phone action button — one round `{glyph}` bubble that does three things:
  *
- *   • TAP        runs the PRIMARY action (play/pause for {compose}, undo elsewhere);
- *   • LONG-PRESS opens a grid of EVERY action, alphabetical, with the primary
- *                ringed — each tile runs its action, its ☆ makes it the primary;
+ *   • TAP        runs the PRIMARY action (play/pause for {compose}, undo elsewhere;
+ *                in the history view it opens the branch picker);
+ *   • LONG-PRESS opens a grid of the view's actions, alphabetical, with the
+ *                primary ringed — each tile runs its action, its ☆ makes it
+ *                the primary;
  *   • DRAG       moves the button; it snaps to whichever of the four corners
  *                is nearest.  While dragging, dashed ghosts mark the corners.
  *
- * Corner + primary choice persist in localStorage (primary per DSL).  Phone
- * only (CSS hides it on desktop, where the transport bar / top bar remain).
+ * The bubble is CONTEXTUAL to the pane that is showing (actions.js
+ * listBubbleActions): editor = text/music verbs, render = play (ABC only —
+ * otherwise the bubble hides), history = the branches.  In the history view
+ * the bubble elongates into a pill reading `{⑂} <branch>`.  File-level
+ * operations and settings are NOT here — they're under the title dropdown.
+ *
+ * Corner + primary choice persist in localStorage (primary per DSL + view).
+ * Phone only (CSS hides it on desktop, where the transport bar / top bar remain).
  *
  * Focus: pointerdown is preventDefault()ed so a tap never steals focus from the
  * editor — Undo/Redo/Play keep the caret and the soft keyboard where they were.
@@ -16,7 +24,7 @@
  */
 
 import { state } from './state.js';
-import { listActions, defaultPrimary, currentDslId, esc } from './actions.js';
+import { listBubbleActions, defaultPrimary, currentDslId, esc } from './actions.js';
 
 const CORNERS = ['tl', 'tr', 'bl', 'br'];
 const CORNER_LABEL = { tl: 'top left', tr: 'top right', bl: 'bottom left', br: 'bottom right' };
@@ -71,8 +79,10 @@ export class ActionFab {
     this._placeTop();
     window.addEventListener('resize', () => this._placeTop());
     window.visualViewport?.addEventListener('resize', () => this._placeTop());
-    new MutationObserver(() => this._placeTop())
-      .observe(root, { attributes: true, attributeFilter: ['data-editing', 'data-mobile-pane', 'data-diff'] });
+    new MutationObserver((muts) => {
+      this._placeTop();
+      if (muts.some(m => m.attributeName === 'data-mobile-pane')) this.render();
+    }).observe(root, { attributes: true, attributeFilter: ['data-editing', 'data-mobile-pane', 'data-diff'] });
 
     this.render();
     this._firstRunHint();
@@ -82,63 +92,92 @@ export class ActionFab {
   // Primary action
   // ---------------------------------------------------------------------------
 
+  /** The pane showing now: 'editor' | 'render' | 'commit'. */
+  get view() { return this.root.getAttribute('data-mobile-pane') || 'editor'; }
+
   get primaryId() {
-    const dsl = currentDslId();
-    return _load(`uf_fab_primary:${dsl}`, defaultPrimary(dsl));
+    const dsl = currentDslId(), view = this.view;
+    return _load(`uf_fab_primary:${dsl}:${view}`, defaultPrimary(dsl, view));
   }
 
   setPrimary(id) {
-    _save(`uf_fab_primary:${currentDslId()}`, id);
+    _save(`uf_fab_primary:${currentDslId()}:${this.view}`, id);
     this.render();
   }
 
+  /** null = the tap opens the grid ('menu'). */
   _resolvePrimary(actions) {
     const want = this.primaryId;
-    return actions.find(a => a.id === want && !a.disabled)
-      ?? actions.find(a => a.id === defaultPrimary(currentDslId()))
-      ?? actions[0];
+    if (want === 'menu') return null;
+    return actions.find(a => a.id === want && !a.disabled && a.star !== false)
+      ?? actions.find(a => a.id === defaultPrimary(currentDslId(), this.view))
+      ?? null;
   }
+
+  _actions() { return listBubbleActions(this.ctx, this.view); }
 
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
 
   render() {
-    const actions = listActions(this.ctx);
+    const view = this.view;
+    const actions = this._actions();
     const primary = this._resolvePrimary(actions);
+    const empty = actions.length === 0;
+    this.el.hidden = empty;
+    if (empty && this._open) this.close();
     this.el.dataset.corner = this._corner;
-    this.el.dataset.primary = primary?.id ?? '';
+    this.el.dataset.view = view;
+    this.el.dataset.primary = primary?.id ?? 'menu';
     this.el.classList.toggle('playing', primary?.id === 'play' && !!state.abcPlaying);
-    this.el.innerHTML = `<span class="uf-fab-mark" aria-hidden="true">{${esc(primary?.glyph ?? '')}}</span>`;
-    this.el.setAttribute('aria-label',
-      `${primary?.label ?? 'Actions'} — hold for all actions, drag to move`);
-    this.el.title = `${primary?.label ?? 'Actions'} (hold for all actions · drag to a corner)`;
+    this.el.classList.toggle('wide', view === 'commit');
+    if (view === 'commit') {
+      // The bubble names the branch here; a tap opens the branch picker.
+      const label = state.isDetached ? 'detached' : state.currentBranch;
+      this.el.innerHTML = `<span class="uf-fab-mark" aria-hidden="true">{⑂}</span><span class="uf-fab-text">${esc(label)}</span>`;
+      this.el.setAttribute('aria-label', `Branch ${label} — tap to switch branch, drag to move`);
+      this.el.title = 'Branches (drag to a corner)';
+    } else {
+      const glyph = primary?.glyph ?? '⋯';
+      this.el.innerHTML = `<span class="uf-fab-mark" aria-hidden="true">{${esc(glyph)}}</span>`;
+      const what = primary?.label ?? 'Actions';
+      this.el.setAttribute('aria-label', `${what} — hold for all actions, drag to move`);
+      this.el.title = `${what} (hold for all actions · drag to a corner)`;
+    }
     this.grid.dataset.corner = this._corner;
     if (this._open) this._renderGrid(actions, primary);
   }
 
   _renderGrid(actions, primary) {
     const sorted = [...actions].sort((a, b) => a.key.localeCompare(b.key, undefined, { sensitivity: 'base' }));
+    const isPrimary = (a) => !!primary && a.id === primary.id;
     const tiles = sorted.map(a => `
-      <div class="uf-fab-tile${a.id === primary?.id ? ' primary' : ''}${a.disabled ? ' disabled' : ''}"
+      <div class="uf-fab-tile${isPrimary(a) ? ' primary' : ''}${a.disabled ? ' disabled' : ''}${a.current ? ' current' : ''}${a.star === false ? ' no-star' : ''}"
            role="menuitem" tabindex="0" data-id="${esc(a.id)}" aria-disabled="${a.disabled}">
         <span class="t-mark" aria-hidden="true">{${esc(a.glyph)}}</span>
         <span class="t-label">${esc(a.label)}</span>
-        <button type="button" class="t-star" data-star="${esc(a.id)}"
-          aria-label="${a.id === primary?.id ? 'This is the tap action' : `Make “${esc(a.label)}” the tap action`}"
-          title="${a.id === primary?.id ? 'Tap action' : 'Make this the tap action'}">${a.id === primary?.id ? '★' : '☆'}</button>
+        ${a.star === false ? '' : `<button type="button" class="t-star" data-star="${esc(a.id)}"
+          aria-label="${isPrimary(a) ? 'This is the tap action' : `Make “${esc(a.label)}” the tap action`}"
+          title="${isPrimary(a) ? 'Tap action' : 'Make this the tap action'}">${isPrimary(a) ? '★' : '☆'}</button>`}
       </div>`).join('');
 
     const corners = CORNERS.map(c => `
       <button type="button" class="uf-fab-cbtn${c === this._corner ? ' current' : ''}" data-move="${c}"
         aria-label="Move the button to the ${CORNER_LABEL[c]}" title="${CORNER_LABEL[c]}"></button>`).join('');
 
+    const view = this.view;
+    const tapLine = view === 'commit'
+      ? `<b>Tap</b> the bubble = this branch list. `
+      : primary ? `<b>Tap</b> the bubble = <b>${esc(primary.label)}</b> (★ picks another). `
+                : `<b>Tap</b> the bubble = this menu. `;
+    const heading = view === 'commit' ? '<div class="uf-fab-glabel">Branches</div>' : '';
     this.grid.innerHTML = `
+      ${heading}
       <div class="uf-fab-tiles">${tiles}</div>
       <div class="uf-fab-hint">
         <div class="uf-fab-hint-text">
-          <b>Tap</b> the button = <b>${esc(primary?.label ?? '')}</b> (★ picks another).
-          <b>Hold</b> = this menu. <b>Drag</b> it to any corner, or pick one:
+          ${tapLine}<b>Hold</b> = this menu. <b>Drag</b> it to any corner, or pick one:
         </div>
         <div class="uf-fab-corners" role="group" aria-label="Button corner">${corners}</div>
       </div>`;
@@ -177,15 +216,15 @@ export class ActionFab {
   }
 
   _run(id) {
-    const act = listActions(this.ctx).find(a => a.id === id);
+    const act = this._actions().find(a => a.id === id);
     if (!act || act.disabled) return;
     try { act.run(); } catch (err) { console.warn('action failed', id, err); }
     this.render();
   }
 
   _runPrimary() {
-    const primary = this._resolvePrimary(listActions(this.ctx));
-    if (primary) this._run(primary.id);
+    const primary = this._resolvePrimary(this._actions());
+    if (primary) this._run(primary.id); else this.open();
   }
 
   // ---------------------------------------------------------------------------

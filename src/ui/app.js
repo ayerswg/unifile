@@ -260,11 +260,7 @@ export class App {
     // Mobile pane switcher — the whole top chrome on phones (segments = tabs +
     // context + dropdown menus). Owns branch switching, the DSL/tools menu and
     // exports; replaces the mobile top bar, hamburger and commit-pane bottom bar.
-    const shellCtx = {
-      handlers,
-      editor: this._components.editor,
-      openTopMenu: () => this._components.paneSwitch?.openMenu(),
-    };
+    const shellCtx = { handlers, editor: this._components.editor };
     this._components.paneSwitch = new PaneSwitch(
       document.getElementById('uf-pane-switch'), shellCtx
     );
