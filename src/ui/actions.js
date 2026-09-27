@@ -1,16 +1,22 @@
 /**
- * The phone shell's action registry — ONE list, two consumers:
+ * The phone shell's actions — two lists, two homes:
  *
- *   • the title dropdown (pane-switch.js) shows it as a grouped menu, with the
- *     live branch list spliced into the "Branch" group;
- *   • the floating action button (action-fab.js) shows it as an alphabetical
- *     grid on long-press, and runs the chosen PRIMARY action on a plain tap.
+ *   • listMenuActions(ctx)         → the title dropdown (pane-switch.js):
+ *     file-level things — Document, File, Export, More (settings).  Never on
+ *     the bubble.
+ *   • listBubbleActions(ctx, view) → the round action button (action-fab.js),
+ *     CONTEXTUAL to the pane that is showing:
+ *       editor → text/music verbs: play · one measure per line · piano roll
+ *                (ABC), undo · redo
+ *       render → play / pause (ABC) — nothing for other DSLs (bubble hides)
+ *       commit → the branches (tap one to switch), New branch…, Commit…
+ *                (the bubble itself reads `{⑂} <branch>` in this view)
  *
  * Every action carries a single UTF-8 TEXT glyph (never an emoji — code points
  * with an emoji presentation get U+FE0E appended so iOS keeps them monochrome)
  * which the button shows in the brand braces: `{▶}`, `{↶}`, `{⚙}` …
  *
- * `ctx` is supplied by app.js: { handlers, editor, openTopMenu() }.
+ * `ctx` is supplied by app.js: { handlers, editor }.
  */
 
 import { state, PANELS } from './state.js';
@@ -32,63 +38,103 @@ export function currentDslId() {
   return state.activeDslId ?? state.data?.dslType ?? 'markdown';
 }
 
-/** The action a fresh install runs on a plain tap of the button, per DSL. */
-export function defaultPrimary(dslId) {
-  return dslId === 'abcjs' ? 'play' : 'undo';
+/**
+ * The action a fresh install runs on a plain tap of the bubble, per DSL and
+ * view.  'menu' = the tap opens the bubble's own grid (the commit view: pick a
+ * branch).
+ */
+export function defaultPrimary(dslId, view = 'editor') {
+  if (view === 'commit') return 'menu';
+  if (dslId === 'abcjs') return 'play';
+  return view === 'editor' ? 'undo' : 'menu';
 }
 
 /** Glyphs for the DSL exporters, by exporter key. */
 const EXPORT_GLYPHS = { svg: '⬡', pdf: '▤', midi: '♬', png: '▣', epub: '▥', docx: '▤', pptx: '▧' };
 
+const mk = (a) => ({ key: a.label, disabled: false, star: true, ...a });
+
+// ---------------------------------------------------------------------------
+// Bubble (contextual)
+// ---------------------------------------------------------------------------
+
 /**
- * @param {object} ctx  { handlers, editor, openTopMenu }
- * @returns {Array<{id,label,key,glyph,group,run,disabled,menu}>}
- *   key   — stable sort key (labels like Play/Pause change; the tile shouldn't move)
- *   group — 'edit' | 'branch' | 'document' | 'file' | 'export' | 'more'
- *   menu  — false = grid-only (the dropdown lists menu options, not editing verbs)
+ * @param {object} ctx   { handlers, editor }
+ * @param {string} view  'editor' | 'render' | 'commit'
+ * @returns {Array<{id,label,key,glyph,run,disabled,star}>}
+ *   key  — stable sort key (labels like Play/Pause change; the tile shouldn't move)
+ *   star — false = can't be made the tap action (branch rows)
  */
-export function listActions(ctx = {}) {
+export function listBubbleActions(ctx = {}, view = 'editor') {
   const dslId = currentDslId();
   const isAbc = dslId === 'abcjs';
   const editor = ctx.editor;
   const acts = [];
-  const add = (a) => acts.push({ key: a.label, menu: true, disabled: false, ...a });
 
-  // ── Editing verbs (grid only) ─────────────────────────────────────────
-  if (isAbc) {
+  const play = () => {
     const playing = !!state.abcPlaying;
-    add({ id: 'play', label: playing ? 'Pause' : 'Play', key: 'Play / pause',
-          glyph: playing ? '⏸' + TEXT : '▶' + TEXT, group: 'edit', menu: false,
-          run: () => state.emit('abc-play') });
-    add({ id: 'align', label: 'One measure per line', glyph: '⫴', group: 'edit', menu: false,
-          run: () => { editor?.alignActiveDsl(); } });
+    acts.push(mk({ id: 'play', label: playing ? 'Pause' : 'Play', key: 'Play / pause',
+      glyph: playing ? '⏸' + TEXT : '▶' + TEXT, run: () => state.emit('abc-play') }));
+  };
+
+  if (view === 'render') {
+    if (isAbc) play();
+    return acts;
+  }
+
+  if (view === 'commit') {
+    const vcs = state.vcs;
+    const detached = state.isDetached;
+    for (const b of vcs?.listBranches?.() ?? []) {
+      const cur = b.isCurrent && !detached;
+      acts.push(mk({ id: `branch:${b.name}`, label: b.name, key: `0 ${b.name}`, glyph: cur ? '●' : '○',
+        star: false, current: cur, run: () => switchBranch(b.name) }));
+    }
+    acts.push(mk({ id: 'branch-new', label: 'New branch…', key: '1 new', glyph: '⑂', star: false, run: () => newBranch() }));
+    acts.push(mk({ id: 'commit', label: 'Commit…', key: '2 commit', glyph: '◉', star: false,
+      disabled: !state.isDirty, run: () => composeCommit() }));
+    return acts;
+  }
+
+  // editor
+  if (isAbc) {
+    play();
+    acts.push(mk({ id: 'align', label: 'One measure per line', glyph: '⫴',
+      run: () => { editor?.alignActiveDsl(); } }));
     if (_landscapeMql.matches) {
-      add({ id: 'roll', label: state.pianoRollOpen ? 'Close piano roll' : 'Piano roll', key: 'Piano roll',
-            glyph: '▦', group: 'edit', menu: false,
-            run: () => state.togglePianoRoll() });
+      acts.push(mk({ id: 'roll', label: state.pianoRollOpen ? 'Close piano roll' : 'Piano roll', key: 'Piano roll',
+        glyph: '▦', run: () => state.togglePianoRoll() }));
     }
   }
-  add({ id: 'undo', label: 'Undo', glyph: '↶', group: 'edit', menu: false, run: () => { editor?.undo(); } });
-  add({ id: 'redo', label: 'Redo', glyph: '↷', group: 'edit', menu: false, run: () => { editor?.redo(); } });
-  add({ id: 'commit', label: 'Commit…', glyph: '◉', group: 'edit', menu: false,
-        run: () => state.emit('mobile-goto-pane', 'commit') });
+  acts.push(mk({ id: 'undo', label: 'Undo', glyph: '↶', run: () => { editor?.undo(); } }));
+  acts.push(mk({ id: 'redo', label: 'Redo', glyph: '↷', run: () => { editor?.redo(); } }));
+  return acts;
+}
 
-  // ── Branch ────────────────────────────────────────────────────────────
-  add({ id: 'branch-switch', label: 'Switch branch…', glyph: '⇄', group: 'branch', menu: false,
-        run: () => ctx.openTopMenu?.('branch') });
-  add({ id: 'branch-new', label: 'New branch…', glyph: '⑂', group: 'branch', run: () => newBranch() });
+// ---------------------------------------------------------------------------
+// Title dropdown (file level)
+// ---------------------------------------------------------------------------
 
-  // ── Document ──────────────────────────────────────────────────────────
+export const GROUP_LABELS = { document: 'Document', file: 'File', export: 'Export', more: 'More' };
+export const MENU_GROUPS = ['document', 'file', 'export', 'more'];
+
+/**
+ * @param {object} ctx  { handlers, editor }
+ * @returns {Array<{id,label,glyph,group,run,disabled}>}
+ */
+export function listMenuActions(ctx = {}) {
+  const dslId = currentDslId();
+  const acts = [];
+  const add = (a) => acts.push(mk(a));
+
   const hasCommits = (state.vcs?.log?.().length ?? 0) > 0;
   add({ id: 'new-doc', label: 'New document…', glyph: '+', group: 'document',
         run: () => showNewDocumentModal(ctx.handlers) });
   add({ id: 'rename', label: 'Rename document…', glyph: '✎', group: 'document', run: () => renameDoc() });
-  add({ id: 'help', label: 'Help…', key: 'Help', glyph: '?', group: 'document',
-        run: () => showDslHelpModal(dslId) });
+  add({ id: 'help', label: 'Help…', glyph: '?', group: 'document', run: () => showDslHelpModal(dslId) });
   add({ id: 'blame', label: 'Blame view', glyph: '⌕', group: 'document', disabled: !hasCommits,
         run: () => state.activePanel === PANELS.BLAME ? state.closePanel() : state.openPanel(PANELS.BLAME) });
 
-  // ── File ──────────────────────────────────────────────────────────────
   add({ id: 'save-data', label: 'Save data file…', glyph: '↧', group: 'file',
         run: () => state.emit('save-data-file') });
   add({ id: 'open-data', label: 'Open data file…', glyph: '↥', group: 'file',
@@ -99,7 +145,6 @@ export function listActions(ctx = {}) {
     add({ id: 'extensions', label: 'Extensions…', glyph: '⧉', group: 'file', run: () => showExtensionsModal() });
   }
 
-  // ── Export ────────────────────────────────────────────────────────────
   let exporters = {};
   try { exporters = getDSL(dslId)?.exporters ?? {}; } catch {}
   for (const [key, exp] of Object.entries(exporters)) {
@@ -109,7 +154,6 @@ export function listActions(ctx = {}) {
   add({ id: 'export-app', label: 'Export as app (.html)…', glyph: '⊡', group: 'export',
         run: () => exportApp(ctx.handlers) });
 
-  // ── More ──────────────────────────────────────────────────────────────
   add({ id: 'archived', label: 'Archived comments…', glyph: '❝', group: 'more',
         run: () => showArchivedCommentsModal() });
   add({ id: 'settings', label: 'Settings', glyph: '⚙' + TEXT, group: 'more',
@@ -118,12 +162,8 @@ export function listActions(ctx = {}) {
   return acts;
 }
 
-export const GROUP_LABELS = {
-  edit: 'Edit', branch: 'Branch', document: 'Document', file: 'File', export: 'Export', more: 'More',
-};
-
 // ---------------------------------------------------------------------------
-// Shared behaviours (moved off the old pane-switch so the grid can run them too)
+// Shared behaviours
 // ---------------------------------------------------------------------------
 
 export function renameDoc() {
@@ -152,6 +192,15 @@ export function newBranch() {
   catch (err) { window.alert(err?.message || 'Could not create branch.'); return; }
   state.update({ data: { ...state.data, ...state.vcs.serialize() } });
   switchBranch(name);
+}
+
+/** Commit from the phone: the composer is the pending node at the top of the log. */
+export function composeCommit() {
+  state.emit('mobile-goto-pane', 'commit');
+  const log = document.getElementById('uf-commit-log');
+  log?.scrollTo?.({ top: 0, behavior: 'smooth' });
+  const msg = log?.querySelector('#clp-msg');
+  if (msg) setTimeout(() => msg.focus(), 50);
 }
 
 export async function exportFormat(dslId, key) {
