@@ -3463,6 +3463,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   font-family: var(--font-mono, monospace);
   color: var(--text);
 }
+.settings-channel { color: var(--accent); }
 
 /* Theme toggle button group (Dark / Auto / Light) */
 .theme-toggle-group {

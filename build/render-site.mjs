@@ -102,10 +102,11 @@ async function loadTypes() {
 
 // ── version (footer stamp) ──────────────────────────────────────────────────
 async function loadVersion() {
-  try { return JSON.parse(await readFile(join(DOCS, 'version.json'), 'utf8')).version || ''; }
-  catch { return ''; }
+  try { return JSON.parse(await readFile(join(DOCS, 'version.json'), 'utf8')); }
+  catch { return {}; }
 }
 let VERSION = '';
+let BUILD_STAMP = '';   // dev channel: the commit (the identity there) beside the version
 
 // ── shared page chrome ──────────────────────────────────────────────────────
 function pageHead(title) {
@@ -126,7 +127,7 @@ function pageFoot() {
 
 /** Footer on every page: a rule, the version, the guides. */
 function footer() {
-  const v = VERSION ? `unifile v${esc(VERSION)} <span class="sep">·</span> ` : '';
+  const v = VERSION ? `unifile v${esc(VERSION)}${BUILD_STAMP ? ` ${esc(BUILD_STAMP)}` : ''} <span class="sep">·</span> ` : '';
   return `<footer class="foot"><hr>
   <p>${v}<a href="${rel('/upub/guide/')}">${esc(appName('upub'))} guide</a> <span class="sep">·</span> <a href="${rel('/udraft/guide/')}">${esc(appName('udraft'))} guide</a></p>
 </footer>`;
@@ -252,7 +253,9 @@ async function main() {
 
   const apps = await loadApps();
   const types = await loadTypes();
-  VERSION = await loadVersion();
+  const vinfo = await loadVersion();
+  VERSION = vinfo.version || '';
+  BUILD_STAMP = vinfo.channel === 'dev' && vinfo.commit ? `(dev ${vinfo.commit})` : '';
 
   // Posts (filename: YYYY-MM-DD-slug.md → /posts/slug/).
   const postFiles = (await readdir(join(DOCS, '_posts'))).filter(f => f.endsWith('.md')).sort().reverse();

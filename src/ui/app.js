@@ -35,7 +35,7 @@ import { Preview } from './preview.js';
 import { DslFooter } from './dsl-footer.js';
 import { PianoRoll } from './piano-roll.js';
 import { mountSiteNav } from './site-nav.js';
-import { checkForUpdate } from './update-check.js';
+import { checkForUpdate, initServiceWorker } from './update-check.js';
 import { PaneSwitch } from './pane-switch.js';
 import { ActionFab } from './action-fab.js';
 import { DiffView, DiffBar, DiffPanes } from './diff-view.js';
@@ -162,12 +162,18 @@ export class App {
     // 12. PWA: register service worker + request durable storage so the OS is
     //     less likely to evict IndexedDB (best-effort; the real backstop is a
     //     user-exported .unifile.json — see the backup nudge below).
+    //     The worker is kept fresh (update on launch + foreground; on the dev
+    //     channel the page reloads onto a new worker — see update-check.js), so
+    //     an update-driven reload flushes the 2 s-debounced draft first.
     if (!IS_QUINE && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(console.warn);
+      initServiceWorker({
+        beforeReload: () => { if (state.isDirty) saveDraft(state.currentContent, state.headHash); }
+      });
       requestPersistentStorage();
     }
 
-    // 13. Offer an upgrade if a newer release has been published (non-blocking).
+    // 13. Offer an upgrade if a newer build has been published (non-blocking;
+    //     on the dev channel a newer commit is applied automatically).
     checkForUpdate();
   }
 
