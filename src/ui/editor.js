@@ -35,6 +35,7 @@ import { parseGlobalFrontMatter } from '../core/front-matter.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
 import {
   accordionField,
+  voiceIdAtLine,
   openAccordionEffect,
   closeAccordionEffect,
   getThreadsForLine,
@@ -188,13 +189,13 @@ class LineNumMarker extends GutterMarker {
     if (this.voiceMark) {
       el.className = 'cm-ln-mark mark-' + this.voiceMark;
       el.textContent = this.voiceMark;
-      el.title = this.voiceMark === 'S' ? 'Soloed voice — right-click to change'
-                                        : 'Muted voice — right-click to change';
+      el.title = this.voiceMark === 'S' ? 'Soloed voice — click to change'
+                                        : 'Muted voice — click to change';
       return el;
     }
     el.className = 'cm-ln-text';
     el.textContent = String(this.lineNum);
-    el.title = this.hasThread ? 'Comment — click to view' : 'Click to comment';
+    el.title = this.hasThread ? 'Comment — click to view' : 'Click for options';
     return el;
   }
 
@@ -218,29 +219,10 @@ class LineNumSpacer extends GutterMarker {
   }
 }
 
-// Voice map over the whole editor doc, cached per (immutable) doc instance —
-// the gutter asks per visible line, so don't rebuild the map for each one.
-let _docVmapCache = { doc: null, vmap: null };
-function _docVoiceMap(doc) {
-  if (_docVmapCache.doc !== doc) {
-    _docVmapCache = { doc, vmap: buildVoiceMap(doc.toString()) };
-  }
-  return _docVmapCache.vmap;
-}
-
-/** The voice a doc line belongs to (via `V:` lines OR inline `[V:id]`), or null. */
-function _voiceIdAtLine(doc, line) {
-  if ((state.data?.dslType) !== 'abcjs') return null;
-  // Blank / `%` comment / `%%` directive lines never sound — no voice for them.
-  const t = line.text.trim();
-  if (t === '' || t.startsWith('%')) return null;
-  return _docVoiceMap(doc).at(line.from);
-}
-
 /** The M/S voice mark for a line, or '' — shown on EVERY line of the voice. */
 function _voiceMarkForLine(doc, line) {
   if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return '';
-  const id = _voiceIdAtLine(doc, line);
+  const id = voiceIdAtLine(doc, line);
   if (id == null) return '';
   if (state.abcSoloVoices.has(id)) return 'S';
   if (state.abcMutedVoices.has(id)) return 'M';
@@ -265,92 +247,29 @@ const commentLineNumbersExt = gutter({
   initialSpacer: () => new LineNumSpacer(),
 
   domEventHandlers: {
-    // Click the rail → the line's comment, directly (open the existing thread
-    // or a new-comment form). No menu: the rail is a streamlined comment rail.
-    click(view, line, event) {
+    // Tap the rail → the comment accordion folds out under that line (the
+    // existing thread, or a new-comment form); tap the same line again → it
+    // folds back.  ABC voice lines get their Mute / Solo toggles inside the
+    // accordion (comments.js), so there is no floating menu any more.
+    click(view, line) {
       const lineDoc = view.state.doc.lineAt(line.from);
-      _openLineComment(view, lineDoc);
-      return true;
-    },
-    // Right-click (long-press on Android) an ABC voice line → Mute / Solo.
-    contextmenu(view, line, event) {
-      const lineDoc = view.state.doc.lineAt(line.from);
-      if (!_showVoiceMenu(view, event.clientX, event.clientY, lineDoc)) return false;
-      event.preventDefault();
+      const acc = view.state.field(accordionField);
+      const openHere = acc.anchorPos !== null &&
+        view.state.doc.lineAt(acc.anchorPos).from === lineDoc.from;
+      if (openHere) { view.dispatch({ effects: closeAccordionEffect.of(null) }); return true; }
+      const threads = getThreadsForLine(lineDoc.from, view.state.doc);
+      view.dispatch({
+        effects: openAccordionEffect.of({
+          anchorPos: lineDoc.to,
+          threadId:  threads[0]?.id ?? null,
+          newRange:  threads.length ? null : { from: lineDoc.from, to: lineDoc.from },
+        })
+      });
       return true;
     }
   }
 });
 
-/** Open the line's comment thread, or a new-comment form anchored at the line. */
-function _openLineComment(view, lineDoc) {
-  const threads = getThreadsForLine(lineDoc.from, view.state.doc);
-  view.dispatch({
-    effects: openAccordionEffect.of({
-      anchorPos: lineDoc.to,
-      threadId:  threads[0]?.id ?? null,
-      newRange:  threads.length ? null : { from: lineDoc.from, to: lineDoc.from },
-    })
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Voice menu (floating popup on gutter RIGHT-click, ABC only)
-//
-// A line belonging to an ABC voice (declared by a `V:` line or an inline
-// `[V:id]` prefix) offers Mute / Solo, which silence / isolate that voice for
-// the whole song (see state + abcjs.js). Plain click is the comment (above).
-// ---------------------------------------------------------------------------
-
-let _gutterMenuEl = null;
-
-function _hideGutterMenu() {
-  _gutterMenuEl?.remove();
-  _gutterMenuEl = null;
-}
-
-/** @returns {boolean} true when the line has a voice and the menu opened */
-function _showVoiceMenu(view, x, y, lineDoc) {
-  _hideGutterMenu();
-
-  const voiceId = _voiceIdAtLine(view.state.doc, lineDoc);
-  if (voiceId == null) return false;
-
-  const menu = document.createElement('div');
-  menu.className = 'cm-comment-context-menu cm-gutter-menu';
-  menu.style.left = x + 'px';
-  menu.style.top  = y + 'px';
-
-  const addItem = (label, onClick) => {
-    const btn = document.createElement('button');
-    btn.className = 'cm-ccm-add';
-    btn.textContent = label;
-    btn.addEventListener('click', () => { _hideGutterMenu(); onClick(); });
-    menu.appendChild(btn);
-  };
-
-  addItem((state.abcMutedVoices.has(voiceId) ? 'Unmute voice ' : 'Mute voice ') + voiceId,
-    () => state.toggleVoiceMute(voiceId));
-  addItem((state.abcSoloVoices.has(voiceId) ? 'Unsolo voice ' : 'Solo voice ') + voiceId,
-    () => state.toggleVoiceSolo(voiceId));
-
-  document.body.appendChild(menu);
-  _gutterMenuEl = menu;
-
-  // Keep the menu on-screen (it's positioned from the click point).
-  const r = menu.getBoundingClientRect();
-  if (r.right > window.innerWidth)  menu.style.left = Math.max(4, window.innerWidth  - r.width  - 4) + 'px';
-  if (r.bottom > window.innerHeight) menu.style.top  = Math.max(4, window.innerHeight - r.height - 4) + 'px';
-
-  const dismiss = (e) => {
-    if (!menu.contains(e.target)) {
-      _hideGutterMenu();
-      document.removeEventListener('mousedown', dismiss, true);
-    }
-  };
-  document.addEventListener('mousedown', dismiss, true);
-  return true;
-}
 
 // ---------------------------------------------------------------------------
 // Muted-voice fade (editor)
@@ -369,7 +288,7 @@ function _buildVoiceFade(editorState) {
   const builder = new RangeSetBuilder();
   for (let n = 1; n <= doc.lines; n++) {
     const line = doc.line(n);
-    const id = _voiceIdAtLine(doc, line);
+    const id = voiceIdAtLine(doc, line);
     if (id != null && state.isVoiceMuted(id)) {
       builder.add(line.from, line.from, Decoration.line({ class: 'cm-voice-muted' }));
     }
