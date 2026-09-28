@@ -5,7 +5,7 @@
  * Lets the user update their display name, email, and colour theme.
  */
 
-import { state, PANELS } from './state.js';
+import { state, PANELS, SPLIT_ORIENTATIONS } from './state.js';
 import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
 import { applyTheme } from './theme.js';
 import { checkForUpdate } from './update-check.js';
@@ -54,6 +54,11 @@ export class SettingsPanel {
     const prefs = loadUserPrefs();
     const theme = prefs.theme ?? 'auto';
     const isAbc = (state.activeDslId ?? state.data?.dslType) === 'abcjs';
+    // Split layout is a desktop affair — phones show one pane at a time.
+    const isPhone = window.matchMedia?.(
+      '(max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse)'
+    ).matches;
+    const stacked = state.splitOrientation === SPLIT_ORIENTATIONS.HORIZONTAL;
 
     this.el.innerHTML = `
       <div class="dialog-overlay" id="settings-overlay">
@@ -108,6 +113,21 @@ export class SettingsPanel {
                 </button>
               </div>
             </div>
+
+            ${isPhone ? '' : `
+            <div class="form-row">
+              <label class="form-label">Split layout</label>
+              <div class="theme-toggle-group" role="group" aria-label="Split layout">
+                <button class="theme-toggle-btn${stacked ? '' : ' active'}"
+                  data-split-pref="${SPLIT_ORIENTATIONS.VERTICAL}" title="Text on the left, preview on the right">
+                  ◫ Side by side
+                </button>
+                <button class="theme-toggle-btn${stacked ? ' active' : ''}"
+                  data-split-pref="${SPLIT_ORIENTATIONS.HORIZONTAL}" title="Preview on top, text below">
+                  ⊟ Stacked
+                </button>
+              </div>
+            </div>`}
 
             <p id="settings-error" class="form-error" hidden></p>
             <p id="settings-saved" class="form-success" hidden>Settings saved.</p>
@@ -182,6 +202,17 @@ export class SettingsPanel {
         applyTheme(pref);
         this.el.querySelectorAll('.theme-toggle-btn').forEach(b => {
           b.classList.toggle('active', b.dataset.themePref === pref);
+        });
+      });
+    });
+
+    // Split layout — live too (state persists it as a preference).
+    this.el.querySelectorAll('[data-split-pref]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const pref = btn.dataset.splitPref;
+        state.setSplitOrientation(pref);
+        this.el.querySelectorAll('[data-split-pref]').forEach(b => {
+          b.classList.toggle('active', b.dataset.splitPref === pref);
         });
       });
     });

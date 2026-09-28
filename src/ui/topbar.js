@@ -1299,7 +1299,7 @@ clef=none          % no clef / percussion</code></pre>`
       {
         group: 'Playback (unifile)',
         title: 'Mute / Solo Voices',
-        content: `<p class="help-note">Click the <strong>gutter rail</strong> next to any <code>V:</code> line and choose <strong>Mute</strong> or <strong>Solo</strong>. Muted voices don't sound or highlight and are dimmed in the editor and score (marked <code>M</code>); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
+        content: `<p class="help-note">Tap the <strong>gutter rail</strong> next to any <code>V:</code> line (or any line of that voice): the comment panel that folds out carries <strong>Mute</strong> and <strong>Solo</strong> buttons for that voice; the piano roll's voice chips have M / S buttons too. Muted voices don't sound or highlight and are dimmed in the editor and score (marked <code>M</code>); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
       },
       {
         group: 'Playback (unifile)',

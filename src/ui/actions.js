@@ -26,6 +26,7 @@ import {
   showNewDocumentModal, showDslHelpModal, showExtensionsModal,
 } from './topbar.js';
 import { showArchivedCommentsModal } from './comments.js';
+import { zoomStages } from '../dsl/mermaid-zoom.js';
 
 const TEXT = '︎';   // variation selector-15: force text presentation
 
@@ -46,6 +47,7 @@ export function currentDslId() {
 export function defaultPrimary(dslId, view = 'editor') {
   if (view === 'commit') return 'menu';
   if (dslId === 'abcjs') return 'play';
+  if (dslId === 'mermaid' && view === 'render') return 'fit';   // zoom extents
   return view === 'editor' ? 'undo' : 'menu';
 }
 
@@ -79,6 +81,15 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
 
   if (view === 'render') {
     if (isAbc) play();
+    if (dslId === 'mermaid') {
+      // The diagram is a pan/zoom stage (dsl/mermaid-zoom.js); fit = zoom extents.
+      acts.push(mk({ id: 'fit', label: 'Zoom extents', key: 'Zoom extents', glyph: '⛶',
+        run: () => zoomStages('fit') }));
+      acts.push(mk({ id: 'zoom-in', label: 'Zoom in', key: 'Zoom in', glyph: '+',
+        run: () => zoomStages('in') }));
+      acts.push(mk({ id: 'zoom-out', label: 'Zoom out', key: 'Zoom out', glyph: '−',
+        run: () => zoomStages('out') }));
+    }
     return acts;
   }
 

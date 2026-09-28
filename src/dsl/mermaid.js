@@ -2,7 +2,8 @@
  * Mermaid DSL plugin
  *
  * Always bundled offline — no CDN fetches at runtime.
- * Rendering: mermaid (npm), bundled by esbuild.
+ * Rendering: mermaid (npm), bundled by esbuild; the live preview wraps the
+ *            svg in a zoom/pan stage (mermaid-zoom.js).
  * Export:    SVG, PNG (via canvas)
  *
  * Supports flowcharts, sequence diagrams, class diagrams,
@@ -16,6 +17,7 @@ import { hoverTooltip } from '@codemirror/view';
 import { registerDSL } from './registry.js';
 import { getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint } from '../core/fm-schema.js';
+import { mountZoomStage } from './mermaid-zoom.js';
 
 // ---------------------------------------------------------------------------
 // Simple Mermaid stream language for CodeMirror 6
@@ -96,6 +98,10 @@ async function render(content, el) {
       // Annotate individual flowchart nodes with their source positions so
       // click-back lands on the specific node rather than the whole block.
       _annotateFlowNodes(svgEl, content, el);
+
+      // Live preview: zoom & pan by default (diagrams outgrow a pane fast).
+      // Print layouts keep the plain, page-sized svg.
+      if (!inPrintContext) mountZoomStage(el, svgEl);
     }
   } catch (e) {
     el.innerHTML = `<pre class="error">Mermaid error:\n${e.message}</pre>`;
