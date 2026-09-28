@@ -8,7 +8,8 @@
  *     CONTEXTUAL to the pane that is showing:
  *       editor → text/music verbs: play · one measure per line · piano roll
  *                (ABC), indent · outdent, undo · redo
- *       render → play / pause (ABC) — nothing for other DSLs (bubble hides)
+ *       render → play / pause (ABC); zoom to fit · zoom in · zoom out
+ *                (Mermaid) — nothing for other DSLs (bubble hides)
  *       commit → the branches (tap one to switch), New branch…, Commit…
  *                (the bubble itself reads `{⑂} <branch>` in this view)
  *
@@ -26,6 +27,7 @@ import {
   showNewDocumentModal, showDslHelpModal, showExtensionsModal,
 } from './topbar.js';
 import { showArchivedCommentsModal } from './comments.js';
+import { zoomAll as mermaidZoom } from '../dsl/mermaid-zoom.js';
 
 const TEXT = '︎';   // variation selector-15: force text presentation
 
@@ -46,6 +48,8 @@ export function currentDslId() {
 export function defaultPrimary(dslId, view = 'editor') {
   if (view === 'commit') return 'menu';
   if (dslId === 'abcjs') return 'play';
+  // The diagram's render view: a tap re-fits the diagram (zoom to extents).
+  if (view === 'render' && dslId === 'mermaid') return 'fit';
   if (view !== 'editor') return 'menu';
   // Mermaid is indentation-shaped (subgraphs, nested nodes) and a soft keyboard
   // has no Tab — so the diagram app's tap is Indent, not Undo.
@@ -82,6 +86,12 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
 
   if (view === 'render') {
     if (isAbc) play();
+    if (dslId === 'mermaid') {
+      // The diagram's zoom stage (mermaid-zoom.js) obeys these from anywhere.
+      acts.push(mk({ id: 'fit', label: 'Zoom to fit', glyph: '⛶', run: () => mermaidZoom('fit') }));
+      acts.push(mk({ id: 'zoom-in', label: 'Zoom in', glyph: '+', run: () => mermaidZoom('in') }));
+      acts.push(mk({ id: 'zoom-out', label: 'Zoom out', glyph: '−', run: () => mermaidZoom('out') }));
+    }
     return acts;
   }
 

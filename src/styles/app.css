@@ -8,6 +8,11 @@
   /* Catppuccin Mocha palette */
   --bg:          #1e1e2e;
   --bg-alt:      #181825;
+  --comment-tint:         #f9e2af;                  /* commented line, rail */
+  --comment-range:        rgba(251,191,36,.1);
+  --comment-range-active: rgba(251,191,36,.2);
+  --comment-range-line:   rgba(251,191,36,.4);
+  --comment-range-line-active: rgba(251,191,36,.75);
   --bg-surface:  #313244;
   --bg-overlay:  #45475a;
   --text:        #cdd6f4;
@@ -63,6 +68,11 @@
   :root:not([data-theme]) {
     --bg:          #eff1f5;
     --bg-alt:      #e6e9ef;
+    --comment-tint:         #df8e1d;                  /* commented line, rail */
+    --comment-range:        rgba(223,142,29,.28);
+    --comment-range-active: rgba(223,142,29,.42);
+    --comment-range-line:   rgba(223,142,29,.7);
+    --comment-range-line-active: rgba(223,142,29,.95);
     --bg-surface:  #dce0e8;
     --bg-overlay:  #ccd0da;
     --text:        #4c4f69;
@@ -106,6 +116,11 @@
 [data-theme="light"] {
   --bg:          #eff1f5;
   --bg-alt:      #e6e9ef;
+  --comment-tint:         #df8e1d;                  /* commented line, rail */
+  --comment-range:        rgba(223,142,29,.28);
+  --comment-range-active: rgba(223,142,29,.42);
+  --comment-range-line:   rgba(223,142,29,.7);
+  --comment-range-line-active: rgba(223,142,29,.95);
   --bg-surface:  #dce0e8;
   --bg-overlay:  #ccd0da;
   --text:        #4c4f69;
@@ -148,6 +163,11 @@
 [data-theme="dark"] {
   --bg:          #1e1e2e;
   --bg-alt:      #181825;
+  --comment-tint:         #f9e2af;                  /* commented line, rail */
+  --comment-range:        rgba(251,191,36,.1);
+  --comment-range-active: rgba(251,191,36,.2);
+  --comment-range-line:   rgba(251,191,36,.4);
+  --comment-range-line-active: rgba(251,191,36,.75);
   --bg-surface:  #313244;
   --bg-overlay:  #45475a;
   --text:        #cdd6f4;
@@ -172,7 +192,6 @@
 [data-theme="light"] .cm-editor.cm-focused .cm-selectionBackground { background: rgba(30,102,245,.26) !important; }
 [data-theme="light"] .cm-cursor         { border-left-color: #1e66f5 !important; }
 [data-theme="light"] .cm-tooltip        { background: #dce0e8 !important; border-color: #ccd0da !important; color: #4c4f69 !important; }
-[data-theme="light"] .cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments { background: rgba(223,142,29,.18) !important; color: #df8e1d !important; }
 
 /* Editor gutter = a SINGLE thin rail (no line numbers), on desktop AND mobile.
    The current line shows as a full-width accent segment and a commented line
@@ -182,7 +201,7 @@
 #uf-editor-wrap .cm-comment-ln { min-width: 0; padding: 0; }
 #uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; margin: 0; min-width: 14px; }
 #uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
-#uf-editor-wrap .cm-comment-ln .cm-has-comments { background: #f9e2af !important; }
+#uf-editor-wrap .cm-comment-ln .cm-has-comments { background: var(--comment-tint) !important; }
 
 /* Mute (M) / Solo (S) mark shown in the rail for an ABC voice line. */
 .cm-comment-ln .cm-ln-mark {
@@ -207,10 +226,11 @@
    front-matter block, so the gutter no longer tints it). */
 .cm-line.cm-voice-muted { opacity: .38; }
 /* Comment range mark — visible while accordion is open */
-[data-theme="light"] .cm-comment-range        { background: rgba(223,142,29,.12) !important; border-bottom: 1px solid rgba(223,142,29,.45) !important; }
-[data-theme="light"] .cm-comment-range-active { background: rgba(223,142,29,.22) !important; border-bottom: 1px solid rgba(223,142,29,.8)  !important; }
-[data-theme="dark"]  .cm-comment-range        { background: rgba(251,191,36,.1)  !important; border-bottom: 1px solid rgba(251,191,36,.4)  !important; }
-[data-theme="dark"]  .cm-comment-range-active { background: rgba(251,191,36,.2)  !important; border-bottom: 1px solid rgba(251,191,36,.75) !important; }
+/* Per-theme tokens (`--comment-*`, defined beside --bg-alt in every theme block)
+   so the OS-light "auto" theme gets the strong light tint too — the light tint
+   was a faint 12–18% wash on a pale gutter and read as nothing on a phone. */
+.cm-comment-range        { background: var(--comment-range) !important;        border-bottom: 1px solid var(--comment-range-line) !important; }
+.cm-comment-range-active { background: var(--comment-range-active) !important; border-bottom: 1px solid var(--comment-range-line-active) !important; }
 
 /* DSL element range highlight — shown when clicking a note/element in the preview */
 .cm-dsl-highlight { background: rgba(137,180,250,.22); border-radius: 2px; outline: 1px solid rgba(137,180,250,.5); }
@@ -1348,8 +1368,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
      so whichever element is topmost sits below the notch — the title bar when
      shown, the pane switcher once the title bar collapses. `background` colours
      that inset strip like the header. box-sizing:border-box keeps the fixed
-     `--app-height` intact (content just shrinks by the inset). */
-  #unifile-app { padding-top: env(safe-area-inset-top, 0px); background: var(--bg-alt); }
+     `--app-height` intact (content just shrinks by the inset). The colour is
+     `--bg` (NOT --bg-alt): the top bar blends into the page, so the inset strip
+     around the island must be that same colour or it reads as a darker band. */
+  #unifile-app { padding-top: env(safe-area-inset-top, 0px); background: var(--bg); }
 
   #uf-site-nav { order: -3; }
   /* The whole top bar is gone on mobile — its title, hamburger menu and dirty
