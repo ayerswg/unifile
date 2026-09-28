@@ -5,7 +5,7 @@
  * the commit → save → quine cycle.
  */
 
-import { state, PANELS, VIEW_MODES } from './state.js';
+import { state, PANELS, VIEW_MODES, SPLIT_ORIENTATIONS } from './state.js';
 import { VCS } from '../core/vcs.js';
 import { diff3Merge } from '../core/diff.js';
 import { shortHash } from '../core/hash.js';
@@ -14,6 +14,7 @@ import {
   captureTemplate,
   generateQuine,
   loadUserPrefs,
+  saveUserPrefs,
   IS_QUINE,
   saveDraft,
   loadDraft,
@@ -86,6 +87,9 @@ export class App {
     // 5. Update state — on small screens split view is impractical; default to preview
     let viewMode = prefs.viewMode ?? VIEW_MODES.SPLIT;
     if (_isMobile() && viewMode === VIEW_MODES.SPLIT) viewMode = VIEW_MODES.PREVIEW;
+    // Split layout (desktop): side by side, or stacked with the text below.
+    const splitOrientation = Object.values(SPLIT_ORIENTATIONS).includes(prefs.splitOrientation)
+      ? prefs.splitOrientation : SPLIT_ORIENTATIONS.VERTICAL;
 
     const { meta: fmMeta } = parseGlobalFrontMatter(currentContent);
     state.update({
@@ -94,6 +98,7 @@ export class App {
       currentContent,
       isDirty: false,
       viewMode,
+      splitOrientation,
       dsl: this._getDsl(data.dslType),
       primaryModel:   fmMeta.model  ?? 'flow',
       secondaryModel: fmMeta.model2 ?? null,
@@ -182,6 +187,9 @@ export class App {
         <div id="uf-divider" class="pane-divider">
           <button class="divider-btn divider-to-preview" title="Preview only" aria-label="Preview only">
             ${_chevronRight2()}
+          </button>
+          <button class="divider-btn divider-orient" title="Stack panes (preview above, text below)" aria-label="Stack panes (preview above, text below)">
+            ${_splitIcon(SPLIT_ORIENTATIONS.HORIZONTAL)}
           </button>
           <div class="divider-grip" aria-hidden="true">
             <span></span><span></span><span></span><span></span><span></span>
@@ -538,6 +546,28 @@ export class App {
 
     state.on('view-mode-change', syncDivider);
     syncDivider(state.viewMode);
+
+    // Split orientation → `#unifile-app[data-split-orientation]` drives the
+    // stacked layout in CSS; the divider's toggle shows the OTHER layout (what a
+    // click gives you). Persisted as a user preference.
+    const syncOrientation = (orientation) => {
+      const root = document.getElementById('unifile-app');
+      if (root) root.dataset.splitOrientation = orientation;
+      const btn = document.querySelector('#uf-divider .divider-orient');
+      if (btn) {
+        const stacked = orientation === SPLIT_ORIENTATIONS.HORIZONTAL;
+        const label = stacked ? 'Side by side (text left, preview right)'
+                              : 'Stack panes (preview above, text below)';
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+        btn.innerHTML = _splitIcon(stacked ? SPLIT_ORIENTATIONS.VERTICAL : SPLIT_ORIENTATIONS.HORIZONTAL);
+      }
+    };
+    state.on('split-orientation-change', (orientation) => {
+      syncOrientation(orientation);
+      saveUserPrefs({ splitOrientation: orientation });
+    });
+    syncOrientation(state.splitOrientation);
   }
 
   // ---------------------------------------------------------------------------
@@ -914,14 +944,25 @@ export class App {
     const main    = document.getElementById('uf-main');
     if (!divider || !main) return;
 
-    let dragging = false, didDrag = false, startX = 0, startFlex = [50, 50];
+    let dragging = false, didDrag = false, startPos = 0, startFirst = 50;
+
+    // Stacked ("horizontal") split: the drag axis is Y and the FIRST pane (the
+    // one before the divider) is the preview; side by side it's X / the editor.
+    const stacked = () => state.splitOrientation === SPLIT_ORIENTATIONS.HORIZONTAL;
+    const panes = () => {
+      const editorWrap  = document.getElementById('uf-editor-wrap');
+      const previewWrap = document.getElementById('uf-preview-wrap');
+      return stacked() ? [previewWrap, editorWrap] : [editorWrap, previewWrap];
+    };
+    const axisPos  = (e) => stacked() ? e.clientY : e.clientX;
+    const axisSize = (el) => stacked() ? el.clientHeight : el.clientWidth;
 
     // On mobile, "go to split" instead toggles between the two single-pane modes.
     const _mobilePaneToggle = () => state.setViewMode(
       state.viewMode === VIEW_MODES.PREVIEW ? VIEW_MODES.EDITOR : VIEW_MODES.PREVIEW
     );
 
-    // ── Button clicks (to-preview / to-editor / to-split) ────────────────────
+    // ── Button clicks (to-preview / to-editor / to-split / orientation) ──────
     divider.addEventListener('click', (e) => {
       const btn = e.target.closest('.divider-btn');
       if (!btn) return;
@@ -933,6 +974,8 @@ export class App {
       } else if (btn.classList.contains('divider-to-split')) {
         // On mobile, never enter SPLIT — toggle between EDITOR ↔ PREVIEW instead
         if (_isMobile()) _mobilePaneToggle(); else state.setViewMode(VIEW_MODES.SPLIT);
+      } else if (btn.classList.contains('divider-orient')) {
+        state.toggleSplitOrientation();
       }
     });
 
@@ -943,19 +986,13 @@ export class App {
 
       dragging = true;
       didDrag  = false;
-      startX   = e.clientX;
+      startPos = axisPos(e);
 
-      // Pre-capture current flex percentages for drag calculation
+      // Pre-capture the first pane's share for the drag calculation
       if (state.viewMode === VIEW_MODES.SPLIT && !_isMobile()) {
-        const editorWrap  = document.getElementById('uf-editor-wrap');
-        const previewWrap = document.getElementById('uf-preview-wrap');
-        if (editorWrap && previewWrap) {
-          const total = main.clientWidth;
-          startFlex = [
-            (editorWrap.clientWidth  / total) * 100,
-            (previewWrap.clientWidth / total) * 100
-          ];
-        }
+        const [first] = panes();
+        const total = axisSize(main);
+        if (first && total) startFirst = (axisSize(first) / total) * 100;
         document.body.style.userSelect = 'none';
       }
       e.preventDefault();
@@ -963,22 +1000,21 @@ export class App {
 
     document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
-      const dx = e.clientX - startX;
-      if (Math.abs(dx) > 4) didDrag = true;
+      const d = axisPos(e) - startPos;
+      if (Math.abs(d) > 4) didDrag = true;
       if (!didDrag) return;
 
       // Drag-to-resize only in SPLIT mode on non-mobile
       if (state.viewMode !== VIEW_MODES.SPLIT || _isMobile()) return;
 
-      document.body.style.cursor = 'col-resize';
-      const total  = main.clientWidth;
-      const pct    = (dx / total) * 100;
-      const newLeft = Math.max(15, Math.min(85, startFlex[0] + pct));
+      document.body.style.cursor = stacked() ? 'row-resize' : 'col-resize';
+      const total    = axisSize(main);
+      const pct      = (d / total) * 100;
+      const newFirst = Math.max(15, Math.min(85, startFirst + pct));
 
-      const editorWrap  = document.getElementById('uf-editor-wrap');
-      const previewWrap = document.getElementById('uf-preview-wrap');
-      if (editorWrap)  editorWrap.style.flex  = `0 0 ${newLeft}%`;
-      if (previewWrap) previewWrap.style.flex = `0 0 ${100 - newLeft}%`;
+      const [first, second] = panes();
+      if (first)  first.style.flex  = `0 0 ${newFirst}%`;
+      if (second) second.style.flex = `0 0 ${100 - newFirst}%`;
     });
 
     document.addEventListener('mouseup', () => {
@@ -1120,6 +1156,16 @@ function _chevronRight() {
 }
 
 /** Double right-pointing chevrons — used for divider-to-editor (go to editor-only). */
+/** Split-layout glyph: a pane split side by side (vertical) or stacked (horizontal). */
+function _splitIcon(orientation) {
+  const stacked = orientation === SPLIT_ORIENTATIONS.HORIZONTAL;
+  return `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+      stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
+    <rect x="1" y="1" width="10" height="10" rx="1.5"/>
+    ${stacked ? '<line x1="1" y1="6" x2="11" y2="6"/>' : '<line x1="6" y1="1" x2="6" y2="11"/>'}
+  </svg>`;
+}
+
 function _chevronRight2() {
   return `<svg width="10" height="12" viewBox="0 0 10 12" fill="none"
       stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"

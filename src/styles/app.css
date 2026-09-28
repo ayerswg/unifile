@@ -1588,6 +1588,58 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .divider-to-preview svg { transform: scaleX(-1); }
 .pane-divider[data-mode="editor"] .divider-to-split svg { transform: scaleX(-1); }
 
+/* ── Orientation toggle (split mode only): side-by-side ↔ stacked ── */
+.divider-orient { top: 40px; }
+.pane-divider:not([data-mode="split"]) .divider-orient { display: none; }
+
+/* ==============================================================
+   STACKED SPLIT — `#unifile-app[data-split-orientation="horizontal"]`
+   The user's "horizontal split": preview ABOVE, editor (text) BELOW, a
+   horizontal divider between. Desktop only (phones never split; their
+   single-pane rules override with !important). Everything below re-aims
+   the vertical divider's geometry onto the other axis.
+   ============================================================== */
+#unifile-app[data-split-orientation="horizontal"] #uf-main { flex-direction: column; }
+#unifile-app[data-split-orientation="horizontal"] #uf-preview-wrap { order: 1; min-height: 0; }
+#unifile-app[data-split-orientation="horizontal"] #uf-divider      { order: 2; }
+#unifile-app[data-split-orientation="horizontal"] #uf-editor-wrap  { order: 3; min-height: 0; }
+#unifile-app[data-split-orientation="horizontal"] .preview-pane    { border-left: none; }
+
+#unifile-app[data-split-orientation="horizontal"] .pane-divider {
+  width: auto;
+  height: 8px;
+}
+#unifile-app[data-split-orientation="horizontal"] .pane-divider::before {
+  top: 50%; bottom: auto; left: 0; right: 0;
+  width: auto; height: 6px;
+  transform: translateY(-50%);
+  transition: height .15s ease, background .15s ease;
+}
+#unifile-app[data-split-orientation="horizontal"] .pane-divider:hover::before { width: auto; height: 18px; }
+#unifile-app[data-split-orientation="horizontal"] .pane-divider::after { inset: -4px 0; }
+#unifile-app[data-split-orientation="horizontal"] .pane-divider[data-mode="split"] { cursor: row-resize; }
+
+#unifile-app[data-split-orientation="horizontal"] .divider-btn {
+  left: auto; top: 50%; bottom: auto;
+  transform: translateY(-50%);
+}
+#unifile-app[data-split-orientation="horizontal"] .divider-to-preview { left: 10px; }
+#unifile-app[data-split-orientation="horizontal"] .divider-orient     { left: 40px; }
+#unifile-app[data-split-orientation="horizontal"] .divider-to-editor  { right: 10px; }
+#unifile-app[data-split-orientation="horizontal"] .divider-grip,
+#unifile-app[data-split-orientation="horizontal"] .divider-to-split {
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+}
+#unifile-app[data-split-orientation="horizontal"] .divider-grip { flex-direction: row; }
+
+/* Chevrons: preview sits on top — "preview only" grows it DOWN, "editor only"
+   grows the editor UP; back-to-split points into the hidden pane. */
+#unifile-app[data-split-orientation="horizontal"] .divider-to-preview svg { transform: rotate(90deg); }
+#unifile-app[data-split-orientation="horizontal"] .divider-to-editor  svg { transform: rotate(-90deg); }
+#unifile-app[data-split-orientation="horizontal"] .pane-divider[data-mode="editor"]  .divider-to-split svg { transform: rotate(90deg); }
+#unifile-app[data-split-orientation="horizontal"] .pane-divider[data-mode="preview"] .divider-to-split svg { transform: rotate(-90deg); }
+
 /* ── Small-screen overrides (no SPLIT mode) ──────────────────── */
 @media (max-width: 640px) {
   /* In the unlikely event split mode is active on mobile, force-show only the toggle */
@@ -1650,7 +1702,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   overscroll-behavior: contain;  /* don't chain overscroll to the document (iOS shift) */
   background: var(--bg);
   border-left: 1px solid var(--border);
-  container-type: inline-size;   /* 100cqw = pane width (score-block breakout below) */
+  /* 100cqw = pane width (score-block breakout below); 100cqh = pane height
+     (a sole Mermaid diagram fills the pane). The pane is flex-sized, never
+     content-sized, so size containment is safe here. */
+  container-type: size;
 }
 
 .preview-content {
@@ -2059,6 +2114,81 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .uf-web-part { margin: 1em 0; }
 .uf-web-part:first-child { margin-top: 0; }
 .uf-web-part:last-child  { margin-bottom: 0; }
+
+/* ── Mermaid zoom/pan stage (dsl/mermaid-zoom.js) ─────────────────────────
+   The svg fills the stage; zoom/pan rewrite its viewBox. A SOLE diagram (the
+   document is the diagram) fills the whole preview pane — height from the
+   pane's container-query height, width broken out of the 800px prose column
+   like the ABC score. In prose the stage is diagram-sized (inline height set
+   by JS). */
+.uf-mmd-stage {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  border-radius: var(--radius);
+  height: 60vh;                  /* fallback when no cq units */
+}
+.uf-mmd-stage.is-dragging { cursor: grabbing; }
+.uf-mmd-stage > svg {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+}
+.uf-mmd-stage.is-sole {
+  height: calc(100cqh - 48px);
+  width: max(100%, 100cqw - 64px);
+  margin-left: calc((100% - max(100%, 100cqw - 64px)) / 2);
+}
+.uf-mmd-zoomctl {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--border);
+  opacity: .6;
+  transition: opacity .15s;
+  z-index: 1;
+}
+.uf-mmd-stage:hover .uf-mmd-zoomctl,
+.uf-mmd-zoomctl:focus-within { opacity: 1; }
+.uf-mmd-zoomctl button,
+.uf-mmd-zoomctl .uf-mmd-zoom {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  min-width: 30px;
+  height: 28px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface);
+  color: var(--text-sub);
+  font: 500 13px/1 var(--font-mono);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.uf-mmd-zoomctl .uf-mmd-zoom { cursor: default; font-size: 11px; min-width: 42px; }
+.uf-mmd-zoomctl button:hover { color: var(--accent); }
+.uf-mmd-zoomctl button:active { background: var(--bg-overlay); }
+@media (pointer: coarse) {
+  .uf-mmd-zoomctl { opacity: 1; }
+  .uf-mmd-zoomctl button, .uf-mmd-zoomctl .uf-mmd-zoom { height: 36px; min-width: 38px; }
+}
+/* Phones: the action bubble (and its first-use caption) live at the bottom —
+   keep the controls clear of them. */
+@media (max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+  .uf-mmd-zoomctl { right: auto; bottom: auto; left: 10px; top: 10px; }
+}
 
 /* Belt-and-suspenders: ensure mermaid background rect is transparent in print layouts */
 .uf-slide-frame .uf-dsl-mermaid svg rect.background,

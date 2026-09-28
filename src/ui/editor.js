@@ -188,13 +188,13 @@ class LineNumMarker extends GutterMarker {
     if (this.voiceMark) {
       el.className = 'cm-ln-mark mark-' + this.voiceMark;
       el.textContent = this.voiceMark;
-      el.title = this.voiceMark === 'S' ? 'Soloed voice — click to change'
-                                        : 'Muted voice — click to change';
+      el.title = this.voiceMark === 'S' ? 'Soloed voice — right-click to change'
+                                        : 'Muted voice — right-click to change';
       return el;
     }
     el.className = 'cm-ln-text';
     el.textContent = String(this.lineNum);
-    el.title = this.hasThread ? 'Comment — click to view' : 'Click for options';
+    el.title = this.hasThread ? 'Comment — click to view' : 'Click to comment';
     return el;
   }
 
@@ -265,22 +265,41 @@ const commentLineNumbersExt = gutter({
   initialSpacer: () => new LineNumSpacer(),
 
   domEventHandlers: {
-    // Click the gutter → open a small menu of line options (Comment always;
-    // Mute / Solo for ABC voice lines). See _showGutterMenu.
+    // Click the rail → the line's comment, directly (open the existing thread
+    // or a new-comment form). No menu: the rail is a streamlined comment rail.
     click(view, line, event) {
       const lineDoc = view.state.doc.lineAt(line.from);
-      _showGutterMenu(view, event.clientX, event.clientY, lineDoc);
+      _openLineComment(view, lineDoc);
+      return true;
+    },
+    // Right-click (long-press on Android) an ABC voice line → Mute / Solo.
+    contextmenu(view, line, event) {
+      const lineDoc = view.state.doc.lineAt(line.from);
+      if (!_showVoiceMenu(view, event.clientX, event.clientY, lineDoc)) return false;
+      event.preventDefault();
       return true;
     }
   }
 });
 
+/** Open the line's comment thread, or a new-comment form anchored at the line. */
+function _openLineComment(view, lineDoc) {
+  const threads = getThreadsForLine(lineDoc.from, view.state.doc);
+  view.dispatch({
+    effects: openAccordionEffect.of({
+      anchorPos: lineDoc.to,
+      threadId:  threads[0]?.id ?? null,
+      newRange:  threads.length ? null : { from: lineDoc.from, to: lineDoc.from },
+    })
+  });
+}
+
 // ---------------------------------------------------------------------------
-// Gutter line-options menu (floating popup on gutter click)
+// Voice menu (floating popup on gutter RIGHT-click, ABC only)
 //
-// Every line offers "comment"; any line belonging to an ABC voice (declared by
-// a `V:` line or an inline `[V:id]` prefix) also offers Mute / Solo, which
-// silence / isolate that voice for the whole song (see state + abcjs.js).
+// A line belonging to an ABC voice (declared by a `V:` line or an inline
+// `[V:id]` prefix) offers Mute / Solo, which silence / isolate that voice for
+// the whole song (see state + abcjs.js). Plain click is the comment (above).
 // ---------------------------------------------------------------------------
 
 let _gutterMenuEl = null;
@@ -290,11 +309,12 @@ function _hideGutterMenu() {
   _gutterMenuEl = null;
 }
 
-function _showGutterMenu(view, x, y, lineDoc) {
+/** @returns {boolean} true when the line has a voice and the menu opened */
+function _showVoiceMenu(view, x, y, lineDoc) {
   _hideGutterMenu();
 
-  const threads   = getThreadsForLine(lineDoc.from, view.state.doc);
-  const voiceId   = _voiceIdAtLine(view.state.doc, lineDoc);
+  const voiceId = _voiceIdAtLine(view.state.doc, lineDoc);
+  if (voiceId == null) return false;
 
   const menu = document.createElement('div');
   menu.className = 'cm-comment-context-menu cm-gutter-menu';
@@ -309,22 +329,10 @@ function _showGutterMenu(view, x, y, lineDoc) {
     menu.appendChild(btn);
   };
 
-  addItem(threads.length ? 'View comment' : 'Add comment', () => {
-    view.dispatch({
-      effects: openAccordionEffect.of({
-        anchorPos: lineDoc.to,
-        threadId:  threads[0]?.id ?? null,
-        newRange:  threads.length ? null : { from: lineDoc.from, to: lineDoc.from },
-      })
-    });
-  });
-
-  if (voiceId != null) {
-    addItem((state.abcMutedVoices.has(voiceId) ? 'Unmute voice ' : 'Mute voice ') + voiceId,
-      () => state.toggleVoiceMute(voiceId));
-    addItem((state.abcSoloVoices.has(voiceId) ? 'Unsolo voice ' : 'Solo voice ') + voiceId,
-      () => state.toggleVoiceSolo(voiceId));
-  }
+  addItem((state.abcMutedVoices.has(voiceId) ? 'Unmute voice ' : 'Mute voice ') + voiceId,
+    () => state.toggleVoiceMute(voiceId));
+  addItem((state.abcSoloVoices.has(voiceId) ? 'Unsolo voice ' : 'Solo voice ') + voiceId,
+    () => state.toggleVoiceSolo(voiceId));
 
   document.body.appendChild(menu);
   _gutterMenuEl = menu;
@@ -341,6 +349,7 @@ function _showGutterMenu(view, x, y, lineDoc) {
     }
   };
   document.addEventListener('mousedown', dismiss, true);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
