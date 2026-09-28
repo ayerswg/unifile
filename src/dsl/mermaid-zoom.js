@@ -211,6 +211,25 @@ export function mountZoomStage(el, svg) {
     zoomAt(r.left + r.width / 2, r.top + r.height / 2, z === 'in' ? 1.4 : 1 / 1.4);
   });
   ctl.addEventListener('dblclick', (e) => e.stopPropagation());
+
+  // ── External control (the phone action bubble: actions.js `zoomStages`) ──
+  stage.addEventListener('uf-mmd-zoom', (e) => {
+    const z = e.detail;
+    if (z === 'fit') { setView(null); return; }
+    const r = rect();
+    zoomAt(r.left + r.width / 2, r.top + r.height / 2, z === 'in' ? 1.4 : 1 / 1.4);
+  });
+}
+
+/**
+ * Zoom every mounted stage under `root` ('fit' | 'in' | 'out') — for callers
+ * that don't hold a stage (the phone action bubble).
+ * @returns {number} stages reached
+ */
+export function zoomStages(z, root = document) {
+  const stages = root.querySelectorAll('.uf-mmd-stage');
+  stages.forEach(s => s.dispatchEvent(new CustomEvent('uf-mmd-zoom', { detail: z })));
+  return stages.length;
 }
 
 /** The diagram's own box from its viewBox (mermaid always sets one). */

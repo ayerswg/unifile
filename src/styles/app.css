@@ -2143,6 +2143,11 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   width: max(100%, 100cqw - 64px);
   margin-left: calc((100% - max(100%, 100cqw - 64px)) / 2);
 }
+/* A sole diagram is the whole page: no section padding under it (the 2em
+   webpage-section bottom pad otherwise overflows the pane by exactly that
+   much → a scrollbar on a pan/zoom surface), and the pane never scrolls. */
+.uf-webpage-section:has(> .uf-web-part:only-child > .uf-mmd-stage.is-sole) { padding-bottom: 0; }
+.preview-pane:has(.uf-mmd-stage.is-sole) { overflow: hidden; }
 .uf-mmd-zoomctl {
   position: absolute;
   right: 10px;
