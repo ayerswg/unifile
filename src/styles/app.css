@@ -4769,3 +4769,58 @@ noscript .noscript-wrap {
     padding-top: env(safe-area-inset-top, 0px);
   }
 }
+
+/* ── {slides}: the deck preview (src/dsl/slides.js) ─────────────────────────
+   Marpit engraves one inline <svg viewBox="0 0 1280 720"> per slide; the svg
+   scales to the column, so the same markup is the preview, the HTML export and
+   the PDF.  Like the ABC score, the deck breaks out of the 800px prose column
+   (container-query units → the pane's width, capped) so slides read large. */
+.preview-content .uf-deck {
+  width: clamp(100%, 100cqw - 64px, 1100px);
+  margin-left: calc((100% - clamp(100%, 100cqw - 64px, 1100px)) / 2);
+}
+.uf-deck div.marpit > svg[data-marpit-svg] {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 0 20px;
+  border-radius: 6px;
+  box-shadow: 0 4px 22px rgba(0, 0, 0, .45);
+  cursor: pointer;
+  background: #fff;
+}
+.uf-deck div.marpit > svg[data-marpit-svg]:last-child { margin-bottom: 0; }
+@media (max-width: 640px) {
+  .uf-deck div.marpit > svg[data-marpit-svg] { border-radius: 4px; margin-bottom: 12px; }
+}
+
+/* Editor: the thumbnail block under a `![alt](name.png)` reference line —
+   the image lives in data.assets, never as base64 in the text. */
+.cm-slide-img {
+  padding: 4px 0 6px 2ch;
+  line-height: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.cm-slide-img img {
+  display: block;
+  max-height: 120px;
+  max-width: min(320px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}
+.cm-slide-img.missing {
+  line-height: 1.5;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Tools menu: a DSL action's text glyph sits where the SVG icons do. */
+.tools-menu-glyph {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}

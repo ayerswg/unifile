@@ -38,6 +38,12 @@
   pinned: true
   excerpt: Architectural blueprints from plain text — install or download.
 
+- title: "{slides}"
+  url: /slides/
+  kind: app
+  pinned: true
+  excerpt: Marp-style slide decks from Markdown with PDF/HTML export — install or download.
+
 # ── Direct links (searchable) ──
 - title: "{document} — download (.html)"
   url: /dl/unifile.md.html
@@ -88,3 +94,13 @@
   url: /pwa-dft/
   kind: pwa
   excerpt: Install {draft} as an offline drafting app.
+
+- title: "{slides} — download (.html)"
+  url: /dl/unifile.sld.html
+  kind: download
+  excerpt: Standalone single-file slide deck editor; save and open offline.
+
+- title: "{slides} — install (PWA)"
+  url: /pwa-sld/
+  kind: pwa
+  excerpt: Install {slides} as an offline presentation app.

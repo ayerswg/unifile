@@ -74,3 +74,18 @@
     - Route playback to an external MIDI port (Web MIDI)
   pwa: /pwa-abc/
   download: /dl/unifile.abc.html
+
+- id: slides
+  title: "{slides}"
+  tagline: Slide decks from Markdown — themed, imaged, versioned, offline.
+  overview: >
+    A Marp-style presentation editor. Write Markdown, put `---` between
+    slides, drop images straight into the text, and see the deck as you type —
+    with git-style version history inside the document and one-click PDF or
+    self-contained HTML export.
+  features:
+    - Works 100% offline — no server, no account, no sync
+    - Marp Markdown — themes, backgrounds, per-slide directives
+    - PDF and single-file HTML export (click to present)
+  pwa: /pwa-sld/
+  download: /dl/unifile.sld.html

@@ -306,6 +306,46 @@ export class Preview {
     // Explicit `layout:` in front matter overrides this default.
     const layout = meta.layout ?? (model === 'flow' ? 'webpage' : null);
 
+    // ── 0. Whole-document DSL ({slides}: the deck IS the document) ─────────
+    // Bypasses the model / layout machinery entirely — no `===` splitting, no
+    // per-section rendering; the DSL gets the full source (front matter too,
+    // Marpit reads its directives from it).
+    const wholeDsl = this._wholeDocumentDsl();
+    if (wholeDsl) {
+      this._teardownCurrent();
+      this._lastContent  = content;
+      this._lastModel    = model;
+      this._lastRenderer = `dsl:${wholeDsl.id}`;
+
+      const spinnerTimer = setTimeout(() => {
+        if (this._lastContent === content)
+          this.content.innerHTML = '<div class="preview-spinner"></div>';
+      }, 300);
+
+      const savedScrollTop = this.pane.scrollTop;
+      try {
+        await wholeDsl.render(content, this.content, { signal: ac.signal, cursorPos: this._cursorPos });
+        if (ac.signal.aborted) return;
+        if (this._suppressScrollAfterRender) {
+          // Typing: keep the user's scroll; only reveal the slide when the
+          // cursor's slide is off-screen (mirrors the layout branch below).
+          this.pane.scrollTop = savedScrollTop;
+          const _pos = this._cursorPos ?? 0;
+          requestAnimationFrame(() => this._scrollToOffset(_pos, 'nearest', true));
+        } else {
+          this._scrollToOffset(this._cursorPos ?? 0);
+        }
+        this._suppressScrollAfterRender = false;
+      } catch (err) {
+        if (ac.signal.aborted) return;
+        wholeDsl.teardown?.(this.content);
+        this.content.innerHTML = `<pre class="error">${_esc(wholeDsl.id)} render error:\n${_esc(err.message)}</pre>`;
+      } finally {
+        clearTimeout(spinnerTimer);
+      }
+      return;
+    }
+
     // ── 1. Non-flow primary model → model renderer ─────────────────────────
     if (model !== 'flow') {
       const renderer = _MODEL_RENDERERS[model];
@@ -452,10 +492,20 @@ export class Preview {
     if (key.startsWith('flow:')) {
       const layout = key.slice(5);
       _FLOW_LAYOUT_RENDERERS[layout]?.teardown(this.content);
+    } else if (key.startsWith('dsl:')) {
+      this._wholeDocumentDsl()?.teardown?.(this.content);
     } else {
       _MODEL_RENDERERS[key]?.teardown(this.content);
     }
     this._lastRenderer = null;
+  }
+
+  /** The build's DSL when it renders the whole document itself (`wholeDocument`), else null. */
+  _wholeDocumentDsl() {
+    try {
+      const dsl = getDSL(state.data?.dslType ?? 'markdown');
+      return dsl.wholeDocument ? dsl : null;
+    } catch { return null; }
   }
 
   /**
@@ -467,7 +517,10 @@ export class Preview {
     const layout = this._lastRenderer?.startsWith('flow:')
       ? this._lastRenderer.slice(5)
       : null;
-    if (layout === 'document') {
+    const wholeDsl = this._lastRenderer?.startsWith('dsl:') ? this._wholeDocumentDsl() : null;
+    if (wholeDsl?.print) {
+      wholeDsl.print(state.currentContent);
+    } else if (layout === 'document') {
       printDocument(this.content);
     } else if (layout === 'slides') {
       printSlides(this.content);

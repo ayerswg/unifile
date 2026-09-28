@@ -24,6 +24,7 @@ import {
   markBackedUp,
   loadBackupMark,
 } from '../core/storage.js';
+import { pruneAssets } from '../core/assets.js';
 import { isEncrypted, decryptData } from '../core/crypto.js';
 import { getDSL } from '../dsl/registry.js';
 import { parseGlobalFrontMatter, serializeGlobalFrontMatter } from '../core/front-matter.js';
@@ -123,6 +124,10 @@ export class App {
     // 5d. Local data file: save/open the document + full history as a small
     //     plain-text `.unifile.json` (deltas + content, no app/soundfont).
     state.on('save-data-file', () => this._saveDataFile());
+    // A DSL stored a document asset (an image dropped into a {slides} deck):
+    // persist the data object now — assets live outside the text, so no
+    // content-change / commit will carry them to storage.
+    state.on('assets-change', () => this._saveQuine(this._currentDataObject()));
     state.on('open-data-file', () => this._openDataFile());
 
     // 5e. Commit diff view: toggle `data-diff` on the shell so CSS swaps the
@@ -739,12 +744,21 @@ export class App {
 
   /** Build the canonical data object (state.data merged with the live VCS state). */
   _currentDataObject() {
-    return {
+    const vcsData = state.vcs?.serialize?.() ?? {};
+    const data = {
       ...state.data,
-      ...(state.vcs?.serialize?.() ?? {}),
+      ...vcsData,
       currentContent: state.currentContent,
       dslType: state.data?.dslType,
     };
+    // Document assets (images referenced by name from the text) are not
+    // versioned: drop the ones nothing mentions any more — the serialized
+    // history counts as a mention, so an image an old commit shows survives.
+    if (data.assets && Object.keys(data.assets).length) {
+      data.assets = pruneAssets(data.assets, [state.currentContent, JSON.stringify(vcsData)]);
+      if (data.assets !== state.data?.assets) state.data.assets = data.assets;
+    }
+    return data;
   }
 
   /** Per-document key for the backup watermark (PWA docId, else the page URL). */

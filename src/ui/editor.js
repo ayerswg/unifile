@@ -781,6 +781,32 @@ export class Editor {
       if (!mobile) this._view.focus();
     }));
 
+    // A DSL asked for a block of text (an image reference) at `at`, else at the
+    // cursor, on its own line(s): a blank line is replaced in place, a line
+    // with content gets the block after it, and a blank line is kept on both
+    // sides.  Lands in the undo history like any typing.
+    this._unsub.push(state.on('editor-insert-block', ({ text, at }) => {
+      if (!this._view || !text) return;
+      const doc = this._view.state.doc;
+      const pos = Math.max(0, Math.min(at ?? this._view.state.selection.main.head, doc.length));
+      const line = doc.lineAt(pos);
+      const prevBlank = line.number === 1 || !doc.line(line.number - 1).text.trim();
+      const next = line.number < doc.lines ? doc.line(line.number + 1) : null;
+      const nextBlank = !next || !next.text.trim();
+      let from, to, insert;
+      if (!line.text.trim()) {
+        from = line.from; to = line.to;
+        insert = (prevBlank ? '' : '\n') + text + (nextBlank ? '' : '\n');
+      } else {
+        from = to = line.to;
+        insert = '\n\n' + text + (nextBlank ? '' : '\n');
+      }
+      const head = from + insert.length - (nextBlank ? 0 : 1);
+      const mobile = window.matchMedia('(max-width: 640px)').matches;
+      this._view.dispatch({ changes: { from, to, insert }, selection: { anchor: head }, scrollIntoView: !mobile });
+      if (!mobile) this._view.focus();
+    }));
+
     // A DSL surface (the piano roll) edited the source directly → dispatch the
     // text changes through CM so they land in the undo history and flow out via
     // the normal updateListener → state.setContent path.  Changes are given in

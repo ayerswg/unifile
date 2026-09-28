@@ -40,6 +40,11 @@ export function currentDslId() {
   return state.activeDslId ?? state.data?.dslType ?? 'markdown';
 }
 
+/** A DSL's own actions (`dsl.actions: [{ id, label, glyph, run }]`), if any. */
+export function dslActions(dslId = currentDslId()) {
+  try { return getDSL(dslId)?.actions ?? []; } catch { return []; }
+}
+
 /**
  * The action a fresh install runs on a plain tap of the bubble, per DSL and
  * view.  'menu' = the tap opens the bubble's own grid (the commit view: pick a
@@ -57,7 +62,7 @@ export function defaultPrimary(dslId, view = 'editor') {
 }
 
 /** Glyphs for the DSL exporters, by exporter key. */
-const EXPORT_GLYPHS = { svg: '⬡', pdf: '▤', midi: '♬', png: '▣', epub: '▥', docx: '▤', pptx: '▧' };
+const EXPORT_GLYPHS = { svg: '⬡', pdf: '▤', midi: '♬', png: '▣', epub: '▥', docx: '▤', pptx: '▧', html: '⊞' };
 
 const mk = (a) => ({ key: a.label, disabled: false, star: true, ...a });
 
@@ -119,6 +124,10 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
         glyph: '▦', run: () => state.togglePianoRoll() }));
     }
   }
+  // The DSL's own verbs (e.g. {slides}: Insert image… → the photo library).
+  for (const a of dslActions(dslId)) {
+    acts.push(mk({ id: a.id, label: a.label, glyph: a.glyph ?? '·', run: () => a.run({ editor }) }));
+  }
   // Indent / outdent the selected lines — every text app, since a soft keyboard
   // has no Tab / Shift-Tab.
   acts.push(mk({ id: 'indent', label: 'Indent', glyph: '⇥', run: () => { editor?.indent(); } }));
@@ -149,6 +158,9 @@ export function listMenuActions(ctx = {}) {
         run: () => showNewDocumentModal(ctx.handlers) });
   add({ id: 'rename', label: 'Rename document…', glyph: '✎', group: 'document', run: () => renameDoc() });
   add({ id: 'help', label: 'Help…', glyph: '?', group: 'document', run: () => showDslHelpModal(dslId) });
+  for (const a of dslActions(dslId)) {
+    add({ id: `dsl:${a.id}`, label: a.label, glyph: a.glyph ?? '·', group: 'document', run: () => a.run(ctx) });
+  }
   add({ id: 'blame', label: 'Blame view', glyph: '⌕', group: 'document', disabled: !hasCommits,
         run: () => state.activePanel === PANELS.BLAME ? state.closePanel() : state.openPanel(PANELS.BLAME) });
 
