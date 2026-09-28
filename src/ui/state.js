@@ -43,6 +43,14 @@ export const VIEW_MODES = {
   SPLIT: 'split'
 };
 
+// How SPLIT lays the two panes out (desktop only — phones never split):
+//   vertical   = side by side, a vertical divider (editor left, preview right)
+//   horizontal = stacked, a horizontal divider (preview on top, text below)
+export const SPLIT_ORIENTATIONS = {
+  VERTICAL: 'vertical',
+  HORIZONTAL: 'horizontal'
+};
+
 // Panel types (secondary panels overlaid on the main view)
 export const PANELS = {
   NONE: null,
@@ -77,6 +85,9 @@ class AppState extends EventBus {
 
     /** @type {string} Active view mode */
     this.viewMode = VIEW_MODES.SPLIT;
+
+    /** @type {string} Split layout: side by side ('vertical') or stacked ('horizontal') */
+    this.splitOrientation = SPLIT_ORIENTATIONS.VERTICAL;
 
     /** @type {string|null} Active secondary panel */
     this.activePanel = PANELS.NONE;
@@ -208,6 +219,19 @@ class AppState extends EventBus {
     this.viewMode = mode;
     this.emit('view-mode-change', mode);
     this.emit('change', this);
+  }
+
+  setSplitOrientation(orientation) {
+    if (!Object.values(SPLIT_ORIENTATIONS).includes(orientation)) return;
+    if (orientation === this.splitOrientation) return;
+    this.splitOrientation = orientation;
+    this.emit('split-orientation-change', orientation);
+    this.emit('change', this);
+  }
+
+  toggleSplitOrientation() {
+    this.setSplitOrientation(this.splitOrientation === SPLIT_ORIENTATIONS.HORIZONTAL
+      ? SPLIT_ORIENTATIONS.VERTICAL : SPLIT_ORIENTATIONS.HORIZONTAL);
   }
 
   openPanel(panel) {
