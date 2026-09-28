@@ -10,11 +10,7 @@ import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
 import { applyTheme } from './theme.js';
 import { checkForUpdate } from './update-check.js';
 
-// Stamped by esbuild `define` in build.mjs (from the latest git tag); guard for
-// any non-built context (e.g. raw ESM in tests).
-const APP_VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
-const APP_COMMIT = (typeof UNIFILE_COMMIT !== 'undefined') ? UNIFILE_COMMIT : '';
-const APP_COMMIT_AT = (typeof UNIFILE_COMMIT_AT !== 'undefined') ? UNIFILE_COMMIT_AT : '';
+import { BUILD, isDevChannel, formatBuild, formatCommitAt } from '../core/build-info.js';
 
 export class SettingsPanel {
   /** @param {HTMLElement} container */
@@ -153,9 +149,10 @@ export class SettingsPanel {
             <!-- ── About ──────────────────────────────────────────────── -->
             <div class="settings-section-label">About</div>
             <p class="settings-about">
-              Unifile <span class="settings-version">v${escHtml(APP_VERSION)}</span>${APP_COMMIT
-                ? ` · <span class="settings-version">${escHtml(APP_COMMIT)}</span>${APP_COMMIT_AT
-                  ? ` · ${escHtml(APP_COMMIT_AT.slice(0, 16).replace('T', ' '))}Z` : ''}` : ''}
+              Unifile <span class="settings-version">v${escHtml(BUILD.version)}</span>${BUILD.commit
+                ? ` · <span class="settings-version">${escHtml(BUILD.commit)}</span>${BUILD.commitAt
+                  ? ` · ${escHtml(formatCommitAt(BUILD.commitAt))}` : ''}` : ''}${isDevChannel()
+                ? ' · <span class="settings-channel">dev channel — every push updates</span>' : ''}
             </p>
           </div>
 
@@ -242,11 +239,13 @@ export class SettingsPanel {
       const r = await checkForUpdate({ force: true });
       switch (r.status) {
         case 'update':
-          statusEl.textContent = `Update available: v${r.remote} — see the banner to apply.`;
+          statusEl.textContent = isDevChannel()
+            ? `New build ${formatBuild(r.remote, { commit: true })} — updating…`
+            : `Update available: v${r.remote.version} — see the banner to apply.`;
           statusEl.classList.add('is-update');
           break;
         case 'current':
-          statusEl.textContent = `You're on the latest (v${r.current}).`;
+          statusEl.textContent = `You're on the latest (${formatBuild(r.local, { version: true })}).`;
           break;
         case 'file':
           statusEl.textContent = "Can't check from a downloaded file — open the hosted app or PWA.";

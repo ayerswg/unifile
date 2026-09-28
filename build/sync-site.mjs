@@ -20,6 +20,8 @@ import { execSync } from 'child_process';
 import { cp, mkdir, rm, copyFile, access, writeFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { cmpSemver } from '../src/core/build-info.js';
+import { detectCommit, detectChannel } from './build-id.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -35,30 +37,6 @@ function detectVersion() {
   } catch { /* no tags */ }
   try { return JSON.parse(execSync('cat package.json', { cwd: ROOT }).toString()).version || '0.0.0'; }
   catch { return '0.0.0'; }
-}
-
-// --- SemVer 2.0 precedence (mirror of src/ui/update-check.js) -----------------
-function _parse(v) {
-  const [core, pre] = String(v).trim().replace(/^v/, '').split('-');
-  const n = core.split('.').map(x => parseInt(x, 10) || 0);
-  return { core: [n[0] || 0, n[1] || 0, n[2] || 0], pre: pre ? pre.split('.') : null };
-}
-function _cmp(a, b) {
-  const A = _parse(a), B = _parse(b);
-  for (let i = 0; i < 3; i++) if (A.core[i] !== B.core[i]) return A.core[i] > B.core[i] ? 1 : -1;
-  if (!A.pre && !B.pre) return 0;
-  if (!A.pre) return 1;
-  if (!B.pre) return -1;
-  for (let i = 0; i < Math.max(A.pre.length, B.pre.length); i++) {
-    const x = A.pre[i], y = B.pre[i];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
-    if (xn && yn) { if (+x !== +y) return +x > +y ? 1 : -1; }
-    else if (xn !== yn) return xn ? -1 : 1;
-    else if (x !== y) return x > y ? 1 : -1;
-  }
-  return 0;
 }
 
 /**
@@ -81,28 +59,10 @@ function detectChannels() {
     if (pkg) tags.push(pkg);
   } catch { /* ignore */ }
   if (!tags.length) { const v = detectVersion(); return { stable: v, latest: v }; }
-  const sorted = tags.slice().sort((a, b) => _cmp(b, a)); // desc
+  const sorted = tags.slice().sort((a, b) => cmpSemver(b, a)); // desc
   const latest = sorted[0];
   const stable = sorted.find(v => !v.includes('-')) ?? latest;
   return { stable, latest };
-}
-
-/** 7-char commit hash + commit time (UTC) — mirrors detectCommit in build.mjs. */
-function detectCommit() {
-  let sha = process.env.CF_PAGES_COMMIT_SHA || null;
-  if (!sha) {
-    try {
-      sha = execSync('git rev-parse HEAD', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
-        .toString().trim() || null;
-    } catch { /* not a git checkout */ }
-  }
-  let at = null;
-  try {
-    at = execSync('git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd', {
-      cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TZ: 'UTC' }
-    }).toString().trim() || null;
-  } catch { /* ditto */ }
-  return { hash: sha ? sha.slice(0, 7) : '', at: at || '' };
 }
 
 const FILES = [
@@ -160,18 +120,23 @@ async function main() {
     console.log(`  ✓ docs/${dst}/`);
   }
 
-  // 4. Publish the version channels so installed/hosted apps can offer an upgrade.
-  //    `version` (= stable) is kept for backward-compat with older clients that
-  //    read a single field; new clients pick `stable` or `latest` per the user's
-  //    release-candidate opt-in (Settings).
+  // 4. Publish the build identity so installed/hosted apps can offer an upgrade
+  //    (src/core/build-info.js reads this):
+  //      version/stable/latest  the semantic version (`version` = stable is
+  //                             kept for older clients that read one field)
+  //      commit / commitAt      7-char hash + commit time — THE version on the
+  //                             dev channel, where every push deploys untagged
+  //      channel                'stable' (main) | 'dev' (the dev branch, previews)
+  //      released               this sync's timestamp
   const { stable, latest } = detectChannels();
   const commit = detectCommit();
+  const channel = detectChannel();
   await writeFile(join(DOCS, 'version.json'),
     JSON.stringify({
       version: stable, stable, latest, released: new Date().toISOString(),
-      commit: commit.hash, commitAt: commit.at
+      commit: commit.hash, commitAt: commit.at, channel
     }, null, 2) + '\n', 'utf8');
-  console.log(`  ✓ docs/version.json  (stable v${stable}, latest v${latest}, commit ${commit.hash || 'n/a'})`);
+  console.log(`  ✓ docs/version.json  (stable v${stable}, latest v${latest}, commit ${commit.hash || 'n/a'}, ${channel})`);
 
   console.log('\nSite synced. Commit docs/ and push to publish on GitHub Pages.');
 }

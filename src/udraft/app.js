@@ -21,7 +21,6 @@
  * CLAUDE.md "Mobile / iOS" before touching any of it.
  */
 
-/* global UNIFILE_VERSION, UNIFILE_BUILT, UNIFILE_COMMIT, UNIFILE_COMMIT_AT */
 
 import {
   IS_QUINE, captureTemplate, loadEmbeddedData, generateQuine,
@@ -39,11 +38,13 @@ import { parseDocument, formatArea, formatElevation, tokenizeLine, STATEMENT_KEY
 import { layoutDocument } from '../core/udraft/layout.js';
 import { renderFloorSvg, renderExportSvg, renderPrintSheets, exportStyles, scopeExtent, siteRecords } from '../core/udraft/svg.js';
 import { GUIDE_MD } from './guide-content.js';
+import { BUILD, isDevChannel, newerBuild, remoteBuild, formatBuild, formatCommitAt } from '../core/build-info.js';
 
-const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
-const BUILT = (typeof UNIFILE_BUILT !== 'undefined') ? UNIFILE_BUILT : 'dev';
-const COMMIT = (typeof UNIFILE_COMMIT !== 'undefined') ? UNIFILE_COMMIT : '';
-const COMMIT_AT = (typeof UNIFILE_COMMIT_AT !== 'undefined') ? UNIFILE_COMMIT_AT : '';
+// Build identity (version · commit · channel) — src/core/build-info.js.
+const VERSION = BUILD.version;
+const BUILT = BUILD.built || 'dev';
+const COMMIT = BUILD.commit;
+const COMMIT_AT = BUILD.commitAt;
 const DOC_ID = 'udraft';
 
 const SEED = `---
@@ -270,8 +271,16 @@ export class UDraftApp {
     setTimeout(async () => {
       try {
         const remote = await this._fetchRemoteVersion();
-        if (this._isNewer(remote)) {
-          this._toast(`v${remote} is available — tap to update`, {
+        const reason = this._isNewer(remote);
+        if (!reason) return;
+        if (isDevChannel()) {
+          // Dev channel: the commit is the version and every push is meant to
+          // be run — apply it without being asked; the reload lands once the
+          // new worker takes control (controllerchange above).
+          this._toast(`New build ${formatBuild(remote, { commit: true })} — updating…`, { duration: 10000 });
+          this._applyUpdate();
+        } else {
+          this._toast(`v${remote.version} is available — tap to update`, {
             duration: 10000,
             onTap: () => this._applyUpdate(),
           });
@@ -280,16 +289,17 @@ export class UDraftApp {
     }, 2500);
   }
 
+  /** The published build (version.json, cache-busted) as a build-info object. */
   async _fetchRemoteVersion() {
     const res = await fetch(`../version.json?_=${Date.now()}`, { cache: 'no-store' });
-    const info = await res.json();
-    return info.latest ?? info.stable ?? info.version;
+    return remoteBuild(await res.json());
   }
 
-  _isNewer(remote) {
-    return String(remote).localeCompare(String(VERSION), undefined,
-      { numeric: true, sensitivity: 'base' }) > 0;
-  }
+  /**
+   * 'version' | 'commit' | null — stable compares versions (SemVer), the dev
+   * channel compares commits (a later commit is newer, whatever the tag).
+   */
+  _isNewer(remote) { return newerBuild(remote, BUILD); }
 
   async _applyUpdate() {
     const reg = await navigator.serviceWorker?.getRegistration();
@@ -1672,7 +1682,8 @@ export class UDraftApp {
       <div class="wr-sheet-body">
         <p><b>{draft}</b> v${esc(VERSION)}
           <span class="wr-mut">· build ${esc(BUILT)}${COMMIT
-            ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(COMMIT_AT.slice(0, 16).replace('T', ' '))}Z)` : ''}` : ''}</span></p>
+            ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(formatCommitAt(COMMIT_AT))})` : ''}` : ''}${isDevChannel()
+            ? ' · dev channel — every push updates' : ''}</span></p>
         <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'
           : 'App mode — your document is stored on this device (IndexedDB).'}</p>
         <p class="wr-mut">Fully offline. Nothing leaves your device. <br>unifile.app</p>
@@ -1687,8 +1698,13 @@ export class UDraftApp {
     status.textContent = 'Checking…';
     try {
       const remote = await this._fetchRemoteVersion();
-      if (!this._isNewer(remote)) { status.textContent = `Up to date (v${VERSION}).`; return; }
-      status.textContent = `v${remote} available.`;
+      if (!this._isNewer(remote)) {
+        status.textContent = `Up to date (${formatBuild(BUILD, { version: true })}).`;
+        return;
+      }
+      status.textContent = isDevChannel()
+        ? `New build ${formatBuild(remote, { commit: true })} available.`
+        : `v${remote.version} available.`;
       btn.textContent = 'Update & reload';
       btn.onclick = () => {
         btn.textContent = 'Updating…';
