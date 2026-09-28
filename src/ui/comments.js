@@ -26,6 +26,7 @@ import { EditorView, Decoration, WidgetType } from '@codemirror/view';
 import { state } from './state.js';
 import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
 import { shortHash } from '../core/hash.js';
+import { buildVoiceMap } from '../core/abc-voices.js';
 
 // ---------------------------------------------------------------------------
 // StateEffects
@@ -53,6 +54,29 @@ export const setActiveThreadEffect = StateEffect.define();
 
 let _threadDataVersion = 0;
 export function bumpThreadVersion() { _threadDataVersion++; }
+
+// ---------------------------------------------------------------------------
+// ABC voice of a line (shared by the gutter's M/S marks and the accordion's
+// Mute / Solo row).  The voice map is cached per (immutable) doc instance —
+// the gutter asks per visible line, so don't rebuild it for each one.
+// ---------------------------------------------------------------------------
+
+let _docVmapCache = { doc: null, vmap: null };
+function _docVoiceMap(doc) {
+  if (_docVmapCache.doc !== doc) {
+    _docVmapCache = { doc, vmap: buildVoiceMap(doc.toString()) };
+  }
+  return _docVmapCache.vmap;
+}
+
+/** The voice a doc line belongs to (via `V:` lines OR inline `[V:id]`), or null. */
+export function voiceIdAtLine(doc, line) {
+  if ((state.data?.dslType) !== 'abcjs') return null;
+  // Blank / `%` comment / `%%` directive lines never sound — no voice for them.
+  const t = line.text.trim();
+  if (t === '' || t.startsWith('%')) return null;
+  return _docVoiceMap(doc).at(line.from);
+}
 
 // ---------------------------------------------------------------------------
 // Public data helpers
@@ -254,6 +278,12 @@ class AccordionWidget extends WidgetType {
     const body = document.createElement('div');
     body.className = 'cm-accordion-body';
 
+    // ABC voice line → Mute / Solo toggles for that voice sit at the top of the
+    // fold-out (the old floating gutter menu carried these).
+    const line = view.state.doc.lineAt(this.anchorPos);
+    const voiceId = voiceIdAtLine(view.state.doc, line);
+    if (voiceId != null) this._renderVoiceRow(el, voiceId);   // its own element: the forms below reset body.innerHTML
+
     if (this.activeThreadId === null) {
       this._renderNewForm(body, view);
     } else {
@@ -264,6 +294,29 @@ class AccordionWidget extends WidgetType {
     }
 
     el.appendChild(body);
+  }
+
+  _renderVoiceRow(host, voiceId) {
+    const row = document.createElement('div');
+    row.className = 'ct-voice-row';
+    const paint = () => {
+      const muted = state.abcMutedVoices.has(voiceId);
+      const solo  = state.abcSoloVoices.has(voiceId);
+      row.innerHTML = `
+        <span class="ct-voice-label">Voice ${escHtml(String(voiceId))}</span>
+        <button type="button" class="ct-voice-btn${muted ? ' on' : ''}" data-v="mute" aria-pressed="${muted}">${muted ? 'Unmute' : 'Mute'}</button>
+        <button type="button" class="ct-voice-btn${solo ? ' on' : ''}" data-v="solo" aria-pressed="${solo}">${solo ? 'Unsolo' : 'Solo'}</button>`;
+    };
+    paint();
+    row.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ct-voice-btn');
+      if (!btn) return;
+      e.stopPropagation();
+      if (btn.dataset.v === 'mute') state.toggleVoiceMute(voiceId);
+      else state.toggleVoiceSolo(voiceId);
+      paint();
+    });
+    host.appendChild(row);
   }
 
   _renderNewForm(body, view) {
@@ -300,7 +353,9 @@ class AccordionWidget extends WidgetType {
       view.dispatch({ effects: closeAccordionEffect.of(null) });
     });
 
-    setTimeout(() => bodyEl?.focus(), 0);
+    // Focus the field on desktop; on touch, leave the keyboard down until the
+    // user taps into it (a rail tap shouldn't pop the keyboard by itself).
+    if (!window.matchMedia('(pointer: coarse)').matches) setTimeout(() => bodyEl?.focus(), 0);
   }
 
   _renderThread(body, thread, view) {
