@@ -10,8 +10,9 @@
  *                is nearest.  While dragging, dashed ghosts mark the corners.
  *
  * The bubble is CONTEXTUAL to the pane that is showing (actions.js
- * listBubbleActions): editor = text/music verbs, render = play (ABC only —
- * otherwise the bubble hides), history = the branches.  In the history view
+ * listBubbleActions): editor = text/music verbs, render = play (ABC) or zoom
+ * to fit / in / out (Mermaid) — otherwise the bubble hides, history = the
+ * branches.  In the history view
  * the bubble elongates into a pill reading `{⑂} <branch>`.  File-level
  * operations and settings are NOT here — they're under the title dropdown.
  *
