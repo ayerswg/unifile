@@ -7,7 +7,7 @@
  *   • listBubbleActions(ctx, view) → the round action button (action-fab.js),
  *     CONTEXTUAL to the pane that is showing:
  *       editor → text/music verbs: play · one measure per line · piano roll
- *                (ABC), undo · redo
+ *                (ABC), indent · outdent, undo · redo
  *       render → play / pause (ABC) — nothing for other DSLs (bubble hides)
  *       commit → the branches (tap one to switch), New branch…, Commit…
  *                (the bubble itself reads `{⑂} <branch>` in this view)
@@ -46,7 +46,10 @@ export function currentDslId() {
 export function defaultPrimary(dslId, view = 'editor') {
   if (view === 'commit') return 'menu';
   if (dslId === 'abcjs') return 'play';
-  return view === 'editor' ? 'undo' : 'menu';
+  if (view !== 'editor') return 'menu';
+  // Mermaid is indentation-shaped (subgraphs, nested nodes) and a soft keyboard
+  // has no Tab — so the diagram app's tap is Indent, not Undo.
+  return dslId === 'mermaid' ? 'indent' : 'undo';
 }
 
 /** Glyphs for the DSL exporters, by exporter key. */
@@ -106,6 +109,10 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
         glyph: '▦', run: () => state.togglePianoRoll() }));
     }
   }
+  // Indent / outdent the selected lines — every text app, since a soft keyboard
+  // has no Tab / Shift-Tab.
+  acts.push(mk({ id: 'indent', label: 'Indent', glyph: '⇥', run: () => { editor?.indent(); } }));
+  acts.push(mk({ id: 'outdent', label: 'Outdent', glyph: '⇤', run: () => { editor?.outdent(); } }));
   acts.push(mk({ id: 'undo', label: 'Undo', glyph: '↶', run: () => { editor?.undo(); } }));
   acts.push(mk({ id: 'redo', label: 'Redo', glyph: '↷', run: () => { editor?.redo(); } }));
   return acts;

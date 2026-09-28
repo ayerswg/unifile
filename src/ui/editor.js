@@ -20,7 +20,7 @@ import { EditorView, keymap, Decoration,
          rectangularSelection, crosshairCursor,
          highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
 import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder, Text } from '@codemirror/state';
-import { history, defaultKeymap, historyKeymap, indentWithTab, undo, redo } from '@codemirror/commands';
+import { history, defaultKeymap, historyKeymap, indentWithTab, undo, redo, indentMore, indentLess } from '@codemirror/commands';
 import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
@@ -1038,6 +1038,14 @@ export class Editor {
   /** Undo / redo through CM's history (the phone action button's Undo/Redo). */
   undo() { return this._view ? undo(this._view) : false; }
   redo() { return this._view ? redo(this._view) : false; }
+
+  /**
+   * Indent / outdent the selected lines by one indent unit (the phone action
+   * button's Indent/Outdent — a soft keyboard has no Tab / Shift-Tab).  Same
+   * commands `indentWithTab` binds on hardware keyboards.
+   */
+  indent()  { return this._view ? indentMore(this._view) : false; }
+  outdent() { return this._view ? indentLess(this._view) : false; }
 
   /**
    * Run the active DSL's source formatter (ABC: one measure per line) over the
