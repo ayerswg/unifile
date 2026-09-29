@@ -11,6 +11,7 @@
  *   dist/pwa-md/           → docs/pwa-md/                  (Markdown PWA)
  *   dist/pwa-mer/          → docs/pwa-mer/                 (Mermaid PWA)
  *   dist/pwa-abc/          → docs/pwa-abc/                 (ABC PWA)
+ *   … and pwa-upub / pwa-dft / pwa-sld likewise
  *
  * Run:  npm run build:site
  * (builds every dedicated variant first, then copies)
@@ -71,6 +72,7 @@ const FILES = [
   ['unifile.abc.html',  'dl/unifile.abc.html'],
   ['unifile.upub.html', 'dl/unifile.upub.html'],
   ['unifile.dft.html',  'dl/unifile.dft.html'],
+  ['unifile.sld.html',  'dl/unifile.sld.html'],
 ];
 const DIRS = [
   ['pwa-md',   'pwa-md'],
@@ -78,6 +80,7 @@ const DIRS = [
   ['pwa-abc',  'pwa-abc'],
   ['pwa-upub', 'pwa-upub'],
   ['pwa-dft',  'pwa-dft'],
+  ['pwa-sld',  'pwa-sld'],
 ];
 
 // Stale artifacts to delete from docs/ (the universal multi-DSL build is gone,

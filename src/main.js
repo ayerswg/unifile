@@ -9,12 +9,13 @@
  * don't end up in the bundle.
  *
  * Dev only: import the DSLs that ship as dedicated builds (markdown,
- * mermaid, abcjs) for local convenience.
+ * mermaid, abcjs, slides) for local convenience.
  */
 
 import './dsl/markdown.js';
 import './dsl/abcjs.js';
 import './dsl/mermaid.js';
+import './dsl/slides.js';
 
 import { App } from './ui/app.js';
 

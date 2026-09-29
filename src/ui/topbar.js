@@ -18,10 +18,15 @@
  */
 
 import { state, PANELS } from './state.js';
+
+/** A DSL's own actions (`dsl.actions: [{ id, label, glyph, run }]`), if any. */
+function dslActions(dslId) {
+  try { return getDSL(dslId)?.actions ?? []; } catch { return []; }
+}
 import { shortHash } from '../core/hash.js';
 import { loadUserPrefs, loadBackupMark } from '../core/storage.js';
 import { showArchivedCommentsModal } from './comments.js';
-import { listDSLs } from '../dsl/registry.js';
+import { listDSLs, getDSL } from '../dsl/registry.js';
 import {
   getExtensionMeta,
   setTextExtension,
@@ -243,6 +248,10 @@ export class TopBar {
         <li class="tools-menu-item" id="tb-dsl-help" title="Syntax reference for ${escHtml(dslName)}">
           ${iconHelp()} ${escHtml(dslName)} help…
         </li>
+        ${dslActions(activeDslId).map(a => `
+        <li class="tools-menu-item tb-dsl-action" data-action="${escHtml(a.id)}" title="${escHtml(a.label)}">
+          <span class="tools-menu-glyph">${escHtml(a.glyph ?? '·')}</span> ${escHtml(a.label)}
+        </li>`).join('')}
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item${hasCommits ? '' : ' disabled'}" id="tb-blame"
           title="${hasCommits ? 'Blame view (Ctrl+Shift+B)' : 'Available after first commit'}">
@@ -466,6 +475,14 @@ export class TopBar {
       this._syncDropdowns();
       showDslHelpModal(state.activeDslId ?? state.data?.dslType ?? 'markdown');
     });
+
+    // The DSL's own verbs ({slides}: Insert image…).
+    this.el.querySelectorAll('.tb-dsl-action').forEach(li => li.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      const act = dslActions(state.activeDslId ?? state.data?.dslType ?? 'markdown').find(a => a.id === li.dataset.action);
+      act?.run(this.handlers ?? {});
+    }));
 
     // DSL menu items
     this.el.querySelector('#tb-blame')?.addEventListener('click', () => {
@@ -1309,106 +1326,89 @@ clef=none          % no clef / percussion</code></pre>`
     ]
   },
 
-  marp: {
-    name: 'MARP Slides',
-    docsUrl: 'https://marpit.marp.app/',
-    docsLabel: 'Marpit / MARP Docs',
+  slides: {
+    name: 'Slides',
+    docsUrl: 'https://marpit.marp.app/markdown',
+    docsLabel: 'Marpit Markdown reference',
     sections: [
       {
-        title: 'Document Front Matter',
-        content: `<pre><code>---
-marp: true
-theme: default
-paginate: true
----</code></pre>
-<p class="help-note">The opening YAML block configures global slide settings. <code>marp: true</code> enables MARP mode.</p>`
-      },
-      {
+        group: 'Deck',
         title: 'Slides',
-        content: `<pre><code># Slide 1
+        content: `<pre><code># First slide
 
-Content for slide 1.
+Some text.
 
 ---
 
-# Slide 2
+# Second slide
 
-Content for slide 2.</code></pre>
-<p class="help-note"><code>---</code> on its own line separates slides. Regular Markdown is used within each slide.</p>`
+- a bullet
+- another</code></pre>
+<p class="help-note"><code>---</code> on its own line starts a new slide (<code>===</code> works too). Plain Markdown inside — headings, lists, emphasis, code, tables, links. A line break in the text is a line break on the slide.</p>`
       },
       {
-        title: 'Themes',
+        group: 'Deck',
+        title: 'Front Matter',
         content: `<pre><code>---
-theme: default   % Clean light theme
----
----
-theme: gaia      % Dark hero theme
----
----
-theme: uncover   % Minimal light theme
----</code></pre>`
-      },
-      {
-        title: 'Pagination & Header/Footer',
-        content: `<pre><code>---
+title: Quarterly review
+theme: gaia
 paginate: true
-header: My Presentation
-footer: © 2026 My Company
----</code></pre>`
+size: 16:9
+header: "Acme Inc."
+footer: "2026"
+---</code></pre>
+<p class="help-note">The opening YAML block sets the deck-wide directives. <code>theme</code> is <code>default</code>, <code>gaia</code> or <code>uncover</code> (bundled, offline). <code>size</code> is <code>16:9</code> (1280×720) or <code>4:3</code>. <code>headingDivider: 2</code> starts a slide at every <code>#</code>/<code>##</code> without needing <code>---</code>.</p>`
       },
       {
-        title: 'Per-Slide Directives',
+        group: 'Deck',
+        title: 'Per-slide Directives',
         content: `<pre><code>&lt;!-- _class: lead --&gt;
-
-# Big Hero Slide
-
-&lt;!-- _backgroundColor: #1a1a2e --&gt;
-&lt;!-- _color: #ffffff --&gt;
-
-Custom coloured slide.</code></pre>
-<p class="help-note">HTML comments with <code>_</code> prefix apply to the current slide only. Without <code>_</code> they apply globally from that point on.</p>`
-      },
-      {
-        title: 'Background Images',
-        content: `<pre><code>![bg](image.jpg)
-![bg left](image.jpg)
-![bg right:40%](image.jpg)
-![bg cover](image.jpg)
-![bg contain](image.jpg)</code></pre>`
-      },
-      {
-        title: 'Two-Column Layout',
-        content: `<pre><code>&lt;!-- _class: split --&gt;
-
-# Title
-
-Left column content.
+# A title slide
 
 ---
 
-Right column content.</code></pre>
-<p class="help-note">Use the <code>split</code> class (available in gaia/uncover themes) or create a custom CSS class.</p>`
+&lt;!-- _backgroundColor: #123 --&gt;
+&lt;!-- _color: white --&gt;
+&lt;!-- _paginate: false --&gt;
+# Dark slide</code></pre>
+<p class="help-note">An HTML comment with an underscored name applies to that slide only; without the underscore it applies from that slide onward. <code>lead</code> (centred) and <code>invert</code> come with the bundled themes.</p>`
       },
       {
-        title: 'Math (KaTeX)',
-        content: `<pre><code>Inline: $E = mc^2$
-
-Display:
-$$
-\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}
-$$</code></pre>`
+        group: 'Images',
+        title: 'Inserting Images',
+        content: `<p class="help-note"><strong>Paste or drop an image file</strong> into the editor (desktop), or use <strong>Insert image…</strong> from the ⋯ menu / the phone action bubble (opens the photo library). The image is stored <em>with the document</em> — not as text — and a reference line is inserted:</p>
+<pre><code>![photo](photo.jpg)</code></pre>
+<p class="help-note">The editor shows a thumbnail under that line. SVG files work too. Large photos are downscaled to 2560 px on the long side. Deleting every reference to an image drops it from the document at the next save.</p>`
       },
       {
+        group: 'Images',
+        title: 'Sizing & Backgrounds',
+        content: `<pre><code>![w:400](photo.jpg)          width 400px
+![h:200](logo.svg)           height 200px
+![bg](photo.jpg)             full-slide background
+![bg left](photo.jpg)        split: image left, text right
+![bg right:40%](photo.jpg)   split at 40%
+![bg blur grayscale](photo.jpg)
+![bg](a.jpg) ![bg](b.jpg)    two backgrounds side by side</code></pre>
+<p class="help-note">Marp's image keywords go in the alt text. Filters: <code>blur</code>, <code>brightness</code>, <code>contrast</code>, <code>grayscale</code>, <code>invert</code>, <code>opacity</code>, <code>sepia</code>.</p>`
+      },
+      {
+        group: 'Styling',
         title: 'Custom CSS',
         content: `<pre><code>&lt;style&gt;
-section {
-  font-size: 28px;
-}
-h1 {
-  color: #3498db;
-}
+section { font-size: 28px; }
+h1 { color: #3498db; }
+&lt;/style&gt;
+
+&lt;style scoped&gt;
+h1 { color: crimson; }   /* this slide only */
 &lt;/style&gt;</code></pre>
-<p class="help-note">Inline <code>&lt;style&gt;</code> blocks let you override theme styles for the whole deck or individual slides.</p>`
+<p class="help-note">A <code>&lt;style&gt;</code> block tweaks the theme for the whole deck; <code>scoped</code> limits it to the slide it sits in. Raw HTML other than these (and directive comments) is shown as text.</p>`
+      },
+      {
+        group: 'Export',
+        title: 'PDF & HTML',
+        content: `<p class="help-note"><strong>Export → PDF</strong> opens the print dialog with one slide per page at the deck's own size — choose "Save as PDF". <strong>Export → HTML</strong> writes one self-contained file: the slides stacked for reading, and a click (or <kbd>F</kbd>) starts a full-screen presentation — <kbd>←</kbd> <kbd>→</kbd> to move, <kbd>Esc</kbd> to leave. It prints one slide per page too. Images travel inside both.</p>`
       }
     ]
   }

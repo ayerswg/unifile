@@ -11,11 +11,11 @@ time to find. Keep it up to date as the design evolves.
 **The brand is `{…}` — curly braces in a monospaced font.** Every app has two
 spellings, both from the single source `src/core/brand.js` (`APPS`, `appName()`,
 `appMark()`): a *name* in braces (`{document}`, `{diagram}`, `{compose}`,
-`{write}`, `{draft}`) and a *mark* — one UTF-8 TEXT glyph (never an emoji) in
-braces (`{¶}`, `{◇}`, `{♪}`, `{✎}`, `{⌂}`). The mark IS the app icon
+`{write}`, `{draft}`, `{slides}`) and a *mark* — one UTF-8 TEXT glyph (never an emoji) in
+braces (`{¶}`, `{◇}`, `{♪}`, `{✎}`, `{⌂}`, `{▭}`). The mark IS the app icon
 (`build/icons.mjs` renders it as SVG text; `gen-icons.mjs` rasterizes the PNGs),
 heads the phone title bar, and sits beside the name on the site. Build ids stay
-`markdown` / `mermaid` / `abcjs` / `upub` / `udraft`; "uPub"/"uDraft"/"uDoc"/
+`markdown` / `mermaid` / `abcjs` / `upub` / `udraft` / `slides`; "uPub"/"uDraft"/"uDoc"/
 "uDraw"/"uNote" in older comments and plans are the retired u-codenames of the
 same apps. Glyphs were picked for having no emoji presentation; action glyphs
 that do (▶ ⏸ ⚙) get U+FE0E appended (`actions.js`).
@@ -55,13 +55,17 @@ src/
     front-matter.js  Nested-YAML-subset parser/serializer for the leading `---`…`---` block
     doc-sections.js  Parses `#!dslId@ver+ext` shebang sections
     abc-voices.js    Parses ABC `V:` voice lines (voiceIdOfLine / buildVoiceMap) — shared by the gutter + abcjs.js for mute/solo
+    assets.js        Document ASSETS (`data.assets`, images by name, base64, outside the text): naming, `![…](name)`
+                     resolution, save-time pruning — Marpit-free so app.js can import it in every build
+    slides/          The {slides} deck engine (pure, Node-tested): deck.js (Marpit render, `---`/`===` split, exports'
+                     standalone documents), themes.js (GENERATED — the three Marp themes as offline CSS)
     hash.js, crypto.js
     brand.js         `{name}` / `{glyph}` per app — THE naming source (site, manifests, icons, title bar)
     build-info.js    The running build's identity (version · commit · channel from the defines) + the
                      "is that build newer?" rule shared by every shell's update check (Node-tested)
     (assets/piano-soundfont.js — committed FluidR3 acoustic grand, ~2.5MB, note→dataURI)
   dsl/               One module per format; self-registers via registry.js
-    markdown.js, abcjs.js, mermaid.js, marp.js, fountain.js
+    markdown.js, abcjs.js, mermaid.js, slides.js, fountain.js
     registry.js      registerDSL / getDSL / listDSLs
     abcjs-piano-loader.js  CommonJS drop-in for abcjs's ./load-note (offline soundfont)
   upub/              The uPub variant's own shell (no CodeMirror — see "uPub")
@@ -102,6 +106,8 @@ build/
                      headless Chromium (committed, like the soundfont — CI never needs a browser;
                      resolves the mono stack to DejaVu Sans Mono, which covers every glyph)
   gen-soundfont.mjs  One-off: fetch FluidR3 piano → src/assets/piano-soundfont.js (network!)
+  gen-slides-themes.mjs  One-off: vendor marp-core's default/gaia/uncover themes → src/core/slides/themes.js
+                     (`npm i --no-save @marp-team/marp-core` first; web-font @imports stripped)
 templates/           quine.html, pwa.html, sw.js, manifest.json, icons/<abbrev>/*.png
 docs/                The website (Cloudflare Pages; rendered by render-site.mjs) + committed build artifacts
 dist/                Build output (gitignored)
@@ -114,12 +120,12 @@ dist/                Build output (gitignored)
 esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 - **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
-- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft), `slides`(sld). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
 - A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `upub` and `udraft` variants use this (see below) — no CodeMirror, no DSL registry, their own CSS.
 - `npm test` → `node --test test/**` — the uDraft core (parser/layout/SVG) unit tests; pure Node, no browser.
 - `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
-- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model.
+- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model. The exception is `slides`, whose deck IS Markdown (Marpit) — it bundles only `slides.js` (no marked/docx).
 
 **Compile-time defines** (esbuild `define`, referenced as globals; guard with `typeof … !== 'undefined'`):
 - `UNIFILE_MODE` = `"quine"` | `"pwa"` → `IS_QUINE` in storage.js.
@@ -455,6 +461,81 @@ storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
   untouched), scoped to `#wr-scroll` so the scope editor's scattered rows
   stay unnumbered. Phones keep uPub's plain surface.
 
+## {slides} (`src/dsl/slides.js` + `src/core/slides/` + `src/core/assets.js`, 2026-09)
+
+A dedicated **Marp-style slide deck** variant (abbrev `sld`, dslType `slides`) on the
+STANDARD shell (CodeMirror, VCS, quine/PWA, phone chrome) — not its own shell like
+uPub/uDraft. **Bare Marpit (`@marp-team/marpit`), deliberately not marp-core**: marp-core's
+extras (twemoji, KaTeX, highlight.js) fetch from CDNs and add ~1 MB; Marpit is markdown-it +
+postcss and makes no network call. The old `src/dsl/marp.js` (marp-core + pptxgenjs PPTX
+export) is gone; PPTX is not a goal. `layout/flow-slides.js` (the {document} app's `===`
+slides layout) is untouched and unrelated.
+
+- **The deck is the whole document.** The DSL sets `wholeDocument: true` and `preview.js`
+  (`_wholeDocumentDsl`, branch 0 of `_renderInner`, renderer key `dsl:slides`) hands it the
+  FULL source — front matter included, Marpit reads its global directives (`theme`,
+  `paginate`, `size`, `headingDivider`, `header/footer`, …) from it — bypassing the model /
+  layout machinery and its `===` section splitting entirely (splitting per slide would lose
+  the directives + pagination). `dsl.print` (= the PDF export) replaces `window.print()` there.
+  No `#!shebang` DSL sections inside slides by design (Unicode or an SVG asset instead).
+- **Engine (`core/slides/deck.js`, pure, `test/slides-deck.test.mjs`)**: `preprocess` turns
+  every `---` OR `===` outside the front matter / code fences into a `---` preceded by a
+  blank line (so `text\n---` is never a setext heading — a real Marp footgun) and returns
+  each slide's ORIGINAL source range; `renderDeck` = Marpit `inlineSVG` render (one
+  `<svg data-marpit-svg viewBox="0 0 1280 720"><foreignObject><section>` per slide + one
+  CSS string incl. `@page`). Markdown-it runs with **`html: false`** — comment directives
+  (`<!-- _class: lead -->`) and `<style>` tweaks still work (Marpit parses those itself),
+  raw HTML is shown as text, and nothing needs DOMPurify afterwards (which would gut
+  `foreignObject` anyway — it is in DOMPurify's forbidden list). `breaks: true` like Marp.
+  A single shared Marpit instance registers the vendored themes (`themes.js`: marp-core's
+  default/gaia/uncover CSS, MIT, web-font `@import`s stripped; regenerate with
+  `npm run gen:slides-themes`). `slides[i]` ranges land on each `<svg>` as
+  `data-doc-from/to` (preview click-back → cursor to the slide's source) and
+  `data-page-content-from/to` (the existing cursor→page scroll sync).
+- **Images are DOCUMENT ASSETS, never base64 in the text** (the user's explicit call —
+  contrast the {document} app, which inlines data URLs and collapses them with a pill
+  widget). `data.assets = { 'photo.jpg': { type, data(base64) } }` lives beside
+  `commentThreads` in the data object (quine JSON / IDB / `.unifile.json` round-trip for
+  free); the text references an asset by bare name — plain Markdown `![alt](photo.jpg)`, so
+  every Marp image keyword (`![bg left:40%]`, `![w:300]`, filters) keeps working.
+  `resolveAssets` substitutes the data URI into the SOURCE before markdown-it sees it (the
+  only way to reach every place Marpit puts a URL: `<img src>`, background `<figure
+  style>`, split layouts). **markdown-it's `validateLink` refuses `data:image/svg+xml`** by
+  default (only gif/png/jpeg/webp) — the shared instance overrides it to allow every
+  `data:image/*`, keeping vbscript/javascript/file blocked. Paste / drop in the editor
+  (`imageDropPaste`), or **Insert image…** (`dsl.actions` → the ⋯ tools menu on desktop and
+  the phone bubble + title menu — a generic hook, `actions.js dslActions()`; on phones the
+  file input opens the photo library) → `addImageFiles`: rasters over `MAX_EDGE` (2560 px
+  long side) are downscaled through a canvas (PNG stays PNG, else JPEG; SVG/GIF verbatim),
+  identical content dedupes onto its existing name, names are sanitised + uniqued
+  (`assetNameFor`/`uniqueAssetName`), then — ORDER MATTERS — assets go into state, the
+  reference is inserted (`'editor-insert-block'`, editor.js: on its own line, blank lines
+  kept around it, undoable), and only then `'assets-change'` fires so the save that follows
+  sees the reference. **Editor thumbnails**: a line that is nothing but `![…](name)` gets a
+  block widget under it (`imageWidgetField` — a StateField, because CM6 forbids block
+  decorations from ViewPlugins) showing the image, or "no image named X" for a missing
+  asset name (bare names only — URLs/paths are left alone); `assetsWatcher` re-dispatches
+  on `'assets-change'`. **Assets are NOT versioned**: `app.js _currentDataObject` prunes
+  (`core/assets.js pruneAssets`) any asset that neither the working text nor the
+  serialized history mentions at save/commit time — so an image an old commit still shows
+  survives, and a reference deleted then re-typed after a commit is a broken image.
+- **Exports**: PDF = the print-window pattern (one slide per page at Marpit's own `@page`
+  size, window title = document title = suggested filename); HTML = ONE self-contained file
+  (`deckDocument`: stacked slides + a dependency-free presenter — click a slide / `F` to
+  present, arrows, `Esc`, `#n` deep links — and it prints one slide per page too). Images
+  travel inside both as data URIs. The quine's static preview is `renderToString`.
+- **Safari**: WebKit mis-scales `<foreignObject>` inside a scaled svg; Marpit's own
+  `@marp-team/marpit-svg-polyfill` (`observe()` once from `render`) self-detects Safari and
+  fixes the sections up by CSS transform — a no-op elsewhere. Not verifiable in Chromium.
+- **CSS** (`app.css` "{slides}"): the deck breaks out of the 800px prose column like the ABC
+  score (`clamp(100%, 100cqw - 64px, 1100px)`); the svg is `width:100%; height:auto` (+ an
+  inline `aspect-ratio` from its viewBox). Marpit's CSS goes in a `<style>` inside the
+  `.uf-deck` wrapper — it is scoped to `div.marpit`, but its `@page` rule is global, which
+  is right for the app's own print.
+- **Front matter**: the standard collapsible YAML bar; `slidesFrontMatterSchema` feeds the
+  shared `fm-schema.js` autocomplete/lint (theme enum = the vendored theme names).
+  `marp: true` is accepted and ignored (pasted Marp decks).
+
 ## Mobile / iOS (hard-won — read before touching layout)
 
 The app is a `100dvh`-ish flex column. On phones (`@media max-width:640px`, OR landscape `(orientation: landscape) and (max-height: 500px) and (pointer: coarse)`) **the desktop top bar is hidden entirely** (`#uf-topbar { display:none }`) and the **phone top bar (`#uf-pane-switch`, `src/ui/pane-switch.js`) is the sole top chrome**, sitting directly below the site-nav (if present) under the safe-area inset (which lives on `#unifile-app` padding-top). Only the active one of three panes (**commit-log · editor · render**) is displayed; `App._setupMobilePanes()` tracks the pane into `#unifile-app[data-mobile-pane]`.
@@ -523,7 +604,7 @@ Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`
 
 ## Conventions & workflows
 
-- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site.
+- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site; add the app to `src/core/brand.js` + `npm run gen:icons` (commit only the new `templates/icons/<abbrev>/`); list the new `pwa-<abbrev>` in `sync-site.mjs` and `render-site.mjs` (`TYPE_TO_ICON` + the copy list). A DSL that owns the whole document sets `wholeDocument: true` (see {slides}); `actions: [{id,label,glyph,run}]` puts verbs on the ⋯ menu and the phone bubble.
 - **Verifying UI changes:** use the preview tools against a build (`node build/build.mjs --dsl=abcjs --no-pwa`, serve `dist/` — see `.claude/launch.json`, port 8765). Resize to 375px for mobile. **Always build the variant you're testing.**
 - **Deploying is automatic on push:** Cloudflare Pages rebuilds from source (`build:site && site:preview`) on every push to `main`, so a source-only commit deploys correctly — no need to pre-run `build:site` for the deployed site to be current (that old footgun is gone). You still build the specific variant locally to *test* UI changes in the preview.
 - **Deploying:** commit + push are done only when asked; branch off `main` if not already the intent.

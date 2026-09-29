@@ -14,7 +14,7 @@
  * dependency-free plain ESM with no DOM.
  *
  * Glyph choices are deliberately text-presentation code points: ¶ U+00B6,
- * ◇ U+25C7, ♪ U+266A, ✎ U+270E, ⌂ U+2302 — none has an emoji variant, so they
+ * ◇ U+25C7, ♪ U+266A, ✎ U+270E, ⌂ U+2302, ▭ U+25AD — none has an emoji variant, so they
  * render as monochrome text on every platform (iOS included).
  */
 
@@ -24,6 +24,7 @@ export const APPS = {
   abcjs:    { name: 'compose',  glyph: '♪', abbrev: 'abc',  edits: 'ABC notation' },
   upub:     { name: 'write',    glyph: '✎', abbrev: 'upub', edits: 'Markdown books' },
   udraft:   { name: 'draft',    glyph: '⌂', abbrev: 'dft',  edits: 'floor plans' },
+  slides:   { name: 'slides',   glyph: '▭', abbrev: 'sld',  edits: 'Marp slide decks' },
 };
 
 /** Wrap anything in the signature braces: brace('compose') → '{compose}'. */
