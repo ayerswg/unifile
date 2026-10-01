@@ -27,29 +27,18 @@
  * `===` lines are explicit hard page breaks (fence-aware).  Content between
  * two `===` breaks is auto-paginated independently.
  *
- * Front matter keys consumed:
- *   page         — a4 | letter | a5 | legal | WxH px  (default: letter)
- *   margin       — CSS shorthand 1–4 values, px only   (default: 72px 80px)
- *   header       — header template: {page}, {total}, {title}, {date}
- *   footer       — footer template: same tokens as header
- *   page-numbers — none | top-left | top-center | top-right |
- *                  bottom-left | bottom-center | bottom-right (default: bottom-center)
- *   font-size    — base font size (default: 12px)
- *   line-height  — (default: 1.6)
+ * Front matter keys consumed: the shared printed-page set in
+ * core/page-config.js (page, margin, font, font-size, line-height, the
+ * header/footer slots, page-numbers — default here: bottom-right) so one front
+ * matter drives both this preview and the {document} PDF export.
  */
 
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 import { parseDocSections } from '../core/doc-sections.js';
 import { getDSL } from '../dsl/registry.js';
 import { attachScaleObserver, detachScaleObserver } from './_scale.js';
-
-// Page sizes in CSS pixels at 96 dpi (1 in = 96 px, 1 mm ≈ 3.7795 px).
-const PAGE_PX = {
-  letter: { w: 816,  h: 1056 },  // 8.5 × 11 in
-  a4:     { w: 794,  h: 1123 },  // 210 × 297 mm
-  a5:     { w: 559,  h: 794  },  // 148 × 210 mm
-  legal:  { w: 816,  h: 1344 },  // 8.5 × 14 in
-};
+import { findPageBreaks } from '../core/paginate.js';
+import { parsePageConfig, fillTokens, hasSlots, resolveDate } from '../core/page-config.js';
 
 // Yield the event loop every N stubs during the stub-creation loop so the
 // editor input doesn't stall while paginating large documents.
@@ -266,6 +255,7 @@ export async function renderDocument(content, container, { signal, cursorPos, de
     tape.style.cssText =
       `position:fixed;left:-${cfg.pageW * 2 + 200}px;top:0;` +
       `width:${cfg.usableW}px;` +
+      `${cfg.font ? `font-family:${cfg.font};` : ''}` +
       `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};` +
       `box-sizing:border-box;`;
     document.body.appendChild(tape);
@@ -286,7 +276,7 @@ export async function renderDocument(content, container, { signal, cursorPos, de
     }
 
     void tape.offsetHeight;
-    const breakStarts = await _findPageBreaks(tape, cfg.usableH, signal);
+    const breakStarts = await findPageBreaks(tape, cfg.usableH, { signal });
     console.log(`[doc] breakStarts.length=${breakStarts.length} aborted=${signal?.aborted}`);
     if (signal?.aborted) {
       console.log('[doc] aborted after _findPageBreaks');
@@ -323,7 +313,7 @@ export async function renderDocument(content, container, { signal, cursorPos, de
         ? breakStarts[i + 1] - breakStarts[i]
         : Math.min(tape.scrollHeight - breakStarts[i], cfg.usableH);
 
-      const stub = _createStub(cfg, globalPageNum, section.from, meta.title ?? '',
+      const stub = _createStub(cfg, globalPageNum, section.from, cfg.title,
                                pageRanges[i].from, pageRanges[i].to,
                                { commitHash, isDirty });
       stub.dataset.sectionIdx = String(si);
@@ -499,27 +489,29 @@ function _createStub(cfg, pageNum, docFrom, title, contentFrom, contentTo, { com
   if (contentFrom != null) page.dataset.pageContentFrom = contentFrom;
   if (contentTo   != null) page.dataset.pageContentTo   = contentTo;
 
-  if (cfg.header) {
+  const vars = { page: pageNum, total: null, title, subtitle: cfg.subtitle, author: cfg.author, date: resolveDate(cfg.date) };
+
+  if (hasSlots(cfg.header)) {
     const hdr = document.createElement('div');
     hdr.className = 'uf-doc-header';
     hdr.style.cssText =
       `position:absolute;` +
       `top:0;left:${cfg.marginLeft}px;right:${cfg.marginRight}px;` +
       `height:${cfg.marginTop}px;` +
-      `display:flex;align-items:flex-end;padding-bottom:6px;`;
-    hdr.innerHTML = _fillTokens(cfg.header, { page: pageNum, total: null, title });
+      `display:flex;align-items:flex-end;padding-bottom:6px;gap:1em;`;
+    hdr.innerHTML = _slotsHtml(cfg.header, vars);
     page.appendChild(hdr);
   }
 
-  if (cfg.footer) {
+  if (hasSlots(cfg.footer)) {
     const ftr = document.createElement('div');
     ftr.className = 'uf-doc-footer';
     ftr.style.cssText =
       `position:absolute;` +
       `bottom:0;left:${cfg.marginLeft}px;right:${cfg.marginRight}px;` +
       `height:${cfg.marginBottom}px;` +
-      `display:flex;align-items:flex-start;padding-top:6px;`;
-    ftr.innerHTML = _fillTokens(cfg.footer, { page: pageNum, total: null, title });
+      `display:flex;align-items:flex-start;padding-top:6px;gap:1em;`;
+    ftr.innerHTML = _slotsHtml(cfg.footer, vars);
     page.appendChild(ftr);
   }
 
@@ -557,6 +549,7 @@ function _populateStub(page, { tapeGroup, breakStart, bodyH, cfg }) {
   clone.className = 'uf-doc-content-clone';
   clone.style.cssText =
     `position:relative;top:${-breakStart}px;width:100%;` +
+    `${cfg.font ? `font-family:${cfg.font};` : ''}` +
     `font-size:${cfg.fontSize};line-height:${cfg.lineHeight};`;
 
   body.appendChild(clone);
@@ -590,56 +583,16 @@ function _populateStub(page, { tapeGroup, breakStart, bodyH, cfg }) {
 // ---------------------------------------------------------------------------
 
 function _parseConfig(meta) {
-  const px      = _parsePagePx(meta.page ?? 'letter');
-  const margin  = meta.margin ?? '72px 80px';
-  const expanded = _expandMargin(margin);
-  const margins  = _parseMarginPx(expanded);
-  return {
-    pageW:        px.w,
-    pageH:        px.h,
-    marginTop:    margins.top,
-    marginRight:  margins.right,
-    marginBottom: margins.bottom,
-    marginLeft:   margins.left,
-    usableW:      px.w - margins.left - margins.right,
-    usableH:      px.h - margins.top  - margins.bottom,
-    fontSize:     meta['font-size']    ?? '12px',
-    lineHeight:   meta['line-height']  ?? '1.6',
-    header:       meta.header   ?? null,
-    footer:       meta.footer   ?? null,
-    pageNumbers:  meta['page-numbers'] ?? 'bottom-right',
-  };
+  // Shared with the PDF export; this preview keeps its historical default of
+  // a bottom-right page number.
+  return parsePageConfig(meta, { pageNumbers: 'bottom-right' });
 }
 
-function _parsePagePx(pageStr) {
-  const key = String(pageStr ?? 'letter').toLowerCase().trim();
-  if (PAGE_PX[key]) return PAGE_PX[key];
-  const m = /^(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)/.exec(key);
-  return m ? { w: parseFloat(m[1]), h: parseFloat(m[2]) } : PAGE_PX.letter;
-}
-
-function _expandMargin(m) {
-  const parts = m.trim().split(/\s+/);
-  if (parts.length === 1) return `${parts[0]} ${parts[0]} ${parts[0]} ${parts[0]}`;
-  if (parts.length === 2) return `${parts[0]} ${parts[1]} ${parts[0]} ${parts[1]}`;
-  if (parts.length === 3) return `${parts[0]} ${parts[1]} ${parts[2]} ${parts[1]}`;
-  return parts.slice(0, 4).join(' ');
-}
-
-function _parseMarginPx(expanded) {
-  const vals = expanded.trim().split(/\s+/).map(v => parseFloat(v) || 0);
-  return { top: vals[0], right: vals[1], bottom: vals[2], left: vals[3] };
-}
-
-function _fillTokens(template, vars) {
-  const totalHtml = vars.total == null
-    ? '<span data-uf-total></span>'
-    : String(vars.total);
-  return _esc(template)
-    .replace(/\{page\}/g,  String(vars.page))
-    .replace(/\{total\}/g, totalHtml)
-    .replace(/\{title\}/g, _esc(vars.title))
-    .replace(/\{date\}/g,  new Date().toLocaleDateString());
+/** The three header/footer slots as flex children (left · centre · right). */
+function _slotsHtml(slots, vars) {
+  const cell = (cls, tpl) =>
+    `<span class="uf-doc-slot ${cls}" style="flex:1 1 0;min-width:0;text-align:${cls.slice(12)}">${fillTokens(tpl, vars)}</span>`;
+  return cell('uf-doc-slot-left', slots.left) + cell('uf-doc-slot-center', slots.center) + cell('uf-doc-slot-right', slots.right);
 }
 
 function _pageNumEl(page, position) {
@@ -767,100 +720,8 @@ async function _renderPart(dslId, text, parentEl, docFrom, docTo, contentFrom, s
 // Page-break calculation
 // ---------------------------------------------------------------------------
 
-/**
- * Find page-start offsets (tape-relative px) that avoid splitting block
- * elements mid-line.  Returns [0, breakAt_1, breakAt_2, ...].
- *
- * Strategy: process block elements top-to-bottom.  If a block straddles a
- * page boundary AND fits on one page, snap the break to just before that
- * block.  Blocks taller than a full page are accepted as-is.
- *
- * Widow/orphan prevention: when snapping before a dialogue or parenthetical,
- * also drag the immediately-preceding character cue onto the next page.
- */
-async function _findPageBreaks(tape, usableH, signal) {
-  const BLOCK_SEL = [
-    '.fountain-scene-heading', '.fountain-action',
-    '.fountain-character',     '.fountain-dialogue',
-    '.fountain-parenthetical', '.fountain-transition',
-    '.fountain-centered',      '.fountain-lyrics',
-    'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    'ul', 'ol', 'pre', 'blockquote', 'table',
-  ].join(',');
+// (Page-break finding lives in core/paginate.js — shared with the PDF export.)
 
-  const blocks = Array.from(tape.querySelectorAll(BLOCK_SEL));
-  if (!blocks.length) {
-    const n = Math.max(1, Math.ceil(tape.scrollHeight / usableH));
-    return Array.from({ length: n }, (_, i) => i * usableH);
-  }
-
-  const tapeTop = tape.getBoundingClientRect().top;
-  const starts  = [0];
-  let pageEnd   = usableH;
-
-  for (let idx = 0; idx < blocks.length; idx++) {
-    // Yield every 500 blocks to keep the editor responsive.
-    if (idx % 500 === 499) {
-      await new Promise(r => setTimeout(r, 0));
-      if (signal?.aborted) return starts;
-    }
-
-    const block = blocks[idx];
-    const r    = block.getBoundingClientRect();
-    const bTop = r.top    - tapeTop;
-    const bBot = r.bottom - tapeTop;
-
-    while (bTop >= pageEnd) {
-      starts.push(pageEnd);
-      pageEnd += usableH;
-    }
-
-    if (bBot <= pageEnd) continue;
-
-    if (block.offsetHeight < usableH) {
-      let breakAt = bTop;
-      const cls = block.className;
-      if (cls.includes('fountain-dialogue') || cls.includes('fountain-parenthetical')) {
-        for (let back = 1; back <= 2 && idx - back >= 0; back++) {
-          const prev = blocks[idx - back];
-          const prevCls = prev.className;
-          if (prevCls.includes('fountain-character')) {
-            const prevTop = prev.getBoundingClientRect().top - tapeTop;
-            const pageStart = starts[starts.length - 1] ?? 0;
-            if (prevTop > pageStart) breakAt = prevTop;
-            break;
-          }
-          if (!prevCls.includes('fountain-parenthetical')) break;
-        }
-      }
-      starts.push(breakAt);
-      pageEnd = breakAt + usableH;
-    }
-  }
-
-  const totalH = tape.scrollHeight;
-  while ((starts[starts.length - 1] ?? 0) + usableH < totalH - 1) {
-    starts.push((starts[starts.length - 1] ?? 0) + usableH);
-  }
-
-  return starts;
-}
-
-// ---------------------------------------------------------------------------
-// Page content range mapping
-// ---------------------------------------------------------------------------
-
-/**
- * For each page (identified by its breakStart), find the character-offset
- * range of the fountain/markdown elements that land on that page.
- *
- * Uses the data-doc-from / data-doc-to attributes emitted by DSL renderers so
- * the mapping works for any DSL, not just Fountain.
- *
- * Returns an array parallel to breakStarts where each entry is { from, to }.
- * Used to store data-page-content-from / data-page-content-to on stubs so
- * the preview can scroll-sync to editor cursor position.
- */
 async function _computePageContentRanges(tape, breakStarts, signal) {
   const n      = breakStarts.length;
   const ranges = Array.from({ length: n }, () => ({ from: null, to: null }));

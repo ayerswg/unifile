@@ -7,8 +7,18 @@
  *            DOCX via the `docx` npm package.
  *
  * Front matter: YAML block delimited by `---` at the start of the document.
- *   Supported keys: title, subtitle, author, date.
- *   Renders as a centered header block above the document body.
+ *   title, subtitle, author, date render as a centered title block; the
+ *   printed-page keys (page, margin, font, header/footer slots, page-numbers,
+ *   title-page — see core/page-config.js) drive the PDF export, which is a
+ *   self-paginating print window (markdown-print.js) so the browser's own
+ *   URL/date headers never appear.  `markdownFrontMatterSchema` feeds the
+ *   shared fm-schema.js autocomplete + lint.
+ *
+ * Alignment: `{.center}` / `{.right}` / `{.left}` at the end of a heading or
+ *   paragraph (core/md-align.js) — preview, HTML, PDF and DOCX.
+ *
+ * Emoji: typing `:` + letters opens an offline emoji menu (core/emoji.js,
+ *   GitHub shortcodes); a complete `:shortcode:` converts on the closing colon.
  *
  * Page breaks: `===` (three or more `=` on a line) renders as a visible
  *   page-break marker in preview and forces a real page break in print/PDF/DOCX.
@@ -23,6 +33,15 @@ import { Language } from '@codemirror/language';
 import { keymap, EditorView, ViewPlugin, Decoration, WidgetType } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { markdownKeymap } from '@codemirror/lang-markdown';
+import { syntaxTree } from '@codemirror/language';
+import { autocompletion } from '@codemirror/autocomplete';
+import { linter } from '@codemirror/lint';
+import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
+import { schemaCompletions, schemaLint } from '../core/fm-schema.js';
+import { splitAlignMarker, alignClass, ALIGN_MARKER_RE } from '../core/md-align.js';
+import { parsePageConfig, resolveDate, PAGE_NUMBER_POSITIONS } from '../core/page-config.js';
+import { searchEmoji, emojiForShortcode } from '../core/emoji.js';
+import { openPrintDocument } from './markdown-print.js';
 
 // GFM-only editor language: CommonMark + GFM extensions (tables, strikethrough,
 // task lists, autolinks) — exactly what `marked` renders with `gfm: true`.
@@ -67,6 +86,25 @@ marked.use({
       return '<div class="page-break"><span>page break</span></div>\n';
     }
   }]
+});
+
+// Block alignment — `# Heading {.center}` / `Paragraph text {.right}`.
+// marked 11 renderers receive the already-inlined text; the marker survives
+// inline parsing as literal text, so strip it off the END of the rendered
+// text and turn it into a class (core/md-align.js is the single definition).
+marked.use({
+  renderer: {
+    heading(text, level) {
+      const { text: t, align } = splitAlignMarker(text);
+      const cls = align ? ` class="${alignClass(align)}"` : '';
+      return `<h${level}${cls}>${t}</h${level}>\n`;
+    },
+    paragraph(text) {
+      const { text: t, align } = splitAlignMarker(text);
+      const cls = align ? ` class="${alignClass(align)}"` : '';
+      return `<p${cls}>${t}</p>\n`;
+    },
+  }
 });
 
 // Strict GFM strikethrough: only ~~double-tilde~~ should render as <del>.
@@ -148,20 +186,17 @@ marked.use({
  *   ---
  */
 function parseFrontMatter(content) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/);
-  if (!match) return { meta: {}, body: content };
-
-  const meta = {};
-  for (const line of match[1].split('\n')) {
-    const kv = line.match(/^([\w-]+):\s*(.*)$/);
-    if (!kv) continue;
-    let val = kv[2].trim();
-    // Strip surrounding single or double quotes
+  // The shared parser (core/front-matter.js) — the same one the layouts, the
+  // model picker and the fm-schema lint read, so every key means one thing.
+  const { meta, bodyFrom } = parseGlobalFrontMatter(content || '');
+  const flat = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (v == null || typeof v === 'object') continue;
+    let val = String(v).trim();
     if (/^["'](.*)["']$/.test(val)) val = val.slice(1, -1);
-    meta[kv[1]] = val;
+    flat[k] = val;
   }
-
-  return { meta, body: content.slice(match[0].length) };
+  return { meta: flat, body: (content || '').slice(bodyFrom) };
 }
 
 /**
@@ -174,7 +209,7 @@ function renderFrontMatterBlock(meta) {
     ${meta.title    ? `<h1 class="fm-title">${escHtml(meta.title)}</h1>` : ''}
     ${meta.subtitle ? `<p class="fm-subtitle">${escHtml(meta.subtitle)}</p>` : ''}
     ${meta.author   ? `<p class="fm-author">${escHtml(meta.author)}</p>` : ''}
-    ${meta.date     ? `<p class="fm-date">${escHtml(meta.date)}</p>` : ''}
+    ${meta.date     ? `<p class="fm-date">${escHtml(resolveDate(meta.date))}</p>` : ''}
   </div>`;
 }
 
@@ -284,10 +319,18 @@ export async function renderToString(content) {
 // Exporters
 // ---------------------------------------------------------------------------
 
-/** Shared CSS injected into HTML and PDF exports. */
+/**
+ * Element styles shared by the HTML and PDF exports (scoped to `.md-doc`
+ * where it matters so the print window's page chrome stays unstyled).
+ */
 const EXPORT_CSS = `
-  body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #1a1a2e; }
+  body { font-family: system-ui, sans-serif; line-height: 1.6; color: #1a1a2e; }
   h1,h2,h3,h4 { line-height: 1.3; margin-top: 1.5em; }
+  h1,h2,h3,h4,h5,h6 { break-after: avoid; page-break-after: avoid; }
+  .md-align-center { text-align: center; }
+  .md-align-right  { text-align: right; }
+  .md-align-left   { text-align: left; }
+  h1.md-align-center, h2.md-align-center, h1.md-align-right, h2.md-align-right { border-bottom: none; }
   h1 { font-size: 2em; border-bottom: 1px solid #ddd; padding-bottom: .3em; }
   h2 { font-size: 1.5em; border-bottom: 1px solid #ddd; padding-bottom: .2em; }
   pre { background: #f5f5f5; padding: 1em; border-radius: 4px; overflow-x: auto; }
@@ -317,30 +360,42 @@ const EXPORT_CSS = `
   .page-break span { display: none; }
 `;
 
-async function exportHTML(content) {
+/** Standalone-page CSS for the HTML export (the PDF export has its own). */
+const HTML_PAGE_CSS = `
+  body { max-width: 800px; margin: 40px auto; padding: 0 20px; }
+  @media print {
+    @page { margin: 0; }
+    body { max-width: none; margin: 0; padding: 0.9in 1in; }
+  }
+`;
+
+async function exportHTML(content, opts = {}) {
+  const { meta } = parseFrontMatter(content || '');
   const body = await renderToString(content);
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Export</title>
-<style>${EXPORT_CSS}</style>
+<title>${escHtml(meta.title || opts.title || 'Export')}</title>
+<style>${EXPORT_CSS}${HTML_PAGE_CSS}</style>
 </head>
-<body>${body}</body>
+<body class="md-doc">${body}</body>
 </html>`;
   return new Blob([html], { type: 'text/html' });
 }
 
-async function exportPDF(content) {
+/**
+ * PDF = a print window that paginates itself (markdown-print.js): fixed
+ * pages with the front matter's margins, header/footer slots and page
+ * numbers, `@page { margin: 0 }` so the browser adds no URL/date chrome.
+ */
+async function exportPDF(content, opts = {}) {
+  const { meta } = parseFrontMatter(content || '');
+  const cfg = parsePageConfig(meta);
+  if (!cfg.title) cfg.title = opts.title || '';
   const body = await renderToString(content);
-  const win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head>
-    <meta charset="UTF-8">
-    <style>${EXPORT_CSS}</style>
-  </head><body>${body}</body></html>`);
-  win.document.close();
-  win.print();
+  await openPrintDocument({ bodyHtml: body, css: EXPORT_CSS, cfg, title: cfg.title });
   return null; // handled by print dialog
 }
 
@@ -492,6 +547,28 @@ function listToParas(token, level, ctx) {
   return paras;
 }
 
+/**
+ * Strip a trailing `{.center}`-style marker from an inline token list (it is
+ * literal text in the LAST text token) and report the alignment.
+ */
+function splitAlignTokens(tokens = []) {
+  const last = tokens[tokens.length - 1];
+  if (!last || last.type !== 'text' || !ALIGN_MARKER_RE.test(last.text || '')) return { tokens, align: null };
+  const { text, align } = splitAlignMarker(last.text);
+  const trimmed = { ...last, text, raw: text, tokens: undefined };
+  const out = tokens.slice(0, -1);
+  if (text) out.push(trimmed);
+  return { tokens: out, align };
+}
+
+/** `{.center}` alignment → docx AlignmentType (undefined = inherit). */
+function docxAlign(align) {
+  if (align === 'center') return AlignmentType.CENTER;
+  if (align === 'right')  return AlignmentType.RIGHT;
+  if (align === 'left')   return AlignmentType.LEFT;
+  return undefined;
+}
+
 /** Map a markdown table-cell alignment to a docx AlignmentType. */
 function cellAlign(align) {
   if (align === 'center') return AlignmentType.CENTER;
@@ -594,17 +671,21 @@ function tokenToParas(token, { indent = 0 } = {}, ctx) {
   switch (token.type) {
     case 'heading': {
       const level = HEADING_LEVELS[Math.min(token.depth - 1, 5)];
-      return [new Paragraph({ heading: level, children: inlineToRuns(token.tokens) })];
+      const { tokens, align } = splitAlignTokens(token.tokens);
+      return [new Paragraph({ heading: level, alignment: docxAlign(align), children: inlineToRuns(tokens) })];
     }
 
-    case 'paragraph':
+    case 'paragraph': {
+      const { tokens, align } = splitAlignTokens(token.tokens);
       return [new Paragraph({
         // Explicit "Normal" style so Word never inherits the preceding
         // heading's paragraph style for this content paragraph.
         style: "Normal",
-        children: inlineToRuns(token.tokens),
+        alignment: docxAlign(align),
+        children: inlineToRuns(tokens),
         indent: indent ? { left: indent * 720 } : undefined
       })];
+    }
 
     case 'code': {
       // One paragraph per line to preserve code block line breaks in Word
@@ -684,7 +765,7 @@ async function exportDocx(content) {
     children.push(new Paragraph({
       style: 'Date',
       alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: meta.date })],
+      children: [new TextRun({ text: resolveDate(meta.date) })],
     }));
   }
 
@@ -797,9 +878,18 @@ async function exportDocx(content) {
 // ---------------------------------------------------------------------------
 
 function getEditorExtensions() {
+  const md = cmMarkdown({ base: gfmEditorLanguage });
   return [
     // GFM-only base: strikethrough, tables, task lists — no subscript/superscript.
-    cmMarkdown({ base: gfmEditorLanguage }),
+    md,
+    // Front-matter keys/values + the `:emoji` menu (one source, see below)
+    md.language.data.of({ autocomplete: markdownComplete }),
+    autocompletion({ addToOptions: [emojiOptionGlyph] }),
+    linter(markdownLint, { delay: 500 }),
+    // `:shortcode:` → emoji on the closing colon
+    emojiShortcodeInput,
+    // Dim a trailing `{.center}` marker so it reads as markup, not prose
+    alignMarkerPlugin,
     // Continue list items on Enter, smart delete with Backspace
     keymap.of(markdownKeymap),
     // Collapse base64 image data URLs to a readable widget in the editor
@@ -823,10 +913,170 @@ function getEditorExtensions() {
         verticalAlign: 'text-bottom',
         userSelect: 'none',
         pointerEvents: 'none'
-      }
+      },
+      '.cm-md-align-marker': { opacity: 0.45, fontSize: '85%' },
     })
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Editor — front matter schema (autocomplete + lint via core/fm-schema.js)
+// ---------------------------------------------------------------------------
+
+export const markdownFrontMatterSchema = {
+  title:          { type: 'string', doc: 'Document title — the title block, the `{title}` token and the PDF filename.' },
+  subtitle:       { type: 'string', doc: 'Subtitle under the title.' },
+  author:         { type: 'string', doc: 'Author line of the title block (`{author}` in headers/footers).' },
+  date:           { type: 'string', doc: 'Date line; `today` prints the current date (so does `{date}` when unset).' },
+  'title-page':   { type: 'enum', values: ['true', 'false'], doc: 'Put the title block on a page of its own in the PDF.' },
+  page:           { type: 'enum', values: ['letter', 'a4', 'a5', 'legal'], doc: 'Paper size for the PDF / document layout (or `<W>x<H>` px).' },
+  margin:         { type: 'string', doc: 'Page margins, CSS shorthand: `1in`, `72px 80px`, `2cm 2.5cm 2cm 2.5cm`.' },
+  font:           { type: 'string', doc: 'Body font for the PDF: `serif`, `sans`, `mono` or any font family.' },
+  'font-size':    { type: 'string', doc: 'Body font size for the PDF / document layout (default 12px).' },
+  'line-height':  { type: 'number', doc: 'Body line height for the PDF / document layout (default 1.6).' },
+  header:         { type: 'string', doc: 'Centre header on every page. Tokens: {page} {total} {title} {subtitle} {author} {date}.' },
+  'header-left':  { type: 'string', doc: 'Left header slot (same tokens as header).' },
+  'header-right': { type: 'string', doc: 'Right header slot (same tokens as header).' },
+  footer:         { type: 'string', doc: 'Centre footer on every page, e.g. `Page {page} of {total}`.' },
+  'footer-left':  { type: 'string', doc: 'Left footer slot (same tokens as footer).' },
+  'footer-right': { type: 'string', doc: 'Right footer slot (same tokens as footer).' },
+  'page-numbers': { type: 'enum', values: ['on', 'off', ...PAGE_NUMBER_POSITIONS], doc: 'Page numbers: `on` (bottom centre), `off`, or a corner/edge.' },
+  layout:         { type: 'enum', values: ['webpage', 'document', 'slides'], doc: 'Preview layout: flowing webpage (default), paginated document, or slides.' },
+  model:          { type: 'enum', values: ['flow', 'grid', 'spatial', 'timeline', 'graph'], doc: 'Primary coordinate model (flow is the default).' },
+  model2:         { type: 'enum', values: ['flow', 'grid', 'spatial', 'timeline', 'graph'], doc: 'Optional secondary model.' },
+  dsl:            { type: 'string', doc: 'Default DSL for sections without a `#!` shebang.' },
+  theme:          { type: 'string', doc: 'Layout theme (model renderers).' },
+  bg:             { type: 'string', doc: 'Background (spatial model).' },
+  width:          { type: 'string', doc: 'Canvas width (spatial model).' },
+  height:         { type: 'string', doc: 'Canvas height (spatial model).' },
+  scale:          { type: 'string', doc: 'Canvas scale (spatial model).' },
+  perspective:    { type: 'string', doc: 'Canvas perspective (spatial model).' },
+  dimensions:     { type: 'string', doc: 'Grid dimensions (grid model).' },
+  'show-headers': { type: 'enum', values: ['true', 'false'], doc: 'Show row/column headers (grid model).' },
+  'show-grid':    { type: 'enum', values: ['true', 'false'], doc: 'Show grid lines (grid model).' },
+  'frozen-rows':  { type: 'number', doc: 'Frozen header rows (grid model).' },
+  'frozen-cols':  { type: 'number', doc: 'Frozen columns (grid model).' },
+  start:          { type: 'string', doc: 'Timeline start (timeline model).' },
+  end:            { type: 'string', doc: 'Timeline end (timeline model).' },
+};
+
+function markdownLint(view) {
+  const doc = view.state.doc.toString();
+  const region = getFrontMatterRange(doc);
+  if (!region) return [];
+  const docLen = doc.length;
+  return schemaLint(markdownFrontMatterSchema, region)
+    .map(d => ({ ...d, from: Math.max(0, Math.min(d.from, docLen)), to: Math.max(0, Math.min(d.to, docLen)) }))
+    .filter(d => d.from <= d.to);
+}
+
+// ---------------------------------------------------------------------------
+// Editor — `:emoji` completion (offline, GitHub shortcodes — core/emoji.js)
+// ---------------------------------------------------------------------------
+
+// `:` + up to 30 shortcode chars at the cursor, the colon not glued to a word
+// (`10:30`, `http://`, `key:value` never open the menu).
+const EMOJI_QUERY_RE = /(?:^|[^\w:]):([a-z0-9_+-]{1,30})$/i;
+const SHORTCODE_RE   = /(?:^|[^\w:]):([a-z0-9_+-]{2,30})$/i;
+
+/** True inside code (fenced/indented/inline), raw HTML or a URL — no emoji there. */
+function inNoEmojiZone(editorState, pos) {
+  let node = syntaxTree(editorState).resolveInner(pos, -1);
+  for (; node; node = node.parent) {
+    if (/^(FencedCode|CodeBlock|InlineCode|CodeText|HTMLBlock|URL|Autolink)$/.test(node.name)) return true;
+  }
+  return false;
+}
+
+function emojiComplete(context) {
+  const line = context.state.doc.lineAt(context.pos);
+  const before = line.text.slice(0, context.pos - line.from);
+  const m = EMOJI_QUERY_RE.exec(before);
+  if (!m) return null;
+  if (inNoEmojiZone(context.state, context.pos)) return null;
+  const hits = searchEmoji(m[1], 60);
+  if (!hits.length) return null;
+  return {
+    from: context.pos - m[1].length - 1,
+    // Already ranked by searchEmoji; CM must not re-sort or fuzzy-filter.
+    filter: false,
+    options: hits.map(h => ({
+      label: `:${h.code}:`,
+      detail: h.desc,
+      type: 'emoji',
+      apply: h.emoji,
+      emoji: h.emoji,
+    })),
+  };
+}
+
+/** The glyph in front of each emoji row (autocompletion addToOptions). */
+const emojiOptionGlyph = {
+  position: 19,   // before CM's own icon (20) and label (50)
+  render(completion) {
+    if (completion.type !== 'emoji') return null;
+    const span = document.createElement('span');
+    span.className = 'cm-emoji-glyph';
+    span.textContent = completion.emoji;
+    return span;
+  },
+};
+
+/** Unified completion source: front-matter schema inside the block, emoji elsewhere. */
+function markdownComplete(context) {
+  try {
+    const doc = context.state.doc.toString();
+    const region = getFrontMatterRange(doc);
+    if (region && context.pos <= region.bodyFrom) {
+      return schemaCompletions(markdownFrontMatterSchema, region, context.pos, context.explicit);
+    }
+    return emojiComplete(context);
+  } catch { return null; }
+}
+
+/** Typing the closing `:` of a known `:shortcode:` replaces it with the emoji. */
+const emojiShortcodeInput = EditorView.inputHandler.of((view, from, to, text) => {
+  if (text !== ':' || from !== to) return false;
+  const line = view.state.doc.lineAt(from);
+  const before = line.text.slice(0, from - line.from);
+  const m = SHORTCODE_RE.exec(before);
+  if (!m) return false;
+  const emoji = emojiForShortcode(m[1]);
+  if (!emoji || inNoEmojiZone(view.state, from)) return false;
+  const start = from - m[1].length - 1;
+  view.dispatch({
+    changes: { from: start, to, insert: emoji },
+    selection: { anchor: start + emoji.length },
+    userEvent: 'input.type',
+  });
+  return true;
+});
+
+// ---------------------------------------------------------------------------
+// Editor — `{.center}` marker dimming
+// ---------------------------------------------------------------------------
+
+const alignMarkDeco = Decoration.mark({ class: 'cm-md-align-marker' });
+
+const alignMarkerPlugin = ViewPlugin.fromClass(class {
+  constructor(view) { this.decorations = this._build(view); }
+  update(u) { if (u.docChanged || u.viewportChanged) this.decorations = this._build(u.view); }
+  _build(view) {
+    const b = new RangeSetBuilder();
+    for (const { from, to } of view.visibleRanges) {
+      for (let pos = from; pos <= to;) {
+        const line = view.state.doc.lineAt(pos);
+        const m = ALIGN_MARKER_RE.exec(line.text);
+        if (m) {
+          const start = line.from + m.index + (m[0].length - m[0].trimStart().length);
+          b.add(start, line.from + m.index + m[0].length, alignMarkDeco);
+        }
+        pos = line.to + 1;
+      }
+    }
+    return b.finish();
+  }
+}, { decorations: v => v.decorations });
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1161,6 +1411,7 @@ const markdownDSL = {
   render,
   renderToString,
   getEditorExtensions,
+  frontMatterSchema: markdownFrontMatterSchema,
 
   exporters: {
     html: { label: 'HTML',        mime: 'text/html',        ext: '.html', export: exportHTML },

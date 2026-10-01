@@ -3068,6 +3068,24 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   margin: 0.25em 0 0;
 }
 
+/* `{.center}` / `{.right}` / `{.left}` block alignment (core/md-align.js) */
+.preview-content .md-align-center { text-align: center; }
+.preview-content .md-align-right  { text-align: right; }
+.preview-content .md-align-left   { text-align: left; }
+.preview-content h1.md-align-center, .preview-content h2.md-align-center,
+.preview-content h1.md-align-right,  .preview-content h2.md-align-right { border-bottom: none; }
+
+/* `:emoji` completion rows — the glyph leads, CM's (empty) type icon is hidden */
+.cm-tooltip-autocomplete .cm-emoji-glyph {
+  display: inline-block;
+  width: 1.6em;
+  margin-right: 0.35em;
+  text-align: center;
+  font-size: 1.15em;
+  line-height: 1;
+}
+.cm-tooltip-autocomplete .cm-completionIcon-emoji { display: none; }
+
 /* ==============================================================
    PAGE BREAK MARKER  (--- in markdown)
    ============================================================== */
