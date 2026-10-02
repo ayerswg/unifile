@@ -232,8 +232,18 @@ Three things landed in 2026-10 — all offline, nothing fetched:
   `page-numbers` (`on` = bottom-center, `off`, or a position; merged into its slot with ` · `
   when that slot has text), `title-page: true` (title block alone on an unnumbered first page;
   `{total}` excludes it), `date: today`. Tokens `{page} {total} {title} {subtitle} {author} {date}`
-  (`fillTokens`, escaped). The PDF defaults page numbers OFF; `flow-document.js` keeps its
-  historical `bottom-right` default via the `defaults` arg. `markdownFrontMatterSchema` (in
+  (`fillTokens`, escaped). **Defaults (2026-10, shared by the PDF and the preview — the preview is
+  the PDF's preview): `margin: 0.75in` all round and page numbers ON, bottom-centre**, so a bare
+  document prints with nothing in its margins but a page number; `page-numbers: off` removes it.
+  (The first cut defaulted numbers off and `72px 80px` margins; the preview's old `bottom-right`
+  override is gone — a caller that wants none passes `{ pageNumbers: null }` explicitly.)
+  **Blank trailing page (fixed 2026-10):** `findPageBreaks` ended the tape at `scrollHeight`,
+  which includes the last block's bottom MARGIN — a paragraph whose 1em crossed the page edge
+  while the text fit opened an empty last page (reproduced: 11 lorem paragraphs → 2 pages).
+  It now ends at the lowest block border-box bottom and drops any page that would start at or
+  past it (a trailing `===` too). The print CSS also neutralises every `break-*` rule inside
+  the page clones — the `.pg` boxes ARE the pagination — and keeps `@page size` in the boxes'
+  exact px (a named `a4` is half a pixel short of the 794×1123 boxes). `markdownFrontMatterSchema` (in
   markdown.js, includes the grid/spatial/timeline model keys so they don't lint as unknown) feeds
   the shared `fm-schema.js` autocomplete + lint; markdown.js's own mini front-matter parser was
   replaced by `core/front-matter.js parseGlobalFrontMatter` so every consumer reads the same keys.

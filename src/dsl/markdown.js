@@ -387,8 +387,9 @@ async function exportHTML(content, opts = {}) {
 
 /**
  * PDF = a print window that paginates itself (markdown-print.js): fixed
- * pages with the front matter's margins, header/footer slots and page
- * numbers, `@page { margin: 0 }` so the browser adds no URL/date chrome.
+ * pages with the front matter's margins (0.75in unless set), header/footer
+ * slots and page numbers (on unless `page-numbers: off`), `@page { margin: 0 }`
+ * so the browser adds no URL/date chrome of its own.
  */
 async function exportPDF(content, opts = {}) {
   const { meta } = parseFrontMatter(content || '');
@@ -930,7 +931,7 @@ export const markdownFrontMatterSchema = {
   date:           { type: 'string', doc: 'Date line; `today` prints the current date (so does `{date}` when unset).' },
   'title-page':   { type: 'enum', values: ['true', 'false'], doc: 'Put the title block on a page of its own in the PDF.' },
   page:           { type: 'enum', values: ['letter', 'a4', 'a5', 'legal'], doc: 'Paper size for the PDF / document layout (or `<W>x<H>` px).' },
-  margin:         { type: 'string', doc: 'Page margins, CSS shorthand: `1in`, `72px 80px`, `2cm 2.5cm 2cm 2.5cm`.' },
+  margin:         { type: 'string', doc: 'Page margins, CSS shorthand (default `0.75in`): `1in`, `0.5in 0.75in`, `2cm 2.5cm 2cm 2.5cm`.' },
   font:           { type: 'string', doc: 'Body font for the PDF: `serif`, `sans`, `mono` or any font family.' },
   'font-size':    { type: 'string', doc: 'Body font size for the PDF / document layout (default 12px).' },
   'line-height':  { type: 'number', doc: 'Body line height for the PDF / document layout (default 1.6).' },
@@ -940,7 +941,7 @@ export const markdownFrontMatterSchema = {
   footer:         { type: 'string', doc: 'Centre footer on every page, e.g. `Page {page} of {total}`.' },
   'footer-left':  { type: 'string', doc: 'Left footer slot (same tokens as footer).' },
   'footer-right': { type: 'string', doc: 'Right footer slot (same tokens as footer).' },
-  'page-numbers': { type: 'enum', values: ['on', 'off', ...PAGE_NUMBER_POSITIONS], doc: 'Page numbers: `on` (bottom centre), `off`, or a corner/edge.' },
+  'page-numbers': { type: 'enum', values: ['on', 'off', ...PAGE_NUMBER_POSITIONS], doc: 'Page numbers: `on` (bottom centre, the default), `off`, or a corner/edge.' },
   layout:         { type: 'enum', values: ['webpage', 'document', 'slides'], doc: 'Preview layout: flowing webpage (default), paginated document, or slides.' },
   model:          { type: 'enum', values: ['flow', 'grid', 'spatial', 'timeline', 'graph'], doc: 'Primary coordinate model (flow is the default).' },
   model2:         { type: 'enum', values: ['flow', 'grid', 'spatial', 'timeline', 'graph'], doc: 'Optional secondary model.' },

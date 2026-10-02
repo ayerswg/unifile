@@ -29,8 +29,9 @@
  *
  * Front matter keys consumed: the shared printed-page set in
  * core/page-config.js (page, margin, font, font-size, line-height, the
- * header/footer slots, page-numbers — default here: bottom-right) so one front
- * matter drives both this preview and the {document} PDF export.
+ * header/footer slots, page-numbers) with the shared defaults — 0.75in margins,
+ * a bottom-centre page number — so one front matter drives both this preview
+ * and the {document} PDF export, and the preview shows what the PDF prints.
  */
 
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
@@ -583,9 +584,8 @@ function _populateStub(page, { tapeGroup, breakStart, bodyH, cfg }) {
 // ---------------------------------------------------------------------------
 
 function _parseConfig(meta) {
-  // Shared with the PDF export; this preview keeps its historical default of
-  // a bottom-right page number.
-  return parsePageConfig(meta, { pageNumbers: 'bottom-right' });
+  // Shared with the PDF export, same defaults (the preview IS the PDF's preview).
+  return parsePageConfig(meta);
 }
 
 /** The three header/footer slots as flex children (left · centre · right). */
