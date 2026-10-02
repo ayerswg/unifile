@@ -4,13 +4,14 @@
  * (layout/flow-document.js).  ONE front matter drives both:
  *
  *   page:          letter | a4 | a5 | legal | <W>x<H>  (px)       default letter
- *   margin:        CSS shorthand, 1–4 values; px (default), in, cm, mm, pt
+ *   margin:        CSS shorthand, 1–4 values; px (default), in, cm, mm, pt   default 0.75in
  *   font:          serif | sans | mono | <any font-family>
  *   font-size:     e.g. 12px / 11pt                                default 12px
  *   line-height:   e.g. 1.6                                        default 1.6
  *   header:        centre header template     header-left / header-right: sides
  *   footer:        centre footer template     footer-left / footer-right: sides
  *   page-numbers:  on | off | none | top-left … bottom-right  (`on` = bottom-center)
+ *                  ON by default: a bare document prints just its page numbers
  *   title-page:    true → the title block gets a page of its own
  *   date:          printed verbatim; `today` (or unset for the {date} token)
  *                  = today's date in the user's locale
@@ -18,6 +19,11 @@
  * Templates take {page} {total} {title} {subtitle} {author} {date}.
  * Pure (no DOM) — unit-tested in test/page-config.test.mjs.
  */
+
+/** The default margin on every side — Word/Docs-style round inches, a bit tighter than 1in. */
+export const DEFAULT_MARGIN = '0.75in';
+/** Page numbers print unless the front matter says `page-numbers: off`. */
+export const DEFAULT_PAGE_NUMBERS = 'bottom-center';
 
 /** Page sizes in CSS px at 96 dpi. */
 export const PAGE_PX = {
@@ -60,7 +66,7 @@ export function parsePagePx(pageStr) {
 }
 
 /** CSS margin shorthand (1–4 values, any supported unit) → px per side. */
-export function parseMargins(margin, fallback = '72px 80px') {
+export function parseMargins(margin, fallback = DEFAULT_MARGIN) {
   const parts = String(margin ?? '').trim().split(/\s+/).filter(Boolean);
   const p = parts.length ? parts : String(fallback).split(/\s+/);
   let t, r, b, l;
@@ -74,8 +80,9 @@ export function parseMargins(margin, fallback = '72px 80px') {
 /**
  * `page-numbers` value → a position or null (off).
  * `on`/`true`/`yes` = bottom-center; `off`/`false`/`no`/`none` = null.
+ * Unset → the fallback (the shared default: bottom-center).
  */
-export function parsePageNumbers(v, fallback = null) {
+export function parsePageNumbers(v, fallback = DEFAULT_PAGE_NUMBERS) {
   if (v == null || v === '') return fallback;
   const s = String(v).toLowerCase().trim();
   if (['on', 'true', 'yes'].includes(s)) return 'bottom-center';
@@ -101,11 +108,12 @@ const TRUE_RE = /^(true|yes|on|1)$/i;
 
 /**
  * @param {Record<string,string>} meta   parsed front matter
- * @param {{ pageNumbers?: string|null, margin?: string }} [defaults]
+ * @param {{ pageNumbers?: string|null, margin?: string }} [defaults]  override the shared defaults
+ *        (0.75in margins, bottom-centre page numbers); pass `pageNumbers: null` for none
  */
 export function parsePageConfig(meta = {}, defaults = {}) {
   const px      = parsePagePx(meta.page ?? 'letter');
-  const margins = parseMargins(meta.margin, defaults.margin ?? '72px 80px');
+  const margins = parseMargins(meta.margin, defaults.margin ?? DEFAULT_MARGIN);
   const title   = meta.title ?? '';
   return {
     pageName:     px.name,
@@ -126,7 +134,7 @@ export function parsePageConfig(meta = {}, defaults = {}) {
     date:         meta.date ?? '',
     header:       { left: meta['header-left'] ?? '', center: meta.header ?? '', right: meta['header-right'] ?? '' },
     footer:       { left: meta['footer-left'] ?? '', center: meta.footer ?? '', right: meta['footer-right'] ?? '' },
-    pageNumbers:  parsePageNumbers(meta['page-numbers'], defaults.pageNumbers ?? null),
+    pageNumbers:  parsePageNumbers(meta['page-numbers'], 'pageNumbers' in defaults ? defaults.pageNumbers : DEFAULT_PAGE_NUMBERS),
     titlePage:    TRUE_RE.test(String(meta['title-page'] ?? '')),
   };
 }

@@ -19,7 +19,8 @@ test('parseMargins expands CSS shorthand in any unit', () => {
   assert.deepEqual(parseMargins('72px 80px'), { top: 72, right: 80, bottom: 72, left: 80 });
   assert.deepEqual(parseMargins('10px 20px 30px'), { top: 10, right: 20, bottom: 30, left: 20 });
   assert.deepEqual(parseMargins('1 2 3 4'), { top: 1, right: 2, bottom: 3, left: 4 });
-  assert.deepEqual(parseMargins(undefined), { top: 72, right: 80, bottom: 72, left: 80 });
+  assert.deepEqual(parseMargins(undefined), { top: 72, right: 72, bottom: 72, left: 72 });   // 0.75in default
+  assert.deepEqual(parseMargins(''), { top: 72, right: 72, bottom: 72, left: 72 });
 });
 
 test('parsePageNumbers understands on/off and positions', () => {
@@ -28,6 +29,8 @@ test('parsePageNumbers understands on/off and positions', () => {
   assert.equal(parsePageNumbers('off'), null);
   assert.equal(parsePageNumbers('none'), null);
   assert.equal(parsePageNumbers('top-right'), 'top-right');
+  assert.equal(parsePageNumbers(undefined), 'bottom-center');   // on by default
+  assert.equal(parsePageNumbers(undefined, null), null);
   assert.equal(parsePageNumbers(undefined, 'bottom-right'), 'bottom-right');
   assert.equal(parsePageNumbers('sideways', 'bottom-right'), 'bottom-right');
 });
@@ -51,11 +54,15 @@ test('parsePageConfig derives usable area, slots and defaults', () => {
 
   const d = parsePageConfig({});
   assert.equal(d.pageName, 'letter');
-  assert.equal(d.pageNumbers, null);
+  assert.equal(d.pageNumbers, 'bottom-center');          // page numbers unless told off
+  assert.equal(parsePageConfig({ 'page-numbers': 'off' }).pageNumbers, null);
+  assert.equal(d.marginTop, 72); assert.equal(d.marginLeft, 72);   // 0.75in all round
+  assert.equal(d.usableW, 816 - 144); assert.equal(d.usableH, 1056 - 144);
   assert.equal(d.titlePage, false);
   assert.equal(d.font, '');
   assert.equal(parsePageConfig({ page: '600x800' }).pageW, 600);
   assert.equal(parsePageConfig({}, { pageNumbers: 'bottom-right' }).pageNumbers, 'bottom-right');
+  assert.equal(parsePageConfig({}, { pageNumbers: null }).pageNumbers, null);   // a caller can default to none
 });
 
 test('fillTokens substitutes and escapes', () => {

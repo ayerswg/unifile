@@ -42,6 +42,11 @@ export async function findPageBreaks(tape, usableH, { signal } = {}) {
   const tapeTop = tape.getBoundingClientRect().top;
   const starts  = [0];
   let pageEnd   = usableH;
+  // Where the content really ends: the lowest block BORDER-BOX bottom.  The
+  // tape's scrollHeight also counts the last block's bottom margin (a
+  // paragraph's 1em, the title block's 2.5em), and a margin that crossed the
+  // page edge while the block itself fit used to open a blank trailing page.
+  let contentEnd = 0;
 
   for (let idx = 0; idx < blocks.length; idx++) {
     if (idx % 500 === 499) {
@@ -53,6 +58,7 @@ export async function findPageBreaks(tape, usableH, { signal } = {}) {
     const r    = block.getBoundingClientRect();
     const bTop = r.top    - tapeTop;
     const bBot = r.bottom - tapeTop;
+    if (bBot > contentEnd) contentEnd = bBot;
 
     while (bTop >= pageEnd) {
       starts.push(pageEnd);
@@ -92,10 +98,15 @@ export async function findPageBreaks(tape, usableH, { signal } = {}) {
     }
   }
 
-  const totalH = tape.scrollHeight;
-  while ((starts[starts.length - 1] ?? 0) + usableH < totalH - 1) {
+  // Fill in the pages a block taller than a page still needs (it was cut at
+  // the page edge above), measured against the content end, not scrollHeight.
+  while ((starts[starts.length - 1] ?? 0) + usableH < contentEnd - 1) {
     starts.push((starts[starts.length - 1] ?? 0) + usableH);
   }
+  // A page that starts at or after the content end holds nothing — a trailing
+  // `===`, or a last block that ended exactly on a page edge.  Never emit it
+  // (the first page always stays).
+  while (starts.length > 1 && starts[starts.length - 1] >= contentEnd - 1) starts.pop();
 
   return starts;
 }

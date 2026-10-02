@@ -65,6 +65,8 @@ export async function openPrintDocument({ bodyHtml, css, cfg, title }) {
   const pages = doc.createElement('div');
   pages.id = 'pages';
   for (let i = 0; i < starts.length; i++) {
+    // The last page's body is only as tall as the page allows; the clone
+    // inside is clipped, so the tape's trailing margin never matters here.
     const bodyH = i < starts.length - 1
       ? starts[i + 1] - starts[i]
       : Math.min(tape.scrollHeight - starts[i], cfg.usableH);
@@ -131,6 +133,14 @@ function band(doc, cls, slots) {
   return el;
 }
 
+/**
+ * `@page { size }` is the SAME px size as the `.pg` boxes, so a sheet is
+ * exactly one box (a named `a4` is 793.7×1122.5px — half a pixel short of the
+ * boxes, and a box that overruns its sheet by any amount can open a blank
+ * one).  `margin: 0` is what keeps the browser's own header/footer (URL, date,
+ * "1/3") off the page: they are drawn in the page margin, and there is none;
+ * the visible margins are the boxes' own.
+ */
 function pageCss(cfg) {
   return `
 @page { size: ${cfg.pageW}px ${cfg.pageH}px; margin: 0; }
@@ -143,10 +153,14 @@ body { background: #fff; color: #1a1a2e; -webkit-print-color-adjust: exact; prin
    242px lower in the clone than where it was measured (blank first page). */
 #tape { display: flow-root; width: ${cfg.usableW}px; padding: 0 ${cfg.marginRight}px 0 ${cfg.marginLeft}px; box-sizing: content-box; }
 .pg { position: relative; width: ${cfg.pageW}px; height: ${cfg.pageH}px; overflow: hidden; box-sizing: border-box;
-      background: #fff; break-after: page; page-break-after: always; }
+      background: #fff; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
 .pg:last-child { break-after: auto; page-break-after: auto; }
 .pg-body { position: absolute; top: ${cfg.marginTop}px; left: ${cfg.marginLeft}px; width: ${cfg.usableW}px; overflow: hidden; }
 .pg-clone { display: flow-root; position: relative; width: 100%; }
+/* The pages ARE the pagination: no break rule inside a clone (the export
+   CSS's .page-break, h2 { break-after: avoid }) may add or move a sheet. */
+.pg-clone, .pg-clone * { break-before: auto !important; break-after: auto !important; break-inside: auto !important;
+      page-break-before: auto !important; page-break-after: auto !important; page-break-inside: auto !important; }
 .pg-hdr, .pg-ftr { position: absolute; left: ${cfg.marginLeft}px; right: ${cfg.marginRight}px; display: flex; align-items: center;
       gap: 1em; font-size: 10px; line-height: 1.3; color: #666; ${cfg.font ? `font-family: ${cfg.font};` : ''} }
 .pg-hdr { top: 0; height: ${cfg.marginTop}px; }
