@@ -207,6 +207,57 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
 
 ---
 
+## {document} (`src/dsl/markdown.js`, 2026-10 additions)
+
+The standard-shell Markdown app (marked + DOMPurify, CodeMirror, VCS, HTML/PDF/DOCX/text exports).
+Three things landed in 2026-10 — all offline, nothing fetched:
+
+- **PDF export is a self-paginating print window (`src/dsl/markdown-print.js`).** The old
+  exporter printed a plain page, so the browser stamped its own header/footer (page title, URL,
+  date, "1/3") — "web page info". Now `@page { margin: 0 }` kills that chrome and the margins are
+  ours: the document is rendered once as a measuring **tape** at the usable width, cut on block
+  boundaries by `core/paginate.js findPageBreaks` (extracted from `layout/flow-document.js`, which
+  now imports it — `===`/`.page-break` forces a break, `li` refines long lists), and each page is a
+  fixed `pageW×pageH` box with a clipped clone of the tape (`top: -breakStart`) plus header/footer
+  slots and the page number. **The tape AND the clones are `display: flow-root`** — a first
+  child's top margin (the title page's push-down) collapsed through the tape, so it was measured
+  at y=0 but drawn 242px lower in the clone: blank first page, title on page 2 (real bug).
+  Window `<title>` = document title (the suggested PDF filename); the window closes itself after
+  `afterprint`. Verified with Playwright: `.pg` boxes map 1:1 onto PDF pages (`page.pdf` on the
+  dumped HTML — `popup.pdf` on the about:blank popup fails in headless Chromium, not a bug).
+- **One front matter drives the PDF and the `layout: document` preview** — `src/core/page-config.js`
+  (`parsePageConfig`, pure, `test/page-config.test.mjs`): `page` (letter/a4/a5/legal/`WxH`),
+  `margin` (CSS shorthand in px/in/cm/mm/pt), `font` (serif/sans/mono/family), `font-size`,
+  `line-height`, `header`/`footer` (CENTRE slot) + `header-left/right`, `footer-left/right`,
+  `page-numbers` (`on` = bottom-center, `off`, or a position; merged into its slot with ` · `
+  when that slot has text), `title-page: true` (title block alone on an unnumbered first page;
+  `{total}` excludes it), `date: today`. Tokens `{page} {total} {title} {subtitle} {author} {date}`
+  (`fillTokens`, escaped). The PDF defaults page numbers OFF; `flow-document.js` keeps its
+  historical `bottom-right` default via the `defaults` arg. `markdownFrontMatterSchema` (in
+  markdown.js, includes the grid/spatial/timeline model keys so they don't lint as unknown) feeds
+  the shared `fm-schema.js` autocomplete + lint; markdown.js's own mini front-matter parser was
+  replaced by `core/front-matter.js parseGlobalFrontMatter` so every consumer reads the same keys.
+- **`{.center}` / `{.right}` / `{.left}` at the end of a heading or paragraph** (`core/md-align.js`,
+  `test/md-align.test.mjs`): marked 11 renderers get the inlined text, and the marker survives
+  inline parsing as literal text, so the `heading`/`paragraph` renderer overrides strip it off the
+  END of the text and emit `class="md-align-*"` (app.css for the preview, `EXPORT_CSS` for
+  HTML/PDF); DOCX strips it from the last inline `text` token (`splitAlignTokens`) and sets
+  `alignment`. The editor dims the marker (`alignMarkerPlugin`, `.cm-md-align-marker`).
+- **Emoji: `:` + letters opens a completion menu; a complete `:shortcode:` converts on the closing
+  colon.** Data = GitHub's gemoji list committed as `src/core/emoji-data.js` (ONE tab-separated
+  string, ~59 KB; regenerate with `node build/gen-emoji.mjs` — network, one-off like the
+  soundfont); `src/core/emoji.js` (`searchEmoji` ranks shortcode-prefix › word/tag › description,
+  ties in gemoji order, `test/emoji.test.mjs`). The source is the language's `data.of({autocomplete})`
+  (shared with the FM schema completions: `markdownComplete`); options use `filter: false` so CM
+  keeps our ranking, and the glyph is drawn by a second `autocompletion({ addToOptions })` — safe
+  because `addToOptions` is the one config key CM concatenates. The `:` must not be glued to a
+  word (`10:30`, `http://`, `key:value` never trigger) and nothing fires inside code
+  (`FencedCode/CodeBlock/InlineCode/HTMLBlock/URL/Autolink` via `syntaxTree`). The closing-colon
+  conversion is an `EditorView.inputHandler`. Rendering is untouched — the editor inserts the real
+  Unicode glyph, so `:rocket:` typed elsewhere stays literal text.
+- `exp.export(content, { title })` — the export dialog now passes the document title (window title
+  / HTML `<title>`); other DSL exporters ignore the second argument.
+
 ## Mermaid zoom & pan (`src/dsl/mermaid-zoom.js`, 2026-09)
 
 Every live-preview Mermaid diagram is wrapped in a `.uf-mmd-stage` that zooms and pans **by rewriting the svg `viewBox`** (crisp at any depth; a CSS transform rasterizes and blurs — uDraft's plan trick). Print layouts (`.uf-slide-frame`/`.uf-doc-page`) keep the plain svg; exports are untouched.

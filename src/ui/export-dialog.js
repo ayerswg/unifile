@@ -199,7 +199,8 @@ export class ExportDialog {
     btn.textContent = 'Exporting…';
 
     try {
-      const result = await exp.export(state.currentContent);
+      // The title rides along for exporters that name a window/file after it.
+      const result = await exp.export(state.currentContent, { title: state.title });
       if (result instanceof Blob) {
         // Format exports use title + ext only (no hash/dsl suffix needed)
         const name = slugify(state.title) + exp.ext;

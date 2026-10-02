@@ -833,7 +833,15 @@ const DSL_HELP = {
         title: 'Headings',
         content: `<pre><code># Heading 1
 ## Heading 2
-### Heading 3</code></pre>`
+### Heading 3
+# Centred heading {.center}</code></pre>
+<p class="help-note"><code>{.center}</code>, <code>{.right}</code> or <code>{.left}</code> at the end of a heading or paragraph aligns it — in the preview and in every export.</p>`
+      },
+      {
+        title: 'Emoji',
+        content: `<pre><code>Ship it :rocket:   →   Ship it 🚀
+Type :sm… and pick from the menu</code></pre>
+<p class="help-note">Typing <code>:</code> followed by letters opens an emoji menu (GitHub shortcodes, fully offline). A complete <code>:shortcode:</code> turns into the emoji on the closing colon.</p>`
       },
       {
         title: 'Emphasis',
@@ -881,23 +889,37 @@ console.log(x);
       {
         title: 'Front Matter',
         content: `<pre><code>---
-model: flow
-model2: grid
 title: My Document
 subtitle: A subtitle
 author: Jane Smith
-date: 2026-01-01
+date: today
 ---</code></pre>
-<p class="help-note"><code>model</code> sets the document's primary coordinate model (flow / grid / spatial / timeline / graph). <code>model2</code> sets an optional secondary model. <code>title</code>, <code>subtitle</code>, <code>author</code>, <code>date</code> render as a title block.</p>`
+<p class="help-note"><code>title</code>, <code>subtitle</code>, <code>author</code>, <code>date</code> render as a title block (<code>date: today</code> prints the current date). <code>model</code> / <code>model2</code> pick the coordinate model (flow / grid / spatial / timeline / graph); <code>layout: document</code> previews the paginated pages. Keys autocomplete inside the block.</p>`
+      },
+      {
+        title: 'PDF page setup',
+        group: 'Front Matter',
+        content: `<pre><code>---
+title: Quarterly report
+page: a4            # letter · a4 · a5 · legal
+margin: 1in         # or 2cm 2.5cm, or 72px 80px
+font: serif         # serif · sans · mono · any family
+header-left: {title}
+header-right: {date}
+footer: Page {page} of {total}
+page-numbers: off   # on · off · bottom-right …
+title-page: true
+---</code></pre>
+<p class="help-note">The PDF export paginates itself, so the browser adds no URL or date. Header/footer slots (<code>header</code>, <code>header-left</code>, <code>header-right</code>, <code>footer</code>…) take <code>{page}</code> <code>{total}</code> <code>{title}</code> <code>{subtitle}</code> <code>{author}</code> <code>{date}</code>. <code>page-numbers: on</code> centres them in the footer. <code>===</code> on its own line forces a page break.</p>`
       },
       {
         title: 'Page Breaks',
         content: `<pre><code>Content on page 1.
 
----
+===
 
 Content on page 2.</code></pre>
-<p class="help-note"><code>---</code> (horizontal rule) inserts a page break in PDF and DOCX exports.</p>`
+<p class="help-note"><code>===</code> on its own line forces a page break in the PDF and DOCX exports (and starts a new section in the preview). <code>---</code> is a horizontal rule.</p>`
       }
     ]
   },
