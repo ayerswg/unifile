@@ -50,11 +50,20 @@ const mermaidLanguage = StreamLanguage.define({
   }
 });
 
-// Initialise once at module load with the dark theme (app default).
-// The render() function re-initialises per-call based on rendering context.
+// Initialise once at module load with the theme matching the current colour
+// scheme (NOT a hard-coded 'dark' — a diagram must never assume dark mode).
+// Every render path re-initialises per call (see _initTheme) because the theme
+// is baked into the svg's <style> at render time: a diagram drawn in dark mode
+// stays dark until it is drawn again, so preview.js re-renders on 'theme-change'
+// (the DSL declares `themeAware: true`).
 // logLevel 'fatal' keeps the live linter's caught mermaid.parse() rejections
 // from spamming the console on every keystroke while a diagram is incomplete.
-mermaid.initialize({ startOnLoad: false, theme: 'dark', logLevel: 'fatal' });
+_initTheme(_resolveTheme());
+
+/** (Re)initialise mermaid with the given built-in theme before a render. */
+function _initTheme(theme) {
+  mermaid.initialize({ startOnLoad: false, theme, logLevel: 'fatal' });
+}
 
 // ---------------------------------------------------------------------------
 // Render
@@ -72,10 +81,12 @@ async function render(content, el) {
 
   // Print layouts (slides / document pages) are always white — force the light
   // 'default' theme.  Everything else follows the current browser/app preference.
+  // A `%%{init: {'theme': …}}%%` directive or classDef/style in the source
+  // still wins — mermaid layers directives over this site config per render.
   // Re-initialising before each render is safe because renders are sequential
   // (each slide or page is awaited before the next begins).
   const inPrintContext = !!el.closest?.('.uf-slide-frame, .uf-doc-page');
-  mermaid.initialize({ startOnLoad: false, theme: inPrintContext ? 'default' : _resolveTheme(), logLevel: 'fatal' });
+  _initTheme(inPrintContext ? 'default' : _resolveTheme());
 
   const id = `mermaid-${++_renderCounter}`;
 
@@ -156,7 +167,11 @@ function _escRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Return the mermaid theme that matches the current app/browser colour scheme. */
+/**
+ * Return the mermaid theme that matches the current app/browser colour scheme:
+ * `data-theme` on <html> (set by ui/theme.js for a forced light/dark pref), else
+ * the OS `prefers-color-scheme`. 'default' is mermaid's light theme.
+ */
 function _resolveTheme() {
   const forced = document.documentElement.dataset.theme;
   if (forced === 'light') return 'default';
@@ -168,6 +183,7 @@ function _resolveTheme() {
 async function renderToString(content) {
   if (!content.trim()) return '';
   try {
+    _initTheme(_resolveTheme());
     const id = `mermaid-noscript-${Date.now()}`;
     const { svg } = await mermaid.render(id, content);
     return svg;
@@ -181,12 +197,18 @@ async function renderToString(content) {
 // ---------------------------------------------------------------------------
 
 async function exportSVG(content) {
+  // What you see: the app's current colour scheme (never whatever theme the
+  // previous render — possibly a print-layout page — happened to leave set).
+  _initTheme(_resolveTheme());
   const id = `mermaid-export-${Date.now()}`;
   const { svg } = await mermaid.render(id, content);
   return new Blob([svg], { type: 'image/svg+xml' });
 }
 
 async function exportPNG(content) {
+  // The PNG is flattened onto a white canvas below, so it is engraved with
+  // the light theme regardless of the app's colour scheme.
+  _initTheme('default');
   const id = `mermaid-export-png-${Date.now()}`;
   const { svg } = await mermaid.render(id, content);
 
@@ -411,6 +433,9 @@ const mermaidDSL = {
   name: 'Mermaid',
   extensions: ['.mmd', '.mermaid'],
   editorMode: 'mermaid',
+  // The theme is baked into each rendered svg — preview.js re-renders a
+  // document that uses this DSL whenever the app's colour theme changes.
+  themeAware: true,
 
   render,
   renderToString,

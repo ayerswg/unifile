@@ -15,8 +15,9 @@
  */
 
 import { state, VIEW_MODES } from './state.js';
-import { getDSL } from '../dsl/registry.js';
+import { getDSL, listDSLs } from '../dsl/registry.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
+import { parseDocSections } from '../core/doc-sections.js';
 
 // Flow model layouts
 import { renderSlides,   teardownSlides,  printSlides, exportSlidesPptx } from '../layout/flow-slides.js';
@@ -119,11 +120,34 @@ export class Preview {
       this._scheduleRender(state.currentContent, true);
     }));
 
+    // A DSL that bakes the colour theme into its output (`themeAware`, e.g.
+    // Mermaid's svg <style>) is stale the moment the app's theme flips —
+    // Settings → Colour theme, or the OS switching in 'auto' mode. Re-render
+    // in place (scroll kept) when the document actually uses such a DSL; a
+    // document that doesn't is left alone (ABC playback, etc. undisturbed).
+    this._unsub.push(state.on('theme-change', () => {
+      if (!this._usesThemeAwareDsl(state.currentContent)) return;
+      if (this._lastRenderer) this._suppressScrollAfterRender = true;
+      this._scheduleRender(state.currentContent, true);
+    }));
+
     // Scroll-sync: when the editor cursor moves (without a doc change), scroll
     // the preview pane so the corresponding page is centred on screen.
     this._unsub.push(state.on('editor-select', ({ from }) => {
       if (this._scrollSyncEnabled) this._scrollToOffset(from, 'center');
     }));
+  }
+
+  /**
+   * Does the document render through a DSL whose output depends on the colour
+   * theme? True when the build's default DSL (whole-doc or shebang-less
+   * sections) is theme-aware, or any `#!` section names a theme-aware DSL.
+   */
+  _usesThemeAwareDsl(content) {
+    const aware = new Set(listDSLs().filter(d => d.themeAware).map(d => d.id));
+    if (!aware.size) return false;
+    if (aware.has(state.data?.dslType)) return true;
+    return parseDocSections(content ?? '').some(sec => aware.has(sec.dslId));
   }
 
   destroy() {
