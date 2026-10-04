@@ -1,60 +1,60 @@
 /* ============================================================
    unifile – application styles
-   Theme: Catppuccin Mocha (dark) with light fallback
+   Theme: neutral near-black (dark) / white (light) — the iA Writer look
    ============================================================ */
 
 /* ---- Custom properties ---- */
 :root {
-  /* Catppuccin Mocha palette */
-  --bg:          #1e1e2e;
-  --bg-alt:      #181825;
-  --comment-tint:         #f9e2af;                  /* commented line, rail */
-  --comment-range:        rgba(251,191,36,.1);
-  --comment-range-active: rgba(251,191,36,.2);
-  --comment-range-line:   rgba(251,191,36,.4);
-  --comment-range-line-active: rgba(251,191,36,.75);
-  --bg-surface:  #313244;
-  --bg-overlay:  #45475a;
-  --text:        #cdd6f4;
-  --text-sub:    #a6adc8;
-  --text-muted:  #6c7086;
-  --border:      #313244;
-  --accent:      #89b4fa;   /* blue */
-  --accent-2:    #cba6f7;   /* mauve */
-  --success:     #a6e3a1;
-  --warning:     #f9e2af;
-  --pending:     #fab387;   /* peach — uncommitted / modified (git's intermediate stage) */
-  --error:       #f38ba8;
-  --green:       #a6e3a1;
-  --red:         #f38ba8;
+  /* Neutral near-black — the iA Writer look (no blue cast). */
+  --bg:          #181818;
+  --bg-alt:      #1f1f1f;
+  --bg-surface:  #272727;
+  --bg-overlay:  #343434;
+  --text:        #dedede;
+  --text-sub:    #a8a8a8;
+  --text-muted:  #707070;
+  --border:      #2c2c2c;
+  --accent:      #3d9bff;   /* the caret blue */
+  --accent-2:    #b89cf2;   /* soft violet — secondary pills */
+  --success:     #7dcf8a;
+  --warning:     #e5c07b;
+  --pending:     #e8a062;   /* uncommitted / modified (git's intermediate stage) */
+  --error:       #ef7a85;
+  --green:       #7dcf8a;
+  --red:         #ef7a85;
+  /* Inline comment highlight (the commented text itself) */
+  --comment-range:             rgba(250,200,80,.16);
+  --comment-range-active:      rgba(250,200,80,.32);
+  --comment-range-line:        rgba(250,200,80,.55);
+  --comment-range-line-active: rgba(250,200,80,.95);
 
-  /* Syntax highlight tokens — Catppuccin Mocha (dark defaults) */
-  --hl-heading:  #89b4fa;
-  --hl-link:     #89dceb;
-  --hl-code:     #a6e3a1;
-  --hl-fence:    #fab387;
-  --hl-quote:    #f9e2af;
-  --hl-meta:     #585b70;
-  --hl-punct:    #6c7086;
-  --hl-keyword:  #cba6f7;
-  --hl-operator: #89dceb;
-  --hl-atom:     #f38ba8;
-  --hl-number:   #fab387;
-  --hl-string:   #a6e3a1;
-  --hl-comment:  #585b70;
-  --hl-name:     #cdd6f4;
-  --hl-type:     #f9e2af;
-  --hl-class:    #89b4fa;
-  --hl-property: #89b4fa;
-  --hl-variable: #cdd6f4;
-  --hl-function: #89b4fa;
-  --hl-strike:   #6c7086;
-  --hl-sep:      #45475a;
-  --hl-code-bg:  #1e1e2e;
+  /* Syntax highlight tokens — prose reads in ONE colour, headings are bold text,
+     the Markdown marks (#, **, -, >) recede to grey. Code DSLs keep a quiet palette. */
+  --hl-heading:  var(--text);
+  --hl-link:     var(--accent);
+  --hl-code:     #c8c8c8;
+  --hl-fence:    #707070;
+  --hl-quote:    #a8a8a8;
+  --hl-meta:     #707070;
+  --hl-punct:    #7c7c7c;
+  --hl-keyword:  #b9a6ff;
+  --hl-operator: #8ab8f0;
+  --hl-atom:     #f2a0a0;
+  --hl-number:   #f0b78a;
+  --hl-string:   #a8d8a0;
+  --hl-comment:  #707070;
+  --hl-name:     #dedede;
+  --hl-type:     #e6cf8c;
+  --hl-class:    #8ab8f0;
+  --hl-property: #8ab8f0;
+  --hl-variable: #dedede;
+  --hl-function: #8ab8f0;
+  --hl-strike:   #707070;
+  --hl-sep:      #3a3a3a;
+  --hl-code-bg:  #222222;
 
   /* Layout */
   --topbar-h:    44px;
-  --gutter-w:    44px;
   --panel-w:     340px;
   --radius:      6px;
   --radius-sm:   3px;
@@ -66,178 +66,221 @@
 /* Auto: follow OS when no explicit theme is set */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg:          #eff1f5;
-    --bg-alt:      #e6e9ef;
-    --comment-tint:         #df8e1d;                  /* commented line, rail */
-    --comment-range:        rgba(223,142,29,.28);
-    --comment-range-active: rgba(223,142,29,.42);
-    --comment-range-line:   rgba(223,142,29,.7);
-    --comment-range-line-active: rgba(223,142,29,.95);
-    --bg-surface:  #dce0e8;
-    --bg-overlay:  #ccd0da;
-    --text:        #4c4f69;
-    --text-sub:    #6c6f85;
-    --text-muted:  #9ca0b0;
-    --border:      #ccd0da;
-    --accent:      #1e66f5;
-    --accent-2:    #8839ef;
-    --success:     #40a02b;
-    --warning:     #df8e1d;
-    --pending:     #fe640b;   /* peach — uncommitted / modified */
-    --error:       #d20f39;
+    --bg:          #ffffff;
+    --bg-alt:      #f6f6f4;
+    --bg-surface:  #ededeb;
+    --bg-overlay:  #e2e2df;
+    --text:        #1a1a1a;
+    --text-sub:    #5c5c5c;
+    --text-muted:  #8f8f8f;
+    --border:      #e5e5e2;
+    --accent:      #1a8cf5;
+    --accent-2:    #7a4fd6;
+    --success:     #2e9e4a;
+    --warning:     #d9890f;
+    --pending:     #e0761a;   /* uncommitted / modified */
+    --error:       #d23f3f;
+    --green:       #2e9e4a;
+    --red:         #d23f3f;
+    --comment-range:             rgba(240,170,20,.22);
+    --comment-range-active:      rgba(240,170,20,.40);
+    --comment-range-line:        rgba(220,150,10,.65);
+    --comment-range-line-active: rgba(220,150,10,1);
 
-    /* Syntax highlight tokens — Catppuccin Latte (light) */
-    --hl-heading:  #1e66f5;
-    --hl-link:     #04a5e5;
-    --hl-code:     #40a02b;
-    --hl-fence:    #fe640b;
-    --hl-quote:    #df8e1d;
-    --hl-meta:     #8c8fa1;
-    --hl-punct:    #9ca0b0;
-    --hl-keyword:  #8839ef;
-    --hl-operator: #04a5e5;
-    --hl-atom:     #d20f39;
-    --hl-number:   #fe640b;
-    --hl-string:   #40a02b;
-    --hl-comment:  #8c8fa1;
-    --hl-name:     #4c4f69;
-    --hl-type:     #df8e1d;
-    --hl-class:    #1e66f5;
-    --hl-property: #1e66f5;
-    --hl-variable: #4c4f69;
-    --hl-function: #1e66f5;
-    --hl-strike:   #9ca0b0;
-    --hl-sep:      #ccd0da;
-    --hl-code-bg:  #e6e9ef;
+    --hl-heading:  var(--text);
+    --hl-link:     var(--accent);
+    --hl-code:     #3a3a3a;
+    --hl-fence:    #8f8f8f;
+    --hl-quote:    #5c5c5c;
+    --hl-meta:     #a0a0a0;
+    --hl-punct:    #9a9a9a;
+    --hl-keyword:  #7a3ee0;
+    --hl-operator: #1a6fd0;
+    --hl-atom:     #c42f2f;
+    --hl-number:   #c56a12;
+    --hl-string:   #2f8f3f;
+    --hl-comment:  #9a9a9a;
+    --hl-name:     #1a1a1a;
+    --hl-type:     #a3780a;
+    --hl-class:    #1a6fd0;
+    --hl-property: #1a6fd0;
+    --hl-variable: #1a1a1a;
+    --hl-function: #1a6fd0;
+    --hl-strike:   #9a9a9a;
+    --hl-sep:      #dcdcd8;
+    --hl-code-bg:  #f1f1ee;
   }
 }
 
 /* Forced light — used when user explicitly selects Light in settings */
 [data-theme="light"] {
-  --bg:          #eff1f5;
-  --bg-alt:      #e6e9ef;
-  --comment-tint:         #df8e1d;                  /* commented line, rail */
-  --comment-range:        rgba(223,142,29,.28);
-  --comment-range-active: rgba(223,142,29,.42);
-  --comment-range-line:   rgba(223,142,29,.7);
-  --comment-range-line-active: rgba(223,142,29,.95);
-  --bg-surface:  #dce0e8;
-  --bg-overlay:  #ccd0da;
-  --text:        #4c4f69;
-  --text-sub:    #6c6f85;
-  --text-muted:  #9ca0b0;
-  --border:      #ccd0da;
-  --accent:      #1e66f5;
-  --accent-2:    #8839ef;
-  --success:     #40a02b;
-  --warning:     #df8e1d;
-  --pending:     #fe640b;   /* peach — uncommitted / modified */
-  --error:       #d20f39;
+  --bg:          #ffffff;
+  --bg-alt:      #f6f6f4;
+  --bg-surface:  #ededeb;
+  --bg-overlay:  #e2e2df;
+  --text:        #1a1a1a;
+  --text-sub:    #5c5c5c;
+  --text-muted:  #8f8f8f;
+  --border:      #e5e5e2;
+  --accent:      #1a8cf5;
+  --accent-2:    #7a4fd6;
+  --success:     #2e9e4a;
+  --warning:     #d9890f;
+  --pending:     #e0761a;   /* uncommitted / modified */
+  --error:       #d23f3f;
+  --green:       #2e9e4a;
+  --red:         #d23f3f;
+  --comment-range:             rgba(240,170,20,.22);
+  --comment-range-active:      rgba(240,170,20,.40);
+  --comment-range-line:        rgba(220,150,10,.65);
+  --comment-range-line-active: rgba(220,150,10,1);
 
-  /* Syntax highlight tokens — Catppuccin Latte (light) */
-  --hl-heading:  #1e66f5;
-  --hl-link:     #04a5e5;
-  --hl-code:     #40a02b;
-  --hl-fence:    #fe640b;
-  --hl-quote:    #df8e1d;
-  --hl-meta:     #8c8fa1;
-  --hl-punct:    #9ca0b0;
-  --hl-keyword:  #8839ef;
-  --hl-operator: #04a5e5;
-  --hl-atom:     #d20f39;
-  --hl-number:   #fe640b;
-  --hl-string:   #40a02b;
-  --hl-comment:  #8c8fa1;
-  --hl-name:     #4c4f69;
-  --hl-type:     #df8e1d;
-  --hl-class:    #1e66f5;
-  --hl-property: #1e66f5;
-  --hl-variable: #4c4f69;
-  --hl-function: #1e66f5;
-  --hl-strike:   #9ca0b0;
-  --hl-sep:      #ccd0da;
-  --hl-code-bg:  #e6e9ef;
+  --hl-heading:  var(--text);
+  --hl-link:     var(--accent);
+  --hl-code:     #3a3a3a;
+  --hl-fence:    #8f8f8f;
+  --hl-quote:    #5c5c5c;
+  --hl-meta:     #a0a0a0;
+  --hl-punct:    #9a9a9a;
+  --hl-keyword:  #7a3ee0;
+  --hl-operator: #1a6fd0;
+  --hl-atom:     #c42f2f;
+  --hl-number:   #c56a12;
+  --hl-string:   #2f8f3f;
+  --hl-comment:  #9a9a9a;
+  --hl-name:     #1a1a1a;
+  --hl-type:     #a3780a;
+  --hl-class:    #1a6fd0;
+  --hl-property: #1a6fd0;
+  --hl-variable: #1a1a1a;
+  --hl-function: #1a6fd0;
+  --hl-strike:   #9a9a9a;
+  --hl-sep:      #dcdcd8;
+  --hl-code-bg:  #f1f1ee;
 }
 
 /* Forced dark — overrides OS light preference when user wants Dark */
 [data-theme="dark"] {
-  --bg:          #1e1e2e;
-  --bg-alt:      #181825;
-  --comment-tint:         #f9e2af;                  /* commented line, rail */
-  --comment-range:        rgba(251,191,36,.1);
-  --comment-range-active: rgba(251,191,36,.2);
-  --comment-range-line:   rgba(251,191,36,.4);
-  --comment-range-line-active: rgba(251,191,36,.75);
-  --bg-surface:  #313244;
-  --bg-overlay:  #45475a;
-  --text:        #cdd6f4;
-  --text-sub:    #a6adc8;
-  --text-muted:  #6c7086;
-  --border:      #313244;
-  --accent:      #89b4fa;
-  --accent-2:    #cba6f7;
-  --success:     #a6e3a1;
-  --warning:     #f9e2af;
-  --pending:     #fab387;   /* peach — uncommitted / modified */
-  --error:       #f38ba8;
+  /* Neutral near-black — the iA Writer look (no blue cast). */
+  --bg:          #181818;
+  --bg-alt:      #1f1f1f;
+  --bg-surface:  #272727;
+  --bg-overlay:  #343434;
+  --text:        #dedede;
+  --text-sub:    #a8a8a8;
+  --text-muted:  #707070;
+  --border:      #2c2c2c;
+  --accent:      #3d9bff;   /* the caret blue */
+  --accent-2:    #b89cf2;   /* soft violet — secondary pills */
+  --success:     #7dcf8a;
+  --warning:     #e5c07b;
+  --pending:     #e8a062;   /* uncommitted / modified (git's intermediate stage) */
+  --error:       #ef7a85;
+  --green:       #7dcf8a;
+  --red:         #ef7a85;
+  /* Inline comment highlight (the commented text itself) */
+  --comment-range:             rgba(250,200,80,.16);
+  --comment-range-active:      rgba(250,200,80,.32);
+  --comment-range-line:        rgba(250,200,80,.55);
+  --comment-range-line-active: rgba(250,200,80,.95);
+
+  /* Syntax highlight tokens — prose reads in ONE colour, headings are bold text,
+     the Markdown marks (#, **, -, >) recede to grey. Code DSLs keep a quiet palette. */
+  --hl-heading:  var(--text);
+  --hl-link:     var(--accent);
+  --hl-code:     #c8c8c8;
+  --hl-fence:    #707070;
+  --hl-quote:    #a8a8a8;
+  --hl-meta:     #707070;
+  --hl-punct:    #7c7c7c;
+  --hl-keyword:  #b9a6ff;
+  --hl-operator: #8ab8f0;
+  --hl-atom:     #f2a0a0;
+  --hl-number:   #f0b78a;
+  --hl-string:   #a8d8a0;
+  --hl-comment:  #707070;
+  --hl-name:     #dedede;
+  --hl-type:     #e6cf8c;
+  --hl-class:    #8ab8f0;
+  --hl-property: #8ab8f0;
+  --hl-variable: #dedede;
+  --hl-function: #8ab8f0;
+  --hl-strike:   #707070;
+  --hl-sep:      #3a3a3a;
+  --hl-code-bg:  #222222;
 }
 
-/* Editor forced-theme overrides
-   CodeMirror injects its own theme styles at runtime via JS. !important
-   beats them when a forced theme is active via data-theme. */
-[data-theme="light"] .cm-editor         { background: #eff1f5 !important; color: #4c4f69 !important; }
-[data-theme="light"] .cm-gutters        { background: #e6e9ef !important; color: #9ca0b0 !important; border-right: 1px solid #ccd0da !important; }
-[data-theme="light"] .cm-activeLineGutter { background: #dce0e8 !important; color: #1e66f5 !important; }
-[data-theme="light"] .cm-selectionBackground                      { background: rgba(30,102,245,.18) !important; }
-[data-theme="light"] .cm-editor.cm-focused .cm-selectionBackground { background: rgba(30,102,245,.26) !important; }
-[data-theme="light"] .cm-cursor         { border-left-color: #1e66f5 !important; }
-[data-theme="light"] .cm-tooltip        { background: #dce0e8 !important; border-color: #ccd0da !important; color: #4c4f69 !important; }
-
-/* Editor gutter = a SINGLE thin rail (no line numbers), on desktop AND mobile.
-   The current line shows as a full-width accent segment and a commented line
-   yellow. Click/tap the rail for line options (comment; mute/solo on ABC voice
-   lines). The rail is wide enough to hold a single mute/solo mark character. */
-.cm-comment-ln .cm-ln-text { display: none; }
-#uf-editor-wrap .cm-comment-ln { min-width: 0; padding: 0; }
-#uf-editor-wrap .cm-comment-ln .cm-gutterElement { padding: 0; margin: 0; min-width: 14px; }
-#uf-editor-wrap .cm-comment-ln .cm-activeLineGutter { background: var(--accent) !important; }
-#uf-editor-wrap .cm-comment-ln .cm-has-comments { background: var(--comment-tint) !important; }
-
-/* Mute (M) / Solo (S) mark shown in the rail for an ABC voice line. */
-.cm-comment-ln .cm-ln-mark {
-  display: block;
-  text-align: center;
-  font: 700 10px var(--font-mono);
-  line-height: inherit;
-  user-select: none;
+/* ==============================================================
+   EDITOR SURFACE — the iA Writer look
+   One monospaced size for everything (headings are bold text), a
+   generous line height, a tall 2px caret in the accent blue, NO gutter:
+   the text starts at a plain margin. editor-theme.js reads the same
+   tokens, so dark / light / auto all come from the `--*` variables above
+   (no `!important` forced overrides needed). The muted-voice M/S mark and
+   the comment highlights are the only furniture on the surface.
+   ============================================================== */
+#uf-editor-wrap .cm-editor { background: var(--bg); color: var(--text); }
+#uf-editor-wrap .cm-scroller {
+  font-family: var(--font-mono);
+  font-size: var(--editor-font-size, 16px);
+  line-height: 1.7;
 }
-.cm-comment-ln .cm-ln-mark.mark-M { color: var(--error); }
-.cm-comment-ln .cm-ln-mark.mark-S { color: var(--success); }
-/* Drop the border + container padding so the rail cell fills the gutter fully
-   (no dark sliver between the rail and the code). */
-#uf-editor-wrap .cm-gutters { border-right: none; padding: 0; }
-/* Buffer lives INSIDE the line (not the content) so the active-line highlight
-   covers it — no un-highlighted strip. Start flush at the top. */
-#uf-editor-wrap .cm-content { padding-top: 0; padding-left: 0; }
-#uf-editor-wrap .cm-line { padding-left: 6px; }
+/* The margin lives on the LINE (not .cm-content) so selection / decoration
+   backgrounds reach the edge cleanly; a deep bottom pad keeps the caret clear
+   of the phone keyboard and lets the last line scroll up to a comfortable eye
+   level (iA scrolls past the end the same way). */
+#uf-editor-wrap .cm-content { padding: 18px 0 40vh; }
+#uf-editor-wrap .cm-line { padding: 0 var(--editor-pad-x, 24px); position: relative; }
+/* Caret: 2px, in the accent, spanning the whole line box (CM sizes it to the
+   glyph box; the content-box padding extends it up/down by the half-leading). */
+#uf-editor-wrap .cm-cursor, #uf-editor-wrap .cm-dropCursor {
+  border-left: 2px solid var(--accent);
+  margin-left: -1px;
+  box-sizing: content-box;
+  padding: .18em 0;
+  margin-top: -.18em;
+}
+/* Selection in the accent (drawSelection's injected rule needs !important). */
+#uf-editor-wrap .cm-selectionBackground { background: color-mix(in srgb, var(--accent) 22%, transparent) !important; }
+#uf-editor-wrap .cm-editor.cm-focused .cm-selectionBackground { background: color-mix(in srgb, var(--accent) 30%, transparent) !important; }
+#uf-editor-wrap .cm-selectionMatch { background: color-mix(in srgb, var(--text) 10%, transparent); }
+#uf-editor-wrap .cm-matchingBracket { background: var(--bg-surface); color: var(--accent) !important; }
+#uf-editor-wrap .cm-nonmatchingBracket { color: var(--error) !important; }
+#uf-editor-wrap .cm-searchMatch { background: color-mix(in srgb, var(--warning) 25%, transparent); outline: 1px solid color-mix(in srgb, var(--warning) 50%, transparent); }
+#uf-editor-wrap .cm-searchMatch.cm-searchMatch-selected { background: color-mix(in srgb, var(--warning) 45%, transparent); }
+.cm-tooltip { background: var(--bg-alt); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); box-shadow: var(--shadow); }
+.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--bg-surface); color: var(--accent); }
+.cm-completionDetail { color: var(--text-muted); }
+.cm-placeholder { color: var(--text-muted); }
 
 /* Muted ABC voice — dim the source lines in the editor so it's clear they won't
-   sound or highlight during playback (the collapsible section bars now show the
-   front-matter block, so the gutter no longer tints it). */
+   sound or highlight during playback; an M (muted) / S (soloed) mark sits in
+   the line's left margin (a pseudo-element: no DOM text, so CM's content
+   reading and copy/paste never see it). */
 .cm-line.cm-voice-muted { opacity: .38; }
-/* Comment range mark — visible while accordion is open */
-/* Per-theme tokens (`--comment-*`, defined beside --bg-alt in every theme block)
-   so the OS-light "auto" theme gets the strong light tint too — the light tint
-   was a faint 12–18% wash on a pale gutter and read as nothing on a phone. */
-.cm-comment-range        { background: var(--comment-range) !important;        border-bottom: 1px solid var(--comment-range-line) !important; }
-.cm-comment-range-active { background: var(--comment-range-active) !important; border-bottom: 1px solid var(--comment-range-line-active) !important; }
+.cm-line.cm-voice-M::before, .cm-line.cm-voice-S::before {
+  position: absolute; left: 6px; top: 0;
+  font: 700 .62em/inherit var(--font-mono);
+  user-select: none; pointer-events: none;
+}
+.cm-line.cm-voice-M::before { content: 'M'; color: var(--error); }
+.cm-line.cm-voice-S::before { content: 'S'; color: var(--success); }
+
+/* Inline comments — the commented text carries a persistent soft highlight
+   (per-theme `--comment-*` tokens); the thread whose card is open is stronger.
+   Click / tap the highlight to open its card. */
+.cm-comment-range {
+  background: var(--comment-range);
+  border-bottom: 1.5px solid var(--comment-range-line);
+  cursor: pointer;
+}
+.cm-comment-range-active {
+  background: var(--comment-range-active);
+  border-bottom-color: var(--comment-range-line-active);
+}
 
 /* DSL element range highlight — shown when clicking a note/element in the preview */
-.cm-dsl-highlight { background: rgba(137,180,250,.22); border-radius: 2px; outline: 1px solid rgba(137,180,250,.5); }
-[data-theme="light"] .cm-dsl-highlight { background: rgba(30,102,245,.13) !important; outline-color: rgba(30,102,245,.35) !important; }
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .cm-dsl-highlight { background: rgba(30,102,245,.13); outline-color: rgba(30,102,245,.35); }
-}
+.cm-dsl-highlight { background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 2px; outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
 
 /* ── Diagnostics (lint) ────────────────────────────────────────────────────
    Severity-coloured wavy underlines in the text, plus a themed panel in the
@@ -259,17 +302,12 @@
 /* ABC playback cursor — playing notes shown in green text colour.
  * Uses !important to override syntax-highlight colour tokens (e.g. --hl-atom).
  * Multiple ranges emitted simultaneously for multi-voice scores. */
-.cm-play-note { color: #a6e3a1 !important; }
-[data-theme="light"] .cm-play-note { color: #40a02b !important; }
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .cm-play-note { color: #40a02b !important; }
-}
+.cm-play-note { color: var(--success) !important; }
 
 /* YAML front-matter highlighting (keys / fences / comments) — replaces the
  * section DSL highlighting in the `---` … `---` block. */
 .cm-fm-fence   { color: var(--text-muted); }
-.cm-fm-key     { color: #cba6f7; }              /* mauve — property key */
-[data-theme="light"] .cm-fm-key { color: #8839ef; }
+.cm-fm-key     { color: var(--accent-2); }      /* property key */
 .cm-fm-comment { color: var(--text-muted); font-style: italic; }
 
 /* Collapsible section header bars (front matter / ABC tune header).
@@ -321,17 +359,9 @@
   :root:not([data-theme]) .cm-shebang-line { opacity: .6; }
 }
 
-/* The active-line CONTENT background is intentionally not styled: we removed
- * highlightActiveLine() (editor.js) because a full-width line tint fights with
- * the text-selection highlight, making selected text hard to read.  Only the
- * gutter cell (.cm-activeLineGutter — the left rail) marks the current line. */
-
-[data-theme="dark"] .cm-editor          { background: #1e1e2e !important; color: #cdd6f4 !important; }
-[data-theme="dark"] .cm-gutters         { background: #181825 !important; color: #4a4a6a !important; border-right: 1px solid #313244 !important; }
-[data-theme="dark"] .cm-activeLineGutter { background: #28283e !important; color: #89b4fa !important; }
-[data-theme="dark"] .cm-selectionBackground               { background: rgba(137,180,250,.28) !important; }
-[data-theme="dark"] .cm-editor.cm-focused .cm-selectionBackground { background: rgba(137,180,250,.38) !important; }
-[data-theme="dark"] .cm-cursor          { border-left-color: #89b4fa !important; }
+/* The active-line CONTENT background is intentionally not styled (iA has none):
+ * a full-width line tint fights with the text-selection highlight.  The caret
+ * alone marks the current line. */
 
 /* ---- Reset ---- */
 *, *::before, *::after { box-sizing: border-box; }
@@ -1379,21 +1409,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
      (topmost element below the safe-area inset). Desktop keeps the top bar. */
   #uf-topbar { display: none; }
 
-  /* The thin-rail gutter (no line numbers) is now global — see the shared rules
-     near the top of this file. Only the mobile-specific accordion sizing below
-     stays here. */
-
-  /* Comments word-wrap within the visible width even though the DSL lines do
-     NOT wrap (they stay horizontally scrollable). The accordion is pinned to
-     the left and sized to the viewport so it doesn't follow the wide content. */
-  #uf-editor-wrap .cm-accordion {
-    position: sticky;
-    left: 0;
-    width: calc(100vw - 8px);
-    max-width: 100vw;
-    box-sizing: border-box;
-  }
-  .ct-msg-body { overflow-wrap: anywhere; }
+  /* Phone type: a touch larger (iA's phone size), tighter side margin. */
+  #uf-editor-wrap { --editor-font-size: 17px; --editor-pad-x: 18px; }
 
   /* ── Bottom bar: an IN-FLOW flex child at the end of the #unifile-app column.
      Because the column is exactly `100dvh` (the visible viewport — no browser
@@ -1415,7 +1432,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   #unifile-app[data-diff] #uf-bottom { display: block; }
 
   /* iOS: ≥16px on focusable controls prevents Safari's zoom-on-focus. */
-  .cm-content, .topbar-title, .pf-midi-select, .usn-input,
+  .topbar-title, .pf-midi-select, .usn-input,
   input, select, textarea { font-size: 16px; }
 }
 
@@ -1689,27 +1706,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* Allow CM to scroll internally */
   overflow: auto;
   height: 100%;
-  font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
   /* Keep overscroll inside the editor — don't chain to the document (iOS shift). */
   overscroll-behavior: contain;
 }
 
-/* Light-mode palette overrides — CM theme only handles the dark side */
-@media (prefers-color-scheme: light) {
-  #uf-editor-wrap .cm-editor {
-    background: #eff1f5;
-    color: #4c4f69;
-  }
-  #uf-editor-wrap .cm-gutters {
-    background: #e6e9ef;
-    color: #9ca0b0;
-    border-right-color: #ccd0da;
-  }
-  #uf-editor-wrap .cm-activeLineGutter { background: #dce0e8; color: #1e66f5; }
-  #uf-editor-wrap .cm-cursor { border-left-color: #1e66f5; }
-  #uf-editor-wrap .cm-selectionBackground              { background: rgba(30,102,245,.18); }
-  #uf-editor-wrap.cm-focused .cm-selectionBackground  { background: rgba(30,102,245,.26); }
-}
 
 
 /* ==============================================================
@@ -3629,85 +3629,104 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .blame-detail-actions { margin-top: 10px; }
 
 /* ==============================================================
-   COMMENT ACCORDION (inline CM6 block widget)
+   INLINE COMMENTS — the card (a CodeMirror tooltip attached to the
+   commented text) + the context menu (right-click / long-press)
    ============================================================== */
 
-.cm-accordion {
+/* The card element IS the CodeMirror tooltip (`.cm-tooltip`), which positions
+   it below the commented text (above when there's no room) and keeps it with
+   the text while scrolling. The #uf-editor-wrap prefix out-ranks CM's injected
+   .cm-tooltip theme rule. */
+#uf-editor-wrap .uf-comment-card {
+  width: min(380px, calc(100vw - 24px));
   background: var(--bg-alt);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.18);
   color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+.ucc-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--comment-range) 60%, transparent);
+}
+.ucc-excerpt {
+  flex: 1; min-width: 0;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--text-sub);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ucc-close {
+  flex: 0 0 auto; width: 26px; height: 26px; border: none; border-radius: 6px;
+  background: none; color: var(--text-muted); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.ucc-close:hover { background: var(--bg-surface); color: var(--text); }
+.ucc-body { padding: 10px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+.ucc-messages { display: flex; flex-direction: column; gap: 10px; max-height: 40vh; overflow-y: auto; }
+.ucc-msg-meta { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.ucc-author { font-weight: 600; color: var(--text); }
+.ucc-when { font-size: 11px; color: var(--text-muted); }
+.ucc-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.ucc-reply { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.ucc-input {
+  width: 100%; resize: none; overflow: hidden; box-sizing: border-box;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 9px; font: inherit; font-size: 14px; line-height: 1.4;
+}
+.ucc-input:focus { outline: none; border-color: var(--accent); }
+.ucc-input::placeholder { color: var(--text-muted); }
+.ucc-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.ucc-hint { margin-right: auto; font-size: 11px; color: var(--text-muted); }
+.ucc-btn {
+  border: 1px solid var(--border); border-radius: 999px;
+  background: none; color: var(--text-sub);
+  font: inherit; font-size: 12.5px; padding: 4px 12px; cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.ucc-btn:hover { color: var(--text); background: var(--bg-surface); }
+.ucc-btn.ucc-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.ucc-btn.ucc-primary:hover { filter: brightness(1.08); }
+.ucc-btn.ucc-resolve:hover { border-color: var(--success); color: var(--success); }
+/* The pre-v0.5 point comments (no range) show as a small marker in the text. */
+.cm-comment-point {
+  display: inline-block; padding: 0 3px; margin-right: 2px; border-radius: 3px;
+  color: color-mix(in srgb, var(--warning) 80%, var(--text));
+  background: var(--comment-range); font-size: .85em; cursor: pointer; user-select: none;
 }
 
-.cm-accordion-body {
-  padding: 7px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-/* Compact inline messages: author · date  body */
-.ct-messages { display: flex; flex-direction: column; gap: 3px; }
-.ct-message  { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 5px; line-height: 1.5; }
-.ct-msg-who  { display: contents; }
-.ct-msg-author { font-weight: 600; font-size: 11px; color: var(--accent); flex-shrink: 0; }
-.ct-msg-date   { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
-.ct-msg-body   { font-size: 12px; white-space: pre-wrap; color: var(--text); flex-basis: 100%; margin: 0; }
-
-/* Horizontal reply form */
-.ct-reply-form    { display: flex; gap: 6px; align-items: flex-start; margin-top: 2px; }
-.ct-reply-body    { flex: 1; resize: none; font-size: 12px !important; overflow: hidden; }
-.ct-reply-actions { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
-.ct-reply-submit {
-  background: var(--bg-overlay); border: 1px solid var(--border);
-  color: var(--text-sub); font-size: 11px; padding: 2px 8px;
-  border-radius: var(--radius); cursor: pointer; white-space: nowrap;
-}
-.ct-reply-submit:hover { border-color: var(--accent); color: var(--accent); }
-
-/* Archive button */
-.ct-archive-btn {
-  background: none; border: 1px solid var(--border); border-radius: var(--radius);
-  color: var(--text-muted); font-size: 10px; padding: 2px 7px; cursor: pointer;
-  transition: border-color .15s, color .15s; white-space: nowrap;
-}
-.ct-archive-btn:hover { border-color: var(--warning, #df8e1d); color: var(--warning, #df8e1d); }
-
-/* New thread form */
-.ct-acc-body   { resize: none; font-size: 12px !important; width: 100%; overflow: hidden; }
-.ct-actions    { display: flex; justify-content: flex-end; gap: 6px; margin-top: 3px; }
-.ct-acc-error  { font-size: 11px; color: var(--error, #f38ba8); margin: 2px 0 0; }
-
-/* ==============================================================
-   COMMENT CONTEXT MENU  (floating "Add comment" popup)
-   ============================================================== */
-
-.cm-comment-context-menu {
+/* Context menu — right-click / long-press on the text */
+.uf-ctx-menu {
   position: fixed;
   z-index: 9999;
-  background: var(--bg-surface);
+  min-width: 170px;
+  padding: 4px;
+  background: var(--bg-alt);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 4px 12px rgba(0,0,0,.35);
-  padding: 3px 0;
-  min-width: 140px;
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.18);
+  font-family: var(--font-ui);
 }
-.cm-ccm-add {
-  display: block;
-  width: 100%;
-  padding: 7px 14px;
-  text-align: left;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text);
-  font-size: 13px;
+.uf-ctx-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 7px 10px;
+  background: none; border: none; border-radius: 7px;
+  color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
 }
-.cm-ccm-add:hover { background: var(--bg-overlay); }
+.uf-ctx-item:hover, .uf-ctx-item:focus-visible { background: var(--bg-surface); outline: none; }
+.uf-ctx-glyph { flex: 0 0 18px; text-align: center; font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+.uf-ctx-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+@media (pointer: coarse) {
+  .uf-ctx-item { padding: 11px 12px; font-size: 15px; }
+  .uf-ctx-menu { min-width: 200px; }
+}
 
 /* ==============================================================
-   ARCHIVED COMMENTS MODAL
+   RESOLVED COMMENTS MODAL
    ============================================================== */
 
 .ath-overlay {

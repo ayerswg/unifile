@@ -15,45 +15,59 @@
 /* ── Theme tokens ─────────────────────────────────────────────────────────── */
 
 :root {
+  /* The same neutral palette as the standard shell (app.css) — the iA look. */
   --bg: #ffffff;
-  --bg-alt: #f7f7f5;
+  --bg-alt: #f6f6f4;
   --bg-elev: #ffffff;
   --fg: #1a1a1a;
-  --fg-mut: #63635f;
-  --dim: #b3b3ae;
-  --line: #e7e7e3;
-  --accent: #1aa3ff;
-  --code-bg: #f4f4f1;
-  --pending: #e08f1e;
-  --danger: #d64545;
+  --fg-mut: #5c5c5c;
+  --dim: #a0a0a0;
+  --line: #e5e5e2;
+  --accent: #1a8cf5;
+  --code-bg: #f1f1ee;
+  --pending: #e0761a;
+  --danger: #d23f3f;
   --scrim: rgba(0, 0, 0, 0.35);
+  --comment-range: rgba(240,170,20,.22);
+  --comment-range-active: rgba(240,170,20,.40);
+  --comment-range-line: rgba(220,150,10,.65);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-wr-theme="light"]) {
-    --bg: #101012;
-    --bg-alt: #161619;
-    --bg-elev: #1d1d22;
-    --fg: #d9d9d6;
-    --fg-mut: #97978f;
-    --dim: #4f4f55;
-    --line: #26262c;
-    --code-bg: #1a1a1f;
-    --pending: #e0a23e;
+    --bg: #181818;
+    --bg-alt: #1f1f1f;
+    --bg-elev: #222222;
+    --fg: #dedede;
+    --fg-mut: #a8a8a8;
+    --dim: #707070;
+    --line: #2c2c2c;
+    --code-bg: #222222;
+    --pending: #e8a062;
+    --danger: #ef7a85;
+    --accent: #3d9bff;
     --scrim: rgba(0, 0, 0, 0.55);
+    --comment-range: rgba(250,200,80,.16);
+    --comment-range-active: rgba(250,200,80,.32);
+    --comment-range-line: rgba(250,200,80,.55);
   }
 }
 :root[data-wr-theme="dark"] {
-  --bg: #101012;
-  --bg-alt: #161619;
-  --bg-elev: #1d1d22;
-  --fg: #d9d9d6;
-  --fg-mut: #97978f;
-  --dim: #4f4f55;
-  --line: #26262c;
-  --code-bg: #1a1a1f;
-  --pending: #e0a23e;
+  --bg: #181818;
+  --bg-alt: #1f1f1f;
+  --bg-elev: #222222;
+  --fg: #dedede;
+  --fg-mut: #a8a8a8;
+  --dim: #707070;
+  --line: #2c2c2c;
+  --code-bg: #222222;
+  --pending: #e8a062;
+  --danger: #ef7a85;
+  --accent: #3d9bff;
   --scrim: rgba(0, 0, 0, 0.55);
+  --comment-range: rgba(250,200,80,.16);
+  --comment-range-active: rgba(250,200,80,.32);
+  --comment-range-line: rgba(250,200,80,.55);
 }
 
 /* ── Base / shell ─────────────────────────────────────────────────────────── */
@@ -178,6 +192,7 @@ body {
 }
 
 #wr-sheet {
+  position: relative;        /* the comment layer + card are placed in it */
   max-width: 70ch;
   margin: 0 auto;
   padding: 26px 18px 45vh;   /* the bottom padding keeps the caret clear of the keyboard */
@@ -240,6 +255,95 @@ body {
 .task-box.task-done { color: var(--accent); }
 .task-done ~ .task-text, .task-text { color: var(--fg-mut); }
 .t-task .task-text { text-decoration: line-through; text-decoration-color: var(--dim); }
+
+/* ── Inline comments (upub/comments.js) ──────────────────────────────────── */
+
+/* Highlights are rects in a layer UNDER the text (the line divs must stay
+   textContent-pure), measured from the ranges; the card sits in the sheet
+   below its range so both scroll with the text. */
+.wr-comment-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+.wr-editor { position: relative; z-index: 1; }
+.wr-comment-rect {
+  position: absolute;
+  background: var(--comment-range);
+  border-bottom: 1.5px solid var(--comment-range-line);
+  border-radius: 2px;
+}
+.wr-comment-rect.active { background: var(--comment-range-active); }
+.wr-comment-rect.wr-comment-point { background: var(--comment-range-line); border: 0; border-radius: 2px; }
+
+.wr-comment-card {
+  position: absolute;
+  z-index: 5;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.22), 0 1px 3px rgba(0,0,0,.14);
+  color: var(--fg);
+  font: 400 14px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  overflow: hidden;
+}
+.wcc-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--comment-range) 60%, transparent);
+}
+.wcc-excerpt { flex: 1; min-width: 0; font: 400 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg-mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wcc-close { flex: none; width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: var(--fg-mut); font-size: 19px; line-height: 1; cursor: pointer; }
+.wcc-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.wcc-messages { display: flex; flex-direction: column; gap: 10px; max-height: 38vh; overflow-y: auto; }
+.wcc-meta { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.wcc-author { font-weight: 600; }
+.wcc-when { font-size: 11px; color: var(--dim); }
+.wcc-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.wcc-form { display: flex; flex-direction: column; gap: 6px; }
+.wcc-form.wcc-reply { padding-top: 8px; border-top: 1px solid var(--line); }
+.wcc-input {
+  width: 100%; resize: none; overflow: hidden; box-sizing: border-box;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; font: inherit; font-size: 16px;   /* ≥16px: no iOS focus-zoom */
+}
+.wcc-input:focus { outline: none; border-color: var(--accent); }
+.wcc-input::placeholder { color: var(--dim); }
+.wcc-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.wcc-btn {
+  border: 1px solid var(--line); border-radius: 999px;
+  background: none; color: var(--fg-mut);
+  font: inherit; font-size: 13px; padding: 6px 14px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.wcc-btn.wcc-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+/* The long-press / right-click menu on selected text. */
+.wr-ctx-menu {
+  position: fixed; z-index: 60; min-width: 190px; padding: 4px;
+  background: var(--bg-elev); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.22), 0 1px 3px rgba(0,0,0,.14);
+}
+.wr-ctx-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 12px; border: 0; border-radius: 7px; background: none;
+  color: var(--fg); font: 400 15px/1.2 -apple-system, system-ui, sans-serif; text-align: left; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.wr-ctx-item:active, .wr-ctx-item:hover { background: var(--bg-alt); }
+.wr-ctx-glyph { flex: 0 0 18px; text-align: center; color: var(--accent); font: 500 12px/1 ui-monospace, Menlo, monospace; }
+@media (pointer: fine) { .wr-ctx-item { padding: 7px 10px; font-size: 13.5px; } }
+
+/* The Comments sheet (⋯ menu → Comments…) */
+.wr-cmt-sheet h3 { margin: 4px 0 10px; font: 600 15px/1 -apple-system, system-ui, sans-serif; }
+.wr-cmt-sheet h4 { margin: 18px 0 6px; font: 600 12px/1 -apple-system, system-ui, sans-serif; color: var(--fg-mut); text-transform: uppercase; letter-spacing: .04em; }
+.wr-cmt-row {
+  display: block; width: 100%; text-align: left; border: 0; border-radius: 8px;
+  background: var(--bg-alt); color: var(--fg); padding: 9px 12px; margin: 0 0 6px; cursor: pointer;
+  font: 400 14px/1.4 -apple-system, system-ui, sans-serif;
+}
+.wr-cmt-row:disabled { opacity: .55; cursor: default; }
+.wr-cmt-excerpt { display: block; font: 400 12px/1.4 ui-monospace, Menlo, monospace; color: var(--fg-mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wr-cmt-text { display: block; overflow-wrap: anywhere; }
+.wr-cmt-text i { color: var(--dim); font-style: normal; }
 
 /* Focus mode — everything but the caret's paragraph recedes. */
 .wr-focus .wr-line { transition: opacity 0.25s ease; }

@@ -292,6 +292,15 @@ From the ⋯ menu: **SVG** (vector drawing), **PNG**, **PDF** — printed **at
 true scale** (put a scale ruler on it), plus the data file (text + full
 history) and, in single-file mode, a copy of the whole app.
 
+## Comments
+
+Select a statement (or a few words of it) and **long-press the selection**
+(right-click on a desktop) → **Comment**. A card opens under it; the
+commented text keeps a soft highlight — tap it to read the thread, reply or
+**Resolve**. **⋯ menu → Comments…** lists every open and resolved comment
+(tap one to jump to it). Comments follow the text as you edit and are saved
+with the document.
+
 ## History
 
 {draft} keeps git-style version history on your device — commit from the

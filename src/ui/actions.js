@@ -7,7 +7,7 @@
  *   • listBubbleActions(ctx, view) → the round action button (action-fab.js),
  *     CONTEXTUAL to the pane that is showing:
  *       editor → text/music verbs: play · one measure per line · piano roll
- *                (ABC), indent · outdent, undo · redo
+ *                (ABC), comment, indent · outdent, undo · redo
  *       render → play / pause (ABC); zoom to fit · zoom in · zoom out
  *                (Mermaid) — nothing for other DSLs (bubble hides)
  *       commit → the branches (tap one to switch), New branch…, Commit…
@@ -128,6 +128,9 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
   for (const a of dslActions(dslId)) {
     acts.push(mk({ id: a.id, label: a.label, glyph: a.glyph ?? '·', run: () => a.run({ editor }) }));
   }
+  // Comment on the selection (or the word at the caret) — the phone's sure way
+  // in, beside the long-press on selected text (editor.js).
+  acts.push(mk({ id: 'comment', label: 'Comment', glyph: '❝', run: () => state.emit('comment-selection') }));
   // Indent / outdent the selected lines — every text app, since a soft keyboard
   // has no Tab / Shift-Tab.
   acts.push(mk({ id: 'indent', label: 'Indent', glyph: '⇥', run: () => { editor?.indent(); } }));
@@ -183,7 +186,7 @@ export function listMenuActions(ctx = {}) {
   add({ id: 'export-app', label: 'Export as app (.html)…', glyph: '⊡', group: 'export',
         run: () => exportApp(ctx.handlers) });
 
-  add({ id: 'archived', label: 'Archived comments…', glyph: '❝', group: 'more',
+  add({ id: 'archived', label: 'Resolved comments…', glyph: '❝', group: 'more',
         run: () => showArchivedCommentsModal() });
   add({ id: 'settings', label: 'Settings', glyph: '⚙' + TEXT, group: 'more',
         run: () => state.activePanel === PANELS.SETTINGS ? state.closePanel() : state.openPanel(PANELS.SETTINGS) });

@@ -179,6 +179,21 @@ How the document maps to the book:
 You can also export the raw **Markdown** (\`.md\`) at any time — your text
 is never locked in.
 
+## Comments
+
+Comments live on the text, the way a word processor does them. **Select
+some words, then long-press the selection** (right-click on a desktop)
+and choose **Comment**. A card opens under the selection; write and tap
+**Comment**. The commented text keeps a soft highlight; **tap it** to read
+the thread, reply, or **Resolve** it (resolving removes the highlight and
+keeps the thread under **⋯ menu → Comments…**, which also lists every open
+comment — tap one to jump to it). Comments follow the text as you edit; a
+comment whose text you delete resolves itself. On a hardware keyboard,
+**⌃⌥M** / **⌘⌥M** comments on the selection.
+
+Comments are saved with the document (and in its data file), so they
+travel with it into any other unifile app.
+
 ## Version history
 
 {write} keeps a git-style history *inside* the document. Open **⋯ menu →
