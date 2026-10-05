@@ -13,6 +13,11 @@
  *                  //   the origin shares ONE IndexedDB, so each lists its own.
  *     title,       // mirrors data.title (kept on the record for cheap lists)
  *     excerpt,     // first non-empty body lines (list preview; see excerptOf)
+ *     apiName,     // mirrors data.apiName — the document's NAME, fixed at
+ *                  //   genesis, carried by the saved files' names only:
+ *                  //   `<apiName>-<version>.uni` (see versionFileName)
+ *     version,     // mirrors data.savedVersion — the last version written to
+ *                  //   the device ('A00' … 'Z99'), null before the first save
  *     data,        // the WHOLE unifile data object: history (branches/commits,
  *                  //   kept in the file format for round-tripping), the working
  *                  //   text (`currentContent`) — i.e. the UNSAVED state too —,
@@ -22,21 +27,27 @@
  *     savedAt,     // when the document was last written OUT to the device
  *     savedKey,    // `stateKey(data)` of what was written → "unsaved changes
  *                  //   since" is one string compare (see isSavedToDevice)
- *     handle,      // FileSystemFileHandle (Chromium only; structured-cloneable,
- *                  //   so it persists in IndexedDB) or null
- *     fileName,    // the device file's name (also shown in the list)
+ *     handle,      // FileSystemDirectoryHandle — the folder the versions are
+ *                  //   written into (Chromium only; structured-cloneable, so
+ *                  //   it persists in IndexedDB) or null
+ *     fileName,    // the last device file's name (also shown in the list)
  *   }
  *
- * The persistence model has three layers, each strictly local (nothing here
+ * The persistence model has two layers, each strictly local (nothing here
  * ever touches the network):
  *   1. the library record — every keystroke (debounced) → the "unsaved state"
- *      of every document survives a close / crash / reload;
- *   2. the save history — `Save` commits a snapshot into data.commits (one
- *      linear line on `main`; the VCS is reused, its branching is not);
- *   3. the device file — `Save to device` writes the `.unifile.json` out of the
- *      browser sandbox: silently through a linked File System Access handle
- *      where that API exists (Chromium), else the OS share sheet (iOS → "Save
- *      to Files"), else a download.  See `core/storage.js` for the pickers.
+ *      of every document survives a close / crash / reload.  This is NOT a
+ *      save the user performs; it is the app remembering.
+ *   2. SAVE = the device.  There is one save verb: it writes the text — just
+ *      the DSL, nothing else — out of the browser sandbox as
+ *      `<apiName>-<version>.uni`, one new file per save, the version counting
+ *      up (`A00`, `A01`, … a major bump → `B00`), and records the same
+ *      snapshot in data.commits tagged with that version (one linear line on
+ *      `main`; the VCS is reused for history/diff/restore, its branching is
+ *      not).  Where the File System Access API exists (Chromium) the folder
+ *      is picked once and later versions land in it silently; elsewhere the
+ *      OS share sheet (iOS → "Save to Files"), else a download.  See
+ *      `core/device-file.js` + `core/storage.js`.
  *
  * This module is DOM-free: the `Library` class takes a `store` adapter
  * ({ getAll, get, put, delete } — the IndexedDB one lives in storage.js) and a
@@ -152,6 +163,8 @@ export function makeRecord(app, data, { id = newId(), now = Date.now(), handle =
     id,
     app,
     title: String(d.title || 'Untitled'),
+    apiName: d.apiName ?? null,
+    version: d.savedVersion ?? null,
     excerpt: excerptOf(d.currentContent),
     data: d,
     createdAt: now,
@@ -178,9 +191,142 @@ export function fileSlug(title) {
   return (String(title || 'untitled').trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled');
 }
 
-/** The device filename a document is written as. */
-export function deviceFileName(title) {
-  return fileSlug(title) + '.unifile.json';
+// ---------------------------------------------------------------------------
+// Names, versions and file names
+//
+// A document's NAME (`apiName`) is fixed at genesis and lives in the file
+// names only: every save writes `<apiName>-<version>.uni`, plain text.  The
+// version is `<major letter><minor 2 digits>` — A00, A01, … A99, B00 … Z99 —
+// always three characters, so there is a hard ceiling (Z99).
+// ---------------------------------------------------------------------------
+
+export const API_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.]*(?:-[A-Za-z0-9_.]+)*$/;
+export const API_NAME_MAX = 64;
+export const VERSION_RE = /^[A-Z][0-9]{2}$/;
+export const FIRST_VERSION = 'A00';
+export const LAST_VERSION = 'Z99';
+export const DEVICE_FILE_EXT = '.uni';
+
+/**
+ * Whether a string can be a document name: letters, digits, `_`, `.` and
+ * single `-` separators, no leading/trailing dash, ≤ 64 chars.  The trailing
+ * `-<version>` of the file name must stay unambiguous, which is why a name
+ * can't end in a dash.
+ */
+export function isValidApiName(s) {
+  const n = String(s ?? '');
+  return n.length > 0 && n.length <= API_NAME_MAX && API_NAME_RE.test(n);
+}
+
+/**
+ * Turn free text into a valid name (spaces → `-`, the rest dropped); '' when
+ * nothing usable is left.
+ */
+export function suggestApiName(s) {
+  const n = String(s ?? '').trim().replace(/[\s]+/g, '-').replace(/[^A-Za-z0-9_.-]+/g, '')
+    .replace(/-{2,}/g, '-').replace(/^[-.]+|-+$/g, '').slice(0, API_NAME_MAX).replace(/-+$/g, '');
+  return isValidApiName(n) ? n : '';
+}
+
+/** 'B07' → { major: 1, minor: 7 }; null for anything else. */
+export function parseVersion(v) {
+  if (!VERSION_RE.test(String(v ?? ''))) return null;
+  return { major: v.charCodeAt(0) - 65, minor: Number(v.slice(1)) };
+}
+
+/** { major: 1, minor: 7 } → 'B07'. */
+export function formatVersion({ major, minor }) {
+  return String.fromCharCode(65 + major) + String(minor).padStart(2, '0');
+}
+
+/**
+ * The version the next save gets: `A00` for a document never saved, else the
+ * next minor (`A03` → `A04`), or with `major` the next letter (`A03` → `B00`).
+ * Null when the scheme is exhausted (`Z99` has no successor; `Z..` has no
+ * next major).  Versions only ever move forward.
+ */
+export function nextVersion(current, { major = false } = {}) {
+  const cur = parseVersion(current);
+  if (!cur) return FIRST_VERSION;
+  if (major) return cur.major >= 25 ? null : formatVersion({ major: cur.major + 1, minor: 0 });
+  if (cur.minor >= 99) return cur.major >= 25 ? null : formatVersion({ major: cur.major + 1, minor: 0 });
+  return formatVersion({ major: cur.major, minor: cur.minor + 1 });
+}
+
+/** Version order: A00 < A01 < B00 … (`cmpVersion('B00', 'A99') > 0`). */
+export function cmpVersion(a, b) {
+  const x = parseVersion(a), y = parseVersion(b);
+  if (!x || !y) return (x ? 1 : 0) - (y ? 1 : 0);
+  return (x.major - y.major) || (x.minor - y.minor);
+}
+
+/** The device file a save writes: `<apiName>-<version>.uni`. */
+export function versionFileName(apiName, version) {
+  return `${apiName}-${version}${DEVICE_FILE_EXT}`;
+}
+
+/**
+ * The inverse: 'report-B03.uni' → { apiName: 'report', version: 'B03' }.
+ * A `.uni` / `.txt` / extension-less file without the `-<version>` suffix
+ * yields its stem as the name and `version: null`; anything else null.
+ */
+export function parseVersionFileName(fileName) {
+  const base = String(fileName ?? '').split(/[\\/]/).pop();
+  const m = /^(.+?)(?:-([A-Z][0-9]{2}))?(\.uni|\.txt)?$/i.exec(base);
+  if (!m) return null;
+  const apiName = m[1], version = m[2] ? m[2].toUpperCase() : null;
+  if (!isValidApiName(apiName)) return null;
+  return { apiName, version };
+}
+
+/** The device filename a document is written as (kept for older callers). */
+export function deviceFileName(apiName, version = FIRST_VERSION) {
+  return versionFileName(suggestApiName(apiName) || 'untitled', version);
+}
+
+// ---------------------------------------------------------------------------
+// Search — the list's search bar: file names AND contents
+// ---------------------------------------------------------------------------
+
+/**
+ * Case-insensitive search over the records: the name, title and file name
+ * match as a whole; the text yields HITS — each the line around a match,
+ * trimmed to `ctx` characters each side, with the match offsets (document
+ * coordinates, for a jump) and where the match sits in the snippet.  Records
+ * are ranked name/title matches first, then by hit count, then newest.
+ * An empty query returns every record with no hits.
+ *
+ * @returns {Array<{ record, nameMatch: boolean, hits: Array<{ from, to, line, snippet, matchStart, matchEnd }> }>}
+ */
+export function searchRecords(records, query, { maxHits = 3, ctx = 40 } = {}) {
+  const q = String(query ?? '').trim().toLowerCase();
+  if (!q) return records.map(record => ({ record, nameMatch: false, hits: [] }));
+  const out = [];
+  for (const record of records) {
+    const nameMatch = [record.apiName, record.title, record.fileName]
+      .some(v => v && String(v).toLowerCase().includes(q));
+    const text = String(record.data?.currentContent ?? '');
+    const lower = text.toLowerCase();
+    const hits = [];
+    let i = lower.indexOf(q);
+    let lastLine = -1;
+    while (i >= 0 && hits.length < maxHits) {
+      const ls = text.lastIndexOf('\n', i - 1) + 1;
+      let le = text.indexOf('\n', i); if (le < 0) le = text.length;
+      const line = text.slice(0, ls).split('\n').length;
+      if (line !== lastLine) {                      // one hit per line
+        const s = Math.max(ls, i - ctx), e = Math.min(le, i + q.length + ctx);
+        const snippet = (s > ls ? '…' : '') + text.slice(s, e) + (e < le ? '…' : '');
+        const matchStart = (s > ls ? 1 : 0) + (i - s);
+        hits.push({ from: i, to: i + q.length, line, snippet, matchStart, matchEnd: matchStart + q.length });
+        lastLine = line;
+      }
+      i = lower.indexOf(q, le);
+    }
+    if (nameMatch || hits.length) out.push({ record, nameMatch, hits });
+  }
+  return out.sort((a, b) => (b.nameMatch - a.nameMatch) || (b.hits.length - a.hits.length)
+    || ((b.record.updatedAt ?? 0) - (a.record.updatedAt ?? 0)));
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +395,11 @@ export class Library {
       next.data = normaliseData(patch.data, this.app);
       next.title = String(next.data.title || 'Untitled');
       next.excerpt = excerptOf(next.data.currentContent);
+      // The name is fixed at genesis: once set it never moves.
+      next.data.apiName = prev.apiName ?? next.data.apiName ?? null;
+      next.apiName = next.data.apiName;
+      next.data.savedVersion = next.data.savedVersion ?? prev.version ?? null;
+      next.version = next.data.savedVersion;
     }
     if (patch.title !== undefined && !patch.data) {
       next.title = String(patch.title || 'Untitled');
@@ -259,17 +410,43 @@ export class Library {
     return next;
   }
 
-  /** Mark the record as written to the device in its current state. */
-  async markSaved(id, { handle, fileName } = {}) {
+  /**
+   * Mark the record as written to the device in its current state — after a
+   * save, with the `version` that file carries (and, on Chromium, the folder
+   * `handle` it went into).
+   */
+  async markSaved(id, { handle, fileName, version } = {}) {
     const rec = await this.get(id);
     if (!rec) return null;
+    const data = version ? { ...rec.data, savedVersion: version } : rec.data;
     return this.save(id, {
+      ...(version ? { data } : {}),
       savedAt: this.now(),
-      savedKey: stateKey(rec.data),
+      savedKey: stateKey(data),
       updatedAt: rec.updatedAt,            // a device write is not an edit
+      ...(version ? { version } : {}),
       ...(handle !== undefined ? { handle } : {}),
       ...(fileName !== undefined ? { fileName } : {}),
     });
+  }
+
+  /**
+   * Give a document its name — allowed exactly once (genesis, or the first
+   * save of a document created before names existed).  Throws on an invalid
+   * name or when the document already has one.
+   */
+  async setApiName(id, apiName) {
+    const rec = await this.get(id);
+    if (!rec) throw new Error(`No document ${id}`);
+    if (rec.apiName) throw new Error('This document already has a name.');
+    if (!isValidApiName(apiName)) throw new Error('Invalid document name.');
+    return this.save(id, { data: { ...rec.data, apiName }, updatedAt: rec.updatedAt });
+  }
+
+  /** Whether a name is free among this app's documents (names must be unique: they are file names). */
+  async isApiNameFree(apiName, { exceptId = null } = {}) {
+    const want = String(apiName).toLowerCase();
+    return !(await this.list()).some(r => r.id !== exceptId && String(r.apiName ?? '').toLowerCase() === want);
   }
 
   /** Duplicate a document (history included) under "<title> copy". */
@@ -278,6 +455,10 @@ export class Library {
     if (!rec) return null;
     const data = JSON.parse(JSON.stringify(rec.data));
     data.title = `${rec.title} copy`;
+    // A copy is a new document: it gets its own name at its first save and
+    // starts its own version line (the history is kept).
+    delete data.apiName;
+    delete data.savedVersion;
     return this.create(data);
   }
 

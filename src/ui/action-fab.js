@@ -68,7 +68,7 @@ export class ActionFab {
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this._open) this.close(); });
 
     // Re-render on anything that changes the action list or the primary glyph.
-    for (const ev of ['change', 'abc-play-state', 'checkout', 'active-section-change', 'piano-roll-change']) {
+    for (const ev of ['change', 'abc-play-state', 'checkout', 'active-section-change', 'piano-roll-change', 'device-change']) {
       state.on(ev, () => this.render());
     }
     state.on('diff-change', () => this.close());

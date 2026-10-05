@@ -473,6 +473,7 @@ html, body {
    ============================================================== */
 
 #uf-topbar {
+  position: relative;   /* the pill dropdowns hang off the bar itself, wherever a banner above pushes it */
   flex-shrink: 0;
   z-index: 100;
 }
@@ -866,11 +867,10 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 
 /* The device pill — whether the device holds this document's current state.
    none = never saved to the device, stale = changed since, saved = in sync. */
-.vcs-pill.device-pill { gap: 4px; }
-.vcs-pill.device-pill svg { flex-shrink: 0; }
-.vcs-pill.device-pill.saved { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); }
-.vcs-pill.device-pill.stale { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 55%, transparent); }
-.vcs-pill.device-pill.none  { color: var(--text-muted); }
+.vcs-pill.commit-pill.saved { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); gap: 5px; }
+.vcs-pill.commit-pill.saved svg { flex-shrink: 0; }
+.commit-action-pill .vcs-pill-mono { opacity: .85; }
+.tools-menu-ver { font-family: var(--font-mono); color: var(--text-sub); font-size: 12px; margin-left: 4px; }
 
 /* ‹ Documents — opens the library drawer (left of the menu button) */
 .tb-library {
@@ -1049,24 +1049,26 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 
 /* ==============================================================
    THE DOCUMENT LIBRARY (library-pane.js)
-   Phone: the `library` pane (left circle = back arrow).  Desktop: a drawer
-   over the left of #uf-main (`#unifile-app[data-library]`).  Quines: empty.
+   Phone: the `library` pane (left circle = back arrow).  Desktop: a
+   COLLAPSIBLE SIDEBAR on the left of #uf-main (`#unifile-app[data-library]`)
+   — a panel, not a drawer: it stays open while you work and pushes the
+   editor/preview over (padding on #uf-main, so both split orientations keep
+   their layout).  Quines: empty.  `:not([data-mobile-pane])` = desktop only;
+   the phone's pane rules below take over on small screens.
    ============================================================== */
 #uf-library { display: none; }
-#unifile-app[data-library] #uf-library {
+#unifile-app[data-library]:not([data-mobile-pane]) #uf-main { padding-left: var(--uf-library-w, 300px); }
+#unifile-app[data-library]:not([data-mobile-pane]) #uf-library {
   display: flex;
   flex-direction: column;
   position: absolute;
   top: 0; bottom: 0; left: 0;
-  width: min(380px, 100%);
-  z-index: 65;
+  width: var(--uf-library-w, 300px);
+  z-index: 30;
   background: var(--bg);
   border-right: 1px solid var(--border);
-  box-shadow: 8px 0 24px rgba(0,0,0,.18);
   overflow: hidden;
-  animation: uf-lib-in .16s ease;
 }
-@keyframes uf-lib-in { from { transform: translateX(-12px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 .lib { display: flex; flex-direction: column; min-height: 0; flex: 1; font-family: var(--font-ui); }
 .lib-head {
@@ -1090,6 +1092,26 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   font-family: var(--font-ui);
 }
 .lib-new:active { filter: brightness(.92); }
+.lib-search {
+  position: relative; display: flex; align-items: center; flex-shrink: 0;
+  margin: 0 10px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
+}
+.lib-search:focus-within { border-color: var(--accent); }
+.lib-search-icon { display: flex; padding: 0 0 0 9px; color: var(--text-muted); }
+.lib-search-icon svg { width: 14px; height: 14px; }
+.lib-search-input {
+  flex: 1; min-width: 0; border: none; background: none; outline: none;
+  font-family: var(--font-ui); font-size: 16px; color: var(--text); padding: 7px 8px;
+  -webkit-appearance: none; appearance: none;
+}
+.lib-search-input::-webkit-search-cancel-button { display: none; }
+.lib-search-input::placeholder { color: var(--text-muted); }
+.lib-search-clear {
+  display: none; border: none; background: none; color: var(--text-muted); font-size: 18px; line-height: 1;
+  padding: 0 10px; cursor: pointer; align-self: stretch;
+}
+.lib-search.has-query .lib-search-clear { display: block; }
+.lib-search-clear:hover { color: var(--text); }
 .lib-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; overscroll-behavior: contain; flex: 1; min-height: 0; }
 .lib-item { position: relative; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); }
 .lib-item.current { background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
@@ -1103,10 +1125,21 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .lib-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 999px; background: var(--pending); }
 .lib-item-excerpt { font-size: 13px; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .lib-item-meta { display: flex; flex-wrap: wrap; gap: 5px; font-size: 11px; color: var(--text-muted); }
-.lib-device { display: inline-flex; align-items: center; gap: 3px; }
-.lib-device svg { width: 11px; height: 11px; }
-.lib-device.saved { color: var(--success); }
-.lib-device.stale { color: var(--warning); }
+.lib-file { font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-file.saved { color: var(--success); }
+.lib-file.stale { color: var(--warning); }
+.lib-file.none  { color: var(--text-muted); font-style: italic; }
+/* Search hits: the line around each match under its document, match marked. */
+.lib-item { flex-wrap: wrap; }
+.lib-hits { list-style: none; margin: 0; padding: 0 0 6px; flex: 1 1 100%; }
+.lib-hit {
+  display: flex; gap: 8px; align-items: baseline; padding: 3px 14px 3px 22px; cursor: pointer;
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-sub); line-height: 1.4;
+}
+.lib-hit:hover, .lib-hit:focus-visible { background: var(--bg-surface); color: var(--text); outline: none; }
+.lib-hit-line { flex: 0 0 auto; min-width: 2ch; text-align: right; color: var(--text-muted); font-size: 11px; }
+.lib-hit-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-hit mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--text); border-radius: 2px; padding: 0 1px; }
 .lib-more {
   flex: 0 0 44px; border: none; background: none; color: var(--text-muted); font-size: 20px;
   cursor: pointer; -webkit-tap-highlight-color: transparent;
@@ -1546,18 +1579,21 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   padding: 7px 9px; resize: none; overflow: hidden; max-height: 140px;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.clp-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.clp-ver {
-  flex: 1; min-width: 0; box-sizing: border-box;
-  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  color: var(--text); font-family: var(--font-ui); font-size: 16px; padding: 7px 9px;
+.clp-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.clp-version { flex: 1; min-width: 0; font-size: 13px; color: var(--text-sub); white-space: nowrap; }
+.clp-version b { font-family: var(--font-mono); color: var(--text); font-weight: 600; }
+.clp-major-label {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-sub);
+  cursor: pointer; user-select: none; white-space: nowrap;
 }
+.clp-major-label input { margin: 0; accent-color: var(--accent); }
 .clp-commit {
   flex: 0 0 auto; background: var(--accent); border: none; border-radius: var(--radius-sm);
   color: var(--bg); font-family: var(--font-ui); font-size: 14px; font-weight: 600;
   padding: 8px 16px; cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 .clp-commit:active { filter: brightness(.92); }
+.clp-commit:disabled { opacity: .5; cursor: default; }
 
 /* ==============================================================
    PANE DIVIDER

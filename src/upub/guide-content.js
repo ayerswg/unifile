@@ -202,27 +202,40 @@ one to open it, **+ New** to start another, **⋯** on a row to rename,
 duplicate or delete it. You never have to save before switching: the text
 you are typing is remembered as you type.
 
-Three layers keep your writing safe, all on your device — nothing is ever
+The list has a **search bar**: it searches document names *and* their
+text, and shows the matching lines under each document — tap a line to open
+the document right there.
+
+Two things keep your writing safe, all on your device — nothing is ever
 sent anywhere:
 
 - **Remembered as you type.** Every document's current text, including
-  unsaved changes, is stored on the device the moment you type it.
-- **Save** (⋯ menu → Save, or the Save button in **History**) snapshots the
-  text into the document's **history**. Saves are stored as diffs, so
-  history stays small; a message is optional. In History, tap any save to
-  **restore** its text into the editor — restoring deletes nothing, it just
-  puts the old text back as the current (unsaved) state; save again to keep
-  it.
-- **Save to device** writes the document — text *and* full history — as a
-  small \`.unifile.json\` file you control: into a folder of your choosing
-  (desktop Chrome and Edge remember the file, so later saves write straight
-  to it), via the share sheet to **Files / iCloud Drive** on iPhone and iPad,
-  or as a download elsewhere. **Open from device** brings such a file back
-  into the documents list on any device — history and comments included.
+  changes you haven't saved, is stored on the device the moment you type
+  it. You never have to do anything for this.
+- **Save** (⋯ menu → Save, or the Save button in **History**) writes the
+  text to your device as a file — just the text, nothing else — and keeps
+  the same snapshot in the document's **history**. Every save is a new
+  file: \`name-A00.uni\`, then \`name-A01.uni\`, \`name-A02.uni\`… The
+  **name** is asked for once, when the document is created, and never
+  changes (it is what the files are called; the title you see at the top
+  is separate and can change freely). The three-character **version** counts
+  up by itself; **Save as new major** turns \`A07\` into \`B00\` — for a
+  draft you consider a new stage. On desktop Chrome and Edge you pick the
+  folder once and later versions land in it silently; on iPhone and iPad
+  the share sheet offers **Files / iCloud Drive**; elsewhere the file
+  downloads. A note on the version is optional (History → the pending node).
+  In History, tap any version to **restore** its text into the editor —
+  restoring deletes nothing, it puts the old text back as the current
+  (unsaved) state; save again to keep it.
 
-The dot on the Save menu item (and next to the title) means there are
-changes since the last save. The documents list shows whether the device
-file matches each document's current state.
+**Open from device** brings a \`.uni\` file back into the documents list on
+any device: the name and version come from the file name, and the history
+starts from there. (Older \`.unifile.json\` files still open, history
+included.)
+
+The dot next to the title (and on the Save menu item) means the device
+doesn't have your latest changes yet. The documents list shows each
+document's last saved file.
 
 Set your author name for saves in **⋯ menu → Settings**.
 
@@ -230,8 +243,8 @@ Set your author name for saves in **⋯ menu → Settings**.
 
 - **App (PWA):** documents are stored in the browser's IndexedDB on your
   device and remembered as you type. Browsers can evict site data under
-  storage pressure — use **Save to device** for anything you care about;
-  the file holds the complete text and history and opens on any device.
+  storage pressure — **Save** anything you care about; each version is a
+  plain-text file you keep, and it opens on any device.
 - **Single-file (.html):** the downloaded file *is* the app and the
   document in one (there is no documents list in this mode). "Save a copy"
   regenerates the file with your latest text and history embedded.

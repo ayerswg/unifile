@@ -310,13 +310,19 @@ another, **⋯** on a row to rename, duplicate or delete. What you type is
 remembered on the device as you type it, so switching plans never loses
 anything.
 
-**Save** (⋯ menu → Save, or from the **History** sheet, where a message is
-optional) snapshots the text into the plan's history; tap any save there to
+The list's **search bar** searches plan names *and* their text, showing
+the matching lines under each plan — tap one to open the plan on that line.
+
+**Save** (⋯ menu → Save, or from the **History** sheet, where a note is
+optional) writes the plan's text to your device as a file — just the DSL
+text — and keeps the same snapshot in the plan's history. Every save is a
+new file: \`name-A00.uni\`, \`name-A01.uni\`… The **name** is asked for
+once, when the plan is created, and never changes (the title at the top is
+separate); the version counts up by itself, and **Save as new major** turns
+\`A07\` into \`B00\`. On desktop Chrome and Edge you pick the folder once
+and later versions land in it silently; on iPhone and iPad the share sheet
+offers Files; elsewhere the file downloads. Tap any version in History to
 **restore** it — the old text comes back as the current, unsaved state.
-**Save to device** writes the plan — text and full history — as a small
-\`.unifile.json\` you control (a folder of your choosing on desktop Chrome
-and Edge, which then write straight to that file on every save; the share
-sheet to Files on iPhone and iPad; a download elsewhere), and **Open from
-device** brings one back. Everything is offline; nothing leaves your
-device.
+**Open from device** brings a \`.uni\` back (name and version from the
+file name). Everything is offline; nothing leaves your device.
 `;

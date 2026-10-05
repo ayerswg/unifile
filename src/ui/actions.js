@@ -10,7 +10,8 @@
  *                 (ABC), comment, indent · outdent, undo · redo
  *       render  → play / pause (ABC); zoom to fit · zoom in · zoom out
  *                 (Mermaid) — nothing for other DSLs (bubble hides)
- *       history → Save (the tap), Save with message…, Save to device
+ *       history → Save (the tap: the next version to the device), Save with
+ *                 a note…, Save as new major version
  *       library → New document (the tap), Open from device…
  *
  * Every action carries a single UTF-8 TEXT glyph (never an emoji — code points
@@ -99,12 +100,14 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
   }
 
   if (view === 'history') {
-    acts.push(mk({ id: 'save', label: 'Save', key: '0 save', glyph: '◉', disabled: !state.isDirty,
+    const next = state.nextSaveVersion;
+    acts.push(mk({ id: 'save', label: next ? `Save ${next}` : 'Save', key: '0 save', glyph: '◉', disabled: !state.needsSave,
       run: () => state.emit('save-document') }));
-    acts.push(mk({ id: 'save-msg', label: 'Save with message…', key: '1 save msg', glyph: '✎', star: false,
-      disabled: !state.isDirty, run: () => composeCommit() }));
-    acts.push(mk({ id: 'save-device', label: 'Save to device', key: '2 device', glyph: '⤓',
-      run: () => state.emit('save-to-device') }));
+    acts.push(mk({ id: 'save-msg', label: 'Save with a note…', key: '1 save msg', glyph: '✎', star: false,
+      disabled: !state.needsSave, run: () => composeCommit() }));
+    const major = state.nextMajorVersion;
+    if (major) acts.push(mk({ id: 'save-major', label: `Save as ${major}`, key: '2 major', glyph: '⇈', star: false,
+      run: () => state.emit('save-major') }));
     return acts;
   }
 
@@ -168,12 +171,14 @@ export function listMenuActions(ctx = {}) {
   add({ id: 'blame', label: 'Blame view', glyph: '⌕', group: 'document', disabled: !hasCommits,
         run: () => state.activePanel === PANELS.BLAME ? state.closePanel() : state.openPanel(PANELS.BLAME) });
 
-  add({ id: 'save', label: 'Save', glyph: '◉', group: 'file', disabled: !state.isDirty,
+  const next = state.nextSaveVersion;
+  const major = state.nextMajorVersion;
+  add({ id: 'save', label: next ? `Save ${next} to device` : 'Save', glyph: '◉', group: 'file', disabled: !state.needsSave,
         run: () => state.emit('save-document') });
-  add({ id: 'history', label: 'History', glyph: '◷', group: 'file',
+  if (major) add({ id: 'save-major', label: `Save as ${major} (new major)`, glyph: '⇈', group: 'file',
+        run: () => state.emit('save-major') });
+  add({ id: 'history', label: state.data?.savedVersion ? `History — at ${state.data.savedVersion}` : 'History', glyph: '◷', group: 'file',
         run: () => state.emit('mobile-goto-pane', 'history') });
-  add({ id: 'save-device', label: state.deviceFile?.saved ? 'On device ✓ — save again' : 'Save to device…',
-        glyph: '⤓', group: 'file', run: () => state.emit('save-to-device') });
   add({ id: 'open-device', label: 'Open from device…', glyph: '⤒', group: 'file',
         run: () => state.emit('open-from-device') });
   if (state.library) {
@@ -212,12 +217,12 @@ export function renameDoc() {
   state.update({ data: { ...state.data, title: next } });
 }
 
-/** Save with a message from the phone: the composer is the pending node at the top of the history. */
+/** Save with a note from the phone: the composer is the pending node at the top of the history. */
 export function composeCommit() {
   state.emit('mobile-goto-pane', 'history');
   const log = document.getElementById('uf-commit-log');
   log?.scrollTo?.({ top: 0, behavior: 'smooth' });
-  const msg = log?.querySelector('#clp-msg');
+  const msg = log?.querySelector('.clp-msg');
   if (msg) setTimeout(() => msg.focus(), 50);
 }
 

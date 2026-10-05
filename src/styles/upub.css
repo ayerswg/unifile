@@ -183,8 +183,28 @@ body {
 .wr-lib-title .wr-menu-dot { vertical-align: middle; }
 .wr-lib-excerpt { font-size: 13px; color: var(--fg-mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono, ui-monospace, monospace); }
 .wr-lib-meta { font-size: 11px; color: var(--dim); }
+.wr-lib-dev { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wr-lib-dev.saved { color: var(--accent); }
 .wr-lib-dev.stale { color: var(--pending); }
+.wr-lib-search { padding: 0 16px 8px; }
+.wr-lib-search-input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; color: var(--fg);
+  background: var(--bg-alt); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  -webkit-appearance: none; appearance: none;
+}
+.wr-lib-search-input:focus { outline: none; border-color: var(--accent); }
+.wr-lib-item { flex-wrap: wrap; }
+.wr-lib-hits { flex: 1 1 100%; padding: 0 0 6px; }
+.wr-lib-hit {
+  display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left; border: 0; background: none;
+  padding: 4px 16px 4px 24px; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; color: var(--fg-mut);
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.wr-lib-hit:active { background: var(--bg-alt); }
+.wr-lib-hit-line { flex: 0 0 auto; min-width: 2ch; text-align: right; color: var(--dim); font-size: 11px; }
+.wr-lib-hit-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wr-lib-hit mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--fg); border-radius: 2px; padding: 0 1px; }
+.wr-menu-ver { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; color: var(--fg-mut); }
 .wr-lib-more { flex: 0 0 44px; border: 0; background: none; color: var(--dim); font-size: 20px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .wr-lib-menu {
   position: absolute; right: 10px; top: 44px; z-index: 3; display: flex; flex-direction: column; min-width: 160px;
@@ -633,6 +653,9 @@ body {
   border: 2px dashed var(--pending);
 }
 .wr-pending-row { display: flex; gap: 8px; }
+.wr-pending-row b { font-family: var(--mono, ui-monospace, monospace); font-weight: 600; }
+.wr-pending-major { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 13px; color: var(--fg-mut); }
+.wr-pending-major input { margin: 0; accent-color: var(--accent); }
 .wr-pending-row input {
   flex: 1;
   min-width: 0;

@@ -20,26 +20,27 @@ heads the phone title bar, and sits beside the name on the site. Build ids stay
 same apps. Glyphs were picked for having no emoji presentation; action glyphs
 that do (▶ ⏸ ⚙) get U+FE0E appended (`actions.js`).
 
-A **single-file, fully-offline** document editor with **built-in save history**
-(git-style snapshots under the hood, one linear line of saves in the UI). A document is plain text; its sections declare their own format
+A **single-file, fully-offline** document editor with **built-in version history**
+(git-style snapshots under the hood, one linear line of versions in the UI). A document is plain text; its sections declare their own format
 (Markdown, ABC music notation, Mermaid, Fountain…) via `#!shebang` lines.
 Everything runs client-side — **no server, no account, no network at runtime**.
 
 Two shipping shapes per content "type":
 - **Quine** — one standalone `.html` file that embeds the whole app *and* the
-  document data. Saving regenerates the file. Opens from disk (`file://`) or hosted.
+  document data. Opens from disk (`file://`) or hosted; "Export as app" regenerates it.
 - **PWA** — an installable, offline Progressive Web App. Its documents live in the
   **library** (IndexedDB, many documents per app, each remembered as it was left — see
-  "The document library"); **Save to device** writes a `.unifile.json` out of the sandbox.
+  "The document library"); **Save** writes `<name>-<version>.uni` (the text only) out of the sandbox.
 
 ### Non-negotiable principles
 1. **Offline & self-contained.** Every library is bundled by esbuild. No runtime
    CDN fetches. The only network call is the update check (`GET /version.json`).
 2. **Privacy: nothing leaves the device.** unifile.app is a static site (Cloudflare
    Pages) — it stores nothing. No telemetry, no analytics. Keep it that way.
-3. **Plain-text, portable data.** The history (saves stored as line diffs) is plain
-   JSON. A document + full history round-trips through a tiny `.unifile.json` — the
-   file **Save to device** writes and **Open from device** reads.
+3. **Plain-text, portable data.** The history (versions stored as line diffs) is plain
+   JSON inside the app's store / the quine. What leaves the app is the TEXT ITSELF: a
+   save writes `<name>-<version>.uni`, nothing but the DSL, and **Open from device**
+   reads such a file back (older `.unifile.json` text+history files still open).
 4. **Strict same-origin CSP.** See `templates/pwa.html` / `quine.html`. Adding a
    third-party origin is a big deal — we removed Google Drive sync partly to keep
    the CSP locked down.
@@ -55,10 +56,12 @@ src/
     vcs.js           Git-like VCS (branches, commits-as-diffs, detached HEAD) — the FILE FORMAT; the UI uses it as ONE
                      linear line of saves on `main` (no branch/merge/detached UI since 2026-10)
     diff.js          LCS line diff: computePatch/applyPatch, lineDiff (side-by-side), unifiedDiff, blame
-    storage.js       Quine capture/generate, IndexedDB (`library` store + legacy `documents`), the device-file pickers
-                     (File System Access / share sheet / download), drafts (quine only), user prefs, IS_QUINE
-    library.js       THE DOCUMENT LIBRARY (pure, Node-tested): records, migration, `Library` class over a store adapter
-    device-file.js   Save to device / Open from device — the one implementation every shell calls
+    storage.js       Quine capture/generate, IndexedDB (`library` store + legacy `documents`), the device pickers
+                     (File System Access folder/file pickers / share sheet / download), drafts (quine only), user prefs, IS_QUINE
+    library.js       THE DOCUMENT LIBRARY (pure, Node-tested): records, migration, `Library` class over a store adapter,
+                     NAMES + VERSIONS (`A00`…`Z99`, `nextVersion`, `versionFileName`) and `searchRecords` (the list's search)
+    device-file.js   Save (one version file per save) / Open from device — the one implementation every shell calls
+                     (`test/device-file.test.mjs`)
     front-matter.js  Nested-YAML-subset parser/serializer for the leading `---`…`---` block
     doc-sections.js  Parses `#!dslId@ver+ext` shebang sections
     abc-voices.js    Parses ABC `V:` voice lines (voiceIdOfLine / buildVoiceMap) — shared by the gutter + abcjs.js for mute/solo
@@ -78,7 +81,7 @@ src/
   upub/              The uPub variant's own shell (no CodeMirror — see "uPub")
     main.js, app.js, editor.js, syntax.js, epub.js, zip.js, preview.js, guide-content.js
     comments.js      Inline comments for the custom editor (overlay highlights + card) — uDraft reuses it
-    library.js       `ShellLibrary`: the library for the uPub-style shells (boot/persist/sheet/device verbs) — uDraft reuses it
+    library.js       `ShellLibrary`: the library for the uPub-style shells (boot/persist/sheet/save/open verbs) — uDraft reuses it
     (editor.js = the SHARED custom line editor: `syntax:` option plugs in a
      classifier/renderer; uDraft reuses it — see "uDraft")
   udraft/            The uDraft variant's own shell (see "uDraft")
@@ -92,15 +95,16 @@ src/
     editor.js        CodeMirror 6 setup: per-section highlighting, inline-comment gestures, no gutter
     editor-sections.js  Collapsible front-matter bar (default-collapsed on load; the only section kind)
     preview.js       Renders the active model/DSL to the preview pane
-    topbar.js        Desktop top bar: ‹ library button, menu, title, Save pill + history pill, device pill; the history list
-                     (pending "Unsaved changes" node + "on device" marker; also mounted as the phone's history pane).
+    topbar.js        Desktop top bar: ‹ library toggle, menu, title, Save pill (shows the NEXT version) / version pill; the
+                     history list (pending node = note + major switch + Save, the versions, the "on device" marker; mounted
+                     in the pill's dropdown AND as the phone's history pane — class-scoped, never ids).
                      Also `showDslHelpModal` = the per-DSL syntax reference (grouped, navigable sidebar; `DSL_HELP[dsl].sections[]` with optional `group`)
     pane-switch.js   PHONE top bar: (‹ back-arrow circle → the library) {mark} Title ● ⌄ (eye circle) + the one dropdown (see Mobile)
     actions.js       The phone actions: listMenuActions (title dropdown, file level) + listBubbleActions (bubble, per view:
-                     editor · render · history = Save · library = New)
+                     editor · render · history = Save (next version) · library = New)
     action-fab.js    The draggable `{glyph}` action bubble, contextual per pane: tap = primary · hold = grid · drag = snap to a corner
-    library-pane.js  The document list (phone pane `library` / desktop drawer `[data-library]`): open, + New, ⋯ rename/duplicate/delete
-    commit-dialog.js "Save with message…" dialog (optional identity + message + version)
+    library-pane.js  The document list (phone pane `library` / desktop SIDEBAR `[data-library]`): search bar (names + text,
+                     contextual hits), flat list, + New (asks the name), ⋯ rename title/duplicate/delete
     diff-view.js     DiffView overlay + DiffBar (read-only commit diff)
     dsl-footer.js    ABC transport (play/scrub/time)
     settings-panel.js  Identity, theme, updates (check button), audio output (MIDI)
@@ -155,12 +159,12 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 **Entry:** `main.js` → `new App().init()`. In quine mode the app is on `window.__unifile`. The build also exposes `globalThis.__uf = { state }` for tests/preview automation.
 
-**State (`state.js`)** is a tiny EventBus singleton (`state`). Mutate via `state.update(patch)` (broadcasts `change`) or `state.emit(event, payload)`; subscribe with `state.on(event, fn)`. Key fields: `data` (the full serialized doc), `vcs`, `currentContent`, `isDirty`, `viewMode`, `activePanel`, `diff`, `pendingCommit`, `user`, and the library trio `library` (a `Library`, null in a quine) · `docId` (the open record) · `deviceFile` (`{fileName, savedAt, savedHead, saved, linked}` mirrored from the record; `device-change` fires when it moves). Getters: `headHash`, `currentBranch`; `isDetached` is always false now.
+**State (`state.js`)** is a tiny EventBus singleton (`state`). Mutate via `state.update(patch)` (broadcasts `change`) or `state.emit(event, payload)`; subscribe with `state.on(event, fn)`. Key fields: `data` (the full serialized doc), `vcs`, `currentContent`, `isDirty` (text ≠ head snapshot), `viewMode`, `activePanel`, `diff`, `user`, and the library trio `library` (a `Library`, null in a quine) · `docId` (the open record) · `deviceFile` (`{fileName, savedAt, savedHead, saved, linked, version}` mirrored from the record; `device-change` fires when it moves). Getters: `headHash`, `currentBranch`, **`needsSave`** (dirty OR never saved OR the device copy is behind — THE one condition behind the dirty dot, the Save pill and the pending node), `nextSaveVersion` / `nextMajorVersion`; `isDetached` is always false now.
 
 **Data model (`state.data`)** is the JSON embedded in the quine / stored in IDB:
-`{ branches, commits, currentBranch, detachedHead(always null), currentContent, dslType, title, comments/commentThreads, assets, version, password, … }`. `vcs.serialize()` returns the branch/commit fields; after a save the app does `state.update({ data: { ...state.data, ...vcs.serialize() } })` to keep them in sync. `_currentDataObject()` is the canonical builder (it also prunes unreferenced assets).
+`{ branches, commits, currentBranch, detachedHead(always null), currentContent, dslType, title, apiName, savedVersion, comments/commentThreads, assets, version, password, … }` (`apiName` = the document's fixed name, `savedVersion` = the last version written to the device; `version` is the BUILD's version, unrelated). `vcs.serialize()` returns the branch/commit fields; after a save the app does `state.update({ data: { ...state.data, ...vcs.serialize() } })` to keep them in sync. `_currentDataObject()` is the canonical builder (it also prunes unreferenced assets).
 
-**VCS (`core/vcs.js`)** — git-inspired, all JSON, kept whole for the file format. Commits (= saves) store a **line diff (patch)** against their parent; the root stores `fullContent`. `getContentAt(hash)` reconstructs by walking ancestors + applying patches. **The UI uses ONE linear line (2026-10):** every save lands on `currentBranch` (`main`), a diff is "a save vs the working text", **Restore** copies an old save's text into the editor as an unsaved change (no `checkout`, no detached head, no stash, no branch switching, no merge — all of that UI was removed; `detachedHead` is forced null on every load so old files reattach with their working text intact, and extra branches in old files are carried along untouched).
+**VCS (`core/vcs.js`)** — git-inspired, all JSON, kept whole for the file format. Commits (= saved versions, `tag` = the version `A03`) store a **line diff (patch)** against their parent; the root stores `fullContent`. `getContentAt(hash)` reconstructs by walking ancestors + applying patches. **The UI uses ONE linear line (2026-10):** every save lands on `currentBranch` (`main`), a diff is "a version vs the working text", **Restore** copies an old version's text into the editor as an unsaved change (no `checkout`, no detached head, no stash, no branch switching, no merge — all of that UI was removed; `detachedHead` is forced null on every load so old files reattach with their working text intact, and extra branches in old files are carried along untouched).
 
 **Sections & DSLs (`doc-sections.js` + `dsl/registry.js`)** — `#!dslId@version+ext1+ext2` lines split a document into sections, each rendered by its DSL. No shebang → whole doc uses the build's `defaultDslType`. A DSL module calls `registerDSL({ id, getEditorExtensions, render, exporters, … })`.
 
@@ -188,49 +192,88 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 ---
 
-## The document library & saving (2026-10 — the iA Writer model)
+## The document library & saving (2026-10 — the iA Writer model, ONE save verb)
 
-**Many documents per app, a back arrow to the list, no branches.** `src/core/library.js`
-(pure; `test/library.test.mjs`) + `src/core/device-file.js` (the device verbs) are shared by
-all three shells; the UI lives in `ui/library-pane.js` (standard) and `upub/library.js`
-(`ShellLibrary`, {write} + {draft}).
+**Many documents per app, a back arrow to the list, no branches, and ONE SAVE: to the
+device.** `src/core/library.js` (pure; `test/library.test.mjs`) + `src/core/device-file.js`
+(the device verbs; `test/device-file.test.mjs`) are shared by all three shells; the UI lives in
+`ui/library-pane.js` (standard) and `upub/library.js` (`ShellLibrary`, {write} + {draft}).
 
 - **One IndexedDB record per document** (`library` store, DB version 2; index `app`). A record =
   `{ id 'd_…', app (dslType — every PWA on the origin shares the DB, each lists its own), title,
-  excerpt, data (the WHOLE data object incl. `currentContent` = the unsaved working text,
-  comments, assets), createdAt, updatedAt, savedAt, savedKey, handle, fileName }`. The
-  last-opened id is `localStorage unifile_lib_current:<app>`.
-- **Three layers, all on the device, nothing online:** (1) **remembered** — every edit persists
+  apiName, version, excerpt, data (the WHOLE data object incl. `currentContent` = the unsaved
+  working text, comments, assets), createdAt, updatedAt, savedAt, savedKey, handle, fileName }`.
+  The last-opened id is `localStorage unifile_lib_current:<app>`.
+- **Two layers, all on the device, nothing online.** (1) **Remembered** — every edit persists
   the record (1 s debounce; flushed on `visibilitychange`/`pagehide`; quines keep the old
-  localStorage draft instead); (2) **Save** = a snapshot into history (Ctrl+S / the Save pill /
-  the phone bubble in the history view / the pending node's Save; optional message + version via
-  "Save with message…" = the old commit dialog; identity optional — `anonymous`); (3) **Save to
-  device** = the `.unifile.json` written out of the sandbox by capability: File System Access
-  (Chromium — the handle is stored ON the record, structured-clone keeps it, so later saves write
-  silently after `ensureHandleWritable`; the permission prompt only works inside a user gesture,
-  which is why autosave never writes to the device and a Save does), else the share sheet (iOS →
-  Files), else a download. **Open from device** adopts a file as a new record (linked on
-  Chromium; `isSameEntry` dedupes), or replaces the document in a quine. `savedKey` =
-  `stateKey(data)` (head + text + title fingerprint) → `isSavedToDevice(rec)` is one compare; the
-  "on device" marker in history sits on `savedHead`, the device pill / list row say saved ·
-  changed · not on device.
+  localStorage draft instead). This is the app remembering, NOT a save the user performs — there
+  is no "save into history" verb any more (the separate snapshot-only Save made people save
+  twice; it was removed 2026-10). (2) **SAVE** (Ctrl+S / the Save pill / the phone bubble in the
+  history view / the pending node's Save / ⋯ → Save) = `App.saveDocument({message, major})`,
+  `ShellLibrary.save(...)`: writes the TEXT — just the DSL, nothing else — out of the sandbox as
+  **`<apiName>-<version>.uni`**, one NEW file per save, then records the same snapshot in history
+  tagged with the version (`vcs.commit({tag})`). ORDER MATTERS: the device write comes first, so a
+  cancelled picker / share sheet burns no version and leaves no snapshot (`saveVersionToDevice`
+  takes `mark: false`; the app marks the record itself after the commit + persist).
+- **Versions are `<major letter><minor 2 digits>`: `A00`, `A01` … `A99`, `B00` … `Z99`** — always
+  three characters, a hard ceiling at `Z99` (`nextVersion` returns null → the app says so).
+  Save = next minor; **Save as new major** (Ctrl+Shift+S, Shift-click the pill, the pending
+  node's "major" switch, the menu) = next letter at `00`. A major bump is only offered once a
+  version exists (`state.nextMajorVersion`). `data.savedVersion` / `rec.version` = the last one
+  written; the Save pill shows the NEXT one, the version pill the saved one.
+- **The name (`apiName`) is fixed at genesis.** `+ New` prompts for it (`_promptApiName`:
+  `[A-Za-z0-9][A-Za-z0-9_.]*` with single `-` separators, ≤ 64, unique per app — names are file
+  names; cancel = no document). It lives in the file names only (`<apiName>-<version>.uni`; the
+  `.uni` is pure text) and, as the app's cache, on `data.apiName` / `rec.apiName`;
+  `Library.save` refuses to move it once set. A document created before names existed
+  (migration, first launch) is asked at its FIRST save; an "Untitled" document takes the name as
+  its title too. The title stays separately editable. A duplicate starts unnamed/unversioned.
+- **Where the file goes, by capability (`device-file.js`):** Chromium = `showDirectoryPicker`
+  ONCE per document — the FOLDER handle is stored on the record (structured-clone keeps it) and
+  later versions land in it silently after `ensureHandleWritable` (the permission prompt only
+  works inside a user gesture, which a save always is — autosave never touches the device); if
+  the folder picker refuses, a per-file `showSaveFilePicker`; iOS = the share sheet (→ Files);
+  else a download. `savedKey` = `stateKey(data)` (head + text + title fingerprint) →
+  `isSavedToDevice(rec)` is one compare; the "on device" marker in history sits on `savedHead`.
+  **`state.needsSave`** (dirty OR no `savedVersion` OR device behind) is the ONE condition for
+  the dirty dot / Save pill / pending node ("Changed since A03" · "Never saved to the device").
+- **Open from device** (Ctrl+Shift+O) reads a `.uni` (or `.txt`, or an older `.unifile.json`
+  with its history): `describePickedFile` takes the name + version off the file name,
+  `dataFromPickedFile` makes it one snapshot tagged with that version (so history continues from
+  it), `adoptDeviceDocument` reopens the identical name+version+text record instead of
+  duplicating and starts a NEW record unnamed when the name is already taken. In a quine it
+  replaces the document.
 - **Migration:** on the first library launch with no records, the pre-library single document
   (`documents` store id `default` / `upub` / `udraft`) becomes the first record — for the
   standard shell the localStorage draft's text wins (that PWA never reloaded IndexedDB; the
   draft was its only persistence of unsaved text, and commits were silently lost on reload —
   real bug, fixed by the library).
-- **Chrome:** desktop = `‹` button → the drawer (`#unifile-app[data-library]`, closes on outside
-  click / Ctrl+Shift+L); phone = the left circle → the `library` pane (`data-mobile-pane`
-  values: `library · history · editor · render`; the old `commit` pane is `history`). Quines
-  have no library: `state.library` is null, the entry points hide, the left circle becomes a
-  history clock. Shortcuts: Ctrl+S save · Ctrl+Shift+S save to device · Ctrl+Shift+O open
-  from device · Ctrl+Shift+L library. Events: `save-document`, `save-to-device`,
+- **The list (desktop = a COLLAPSIBLE SIDEBAR, phone = the `library` pane; flat, no nesting):**
+  `‹` / Ctrl+Shift+L toggles `#unifile-app[data-library]`; the sidebar is `position:absolute`
+  inside `#uf-main` with `padding-left` on `#uf-main` (so both split orientations keep their
+  layout), it STAYS open while you work (no outside-click close; remembered in
+  `localStorage uf_library_open`), `:not([data-mobile-pane])` keeps it off phones. **The search
+  bar searches names AND contents** (`searchRecords`: name/title/file-name matches rank first,
+  then up to 3 hits per document — the line around each match trimmed to 40 chars a side with the
+  match marked — and a hit carries `{from, to}`): tapping a hit opens the document ON that text
+  (`App._openRecord(id, hit)` → `Editor.goTo`; `ShellLibrary.open(id, hit)` →
+  `editor.setSelection`). The pane's skeleton is built ONCE and only the list re-renders, so the
+  search field keeps focus + text across refreshes. Rows: title, `name-A03.uni` (green = the
+  device holds it, amber = changed since, grey "not saved yet"), excerpt (hidden while hits
+  show), ago · N versions. Phone `data-mobile-pane` values: `library · history · editor · render`.
+  Quines have no library: `state.library` is null, the entry points hide, the left circle becomes
+  a history clock. Events: `save-document` (`{message, major}` optional), `save-major`,
   `open-from-device`, `new-document`, `restore-version`, `open-library`/`close-library`,
-  `document-change`, `device-change`.
-- **Pickers in headless Chromium hang/refuse**: `saveDocumentToDevice`/`pickDocumentFromDevice`
+  `document-change`, `device-change`, `saved` (`{version, fileName, result}`).
+- **The history dropdown anchors to `#uf-topbar` (`position: relative`)** — the pre-install
+  banner above the bar otherwise pushed the bar under the dropdown so the pending node
+  intercepted the pill (real bug, found by the Playwright run).
+- **Pickers in headless Chromium hang/refuse**: `saveVersionToDevice`/`pickDocumentFromDevice`
   catch a refused picker and fall through to share/download/`<input type=file>`; the Playwright
-  checks mock `showSaveFilePicker` (methods on a prototype, so the stored "handle" clones to
-  `{name, kind}`) or delete it to exercise the download path.
+  checks mock `showDirectoryPicker` (methods on a prototype, so the stored "handle" clones to
+  `{name, kind}` and every save re-picks — the silent folder reuse is covered in Node,
+  `test/device-file.test.mjs`) or delete it to exercise the download path. `prompt` is mocked
+  for the name.
 
 ---
 
@@ -720,7 +763,7 @@ The app is a `100dvh`-ish flex column. On phones (`@media max-width:640px`, OR l
 
 **Phone top bar (2026-09 redesign): `( ⑂ )   {♪} Title ⌄   ( ◉ )`.** Three controls, portrait AND landscape (the old segmented slider + the landscape collapsible dock are gone):
 - **Left circle = the back arrow.** Tap → the document LIBRARY pane (`library-pane.js`); the circle FILLS (accent) while that pane is up; tap again → back to the editor. In a quine (no library) it is a clock and opens the history pane. The history pane is reached from the title dropdown (File → History) or the Save-with-message flow.
-- **Centre = `{mark}` + document title + the dirty dot + caret — ALWAYS the title, same menu in every view.** The mark is `appMark(data.dslType)` in mono. Tap → the ONE dropdown (`.ps-menu`) with the FILE-LEVEL options only, grouped: Document (New, Rename, Help, Blame), File (Save, History, Save to device, Open from device, Documents), Export, More (settings) — **`src/ui/actions.js` `listMenuActions(ctx)`**. Editing verbs are deliberately NOT in it.
+- **Centre = `{mark}` + document title + the dirty dot + caret — ALWAYS the title, same menu in every view.** The mark is `appMark(data.dslType)` in mono. Tap → the ONE dropdown (`.ps-menu`) with the FILE-LEVEL options only, grouped: Document (New, Rename, Help, Blame), File (Save ‹next version›, Save as new major, History, Open from device, Documents), Export, More (settings) — **`src/ui/actions.js` `listMenuActions(ctx)`**. Editing verbs are deliberately NOT in it.
 - **The bar blends into the page** (`background: var(--bg)`, no rule — iA-style) and is **`user-select:none`/`-webkit-touch-callout:none`**: a slightly held tap on the title/mark otherwise started an iOS text selection ("tapping the branch circle edits the top-left text" — real bug). The skeleton is **built once per mode and PATCHED** on state changes (`_build`/`render`) — rebuilding the buttons under a finger mid-tap (state changes land between touchstart and click) hands the tap to whatever is underneath.
 - **Right circle = eye.** Tap → the rendered DSL pane; filled while showing; tap again → editor. Always the eye (not a per-DSL render icon).
 - **Diff mode:** circles unchanged; the centre reads `L <hash> ↔ R <hash>` and its dropdown holds both side pickers.
@@ -740,7 +783,7 @@ Institutional knowledge — **do not silently "simplify" these; each fixed a rea
 - **Document must never scroll.** `App._lockWindowScroll()` snaps `window`/`scrollingElement` back to (0,0); `overscroll-behavior` contains inner scrollers. iOS otherwise scrolls the whole doc when the keyboard is up and shifts the bars.
 - **Bottom bar (`#uf-bottom`) is an in-flow flex child**, not `position:fixed` + JS pinning (that pushed it off-screen). It sits flush because the column is exactly the visible height.
 - **The phone top bar is the sole top chrome on mobile** (desktop top bar hidden). Its dropdown (`.ps-menu`) opens centred under the title; `#uf-pane-switch` needs `z-index` above `#uf-main` because it's DOM-first (paints under main otherwise). The **safe-area inset is on `#unifile-app` itself** (`padding-top: env(safe-area-inset-top)` + `background:var(--bg)` — the SAME colour as the blended bar and the page, and `theme-color` in pwa.html matches; `--bg-alt` there drew a darker band around the island — real bug; border-box keeps `--app-height`), so the bar sits below the notch. Bar is **56px portrait / 46px landscape** and hides while typing (`data-editing`). (Historical: a segmented three-tab slider with per-segment menus, and before it an auto-hiding title bar — superseded by the circles + title dropdown.)
-- **Save UX (mobile):** no banners — passive markers. Unsaved work → the dirty dot (after the title) + a **pending node** at the top of the history list (dashed hollow node with an inline, optional message + version + Save, so a save is composed where it lands). Durability → the **"on device" marker** on the save the device file carries (`state.deviceFile.savedHead`), so saved-in-app is visibly distinct from saved-to-the-device. Saving lives on the action bubble in the history view (Save · Save with message… · Save to device); the library view's bubble is New · Open from device. `commit-bar.js`, the branch pill, the merge dialog and the New-document confirmation modal are gone.
+- **Save UX (mobile):** no banners — passive markers. The device behind (`state.needsSave`) → the dirty dot (after the title) + a **pending node** at the top of the history list (dashed hollow node: optional note + "Save as A04" with a "major" switch + Save, so a save is composed where it lands). The **"on device" marker** sits on the version the device file carries (`state.deviceFile.savedHead`). Saving lives on the action bubble in the history view (Save A04 · Save with a note… · Save as B00); the library view's bubble is New · Open from device. `commit-bar.js`, `commit-dialog.js` ("Save with message…"), the branch pill, the merge dialog and the New-document confirmation modal are gone.
 - **Document title is the single source of truth.** The centred top-bar title edits `data.title`; ABC derives its `T:` from it (a DOM heading in the live preview so char-positions still map 1:1; `_withDerivedTitle` string-injects for exports). An explicit `T:` in the source overrides. Preview re-renders on rename (`preview.js` tracks `_lastTitle`).
 - **No gutter at all (2026-10)** — no rail, no line numbers, no fold column, no active-line tint: the caret marks the line (iA Writer). Comments are highlights in the text (see Comments); the ABC M/S marks are `::before` pseudo-elements in the line's left margin. The side margin lives on `.cm-line` padding (not `.cm-content`) so selection/decoration backgrounds reach the edge.
 - **Zoom fix:** viewport `maximum-scale=1, user-scalable=no, viewport-fit=cover`; `.cm-content`/inputs forced to `font-size:16px` to stop Safari focus-zoom.
@@ -783,7 +826,7 @@ Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`
 ## Conventions & workflows
 
 - **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site; add the app to `src/core/brand.js` + `npm run gen:icons` (commit only the new `templates/icons/<abbrev>/`); list the new `pwa-<abbrev>` in `sync-site.mjs` and `render-site.mjs` (`TYPE_TO_ICON` + the copy list). A DSL that owns the whole document sets `wholeDocument: true` (see {slides}); `actions: [{id,label,glyph,run}]` puts verbs on the ⋯ menu and the phone bubble.
-- **Verifying UI changes:** use the preview tools against a build (`node build/build.mjs --dsl=abcjs --no-pwa`, serve `dist/` — see `.claude/launch.json`, port 8765). Resize to 375px for mobile. **Always build the variant you're testing.**
+- **Verifying UI changes:** use the preview tools against a build (`node build/build.mjs --dsl=abcjs --no-pwa`, serve `dist/` — see `.claude/launch.json`, port 8765). Resize to 375px for mobile. **Always build the variant you're testing.** In the PWA build the app object is NOT on `window.__unifile` (quines only); drive it through `globalThis.__uf.state` (`state.emit('checkout', {content})` sets the editor text). Playwright lives in `/opt/node-tools/node_modules/playwright` (not a project dependency); the pre-install banner (`#uf-install-banner`) covers the phone title bar in a browser tab — remove it before tapping.
 - **Deploying is automatic on push:** Cloudflare Pages rebuilds from source (`build:site && site:preview`) on every push to `main`, so a source-only commit deploys correctly — no need to pre-run `build:site` for the deployed site to be current (that old footgun is gone). You still build the specific variant locally to *test* UI changes in the preview.
 - **Deploying:** commit + push are done only when asked; branch off `main` if not already the intent.
 

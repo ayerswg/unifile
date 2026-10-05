@@ -289,9 +289,15 @@ export async function listIDBDocuments() {
 //   • A plain download (everything else).
 // ---------------------------------------------------------------------------
 
+// The device file is the document's text, nothing else: `<name>-<version>.uni`.
+// Older `.unifile.json` files (text + history) still open.
 const UNIFILE_TYPES = [{
   description: 'unifile documents',
-  accept: { 'application/json': ['.json'] },
+  accept: { 'text/plain': ['.uni', '.txt'] },
+}];
+const UNIFILE_OPEN_TYPES = [{
+  description: 'unifile documents',
+  accept: { 'text/plain': ['.uni', '.txt'], 'application/json': ['.json'] },
 }];
 
 /** Whether this browser can link a document to a device file (Chromium). */
@@ -321,7 +327,7 @@ export async function pickSaveHandle(suggestedName) {
  */
 export async function pickOpenHandle() {
   try {
-    const [h] = await window.showOpenFilePicker({ types: UNIFILE_TYPES, multiple: false });
+    const [h] = await window.showOpenFilePicker({ types: UNIFILE_OPEN_TYPES, multiple: false });
     return h ?? null;
   } catch (e) {
     if (e?.name === 'AbortError') return null;
@@ -336,6 +342,32 @@ export async function pickOpenHandle() {
  * the device — only an explicit Save does.
  * @returns {Promise<boolean>}
  */
+/** Whether the browser can keep a folder handle (Chromium's File System Access). */
+export function canLinkDeviceFolders() {
+  return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
+}
+
+/**
+ * Pick the folder a document's versions are written into.  Null when the user
+ * cancels; throws when the picker refuses (no user activation, an embedded
+ * context…) so the caller can fall back to a file picker / download.
+ */
+export async function pickDirectoryHandle(id = 'unifile') {
+  try {
+    return await window.showDirectoryPicker({ id, mode: 'readwrite', startIn: 'documents' });
+  } catch (e) {
+    if (e?.name === 'AbortError') return null;
+    throw e;
+  }
+}
+
+/** Write `text` as `fileName` inside a folder handle (created / overwritten). */
+export async function writeFileInDirectory(dirHandle, fileName, text) {
+  const fh = await dirHandle.getFileHandle(fileName, { create: true });
+  await writeHandle(fh, text);
+  return fh;
+}
+
 export async function ensureHandleWritable(handle, { request = true } = {}) {
   if (!handle?.queryPermission) return false;
   const opts = { mode: 'readwrite' };
@@ -369,7 +401,7 @@ export const saveToFileHandle = writeHandle;
  * fallback where File System Access is missing).  Resolves null on cancel.
  * @returns {Promise<File|null>}
  */
-export function pickFileInput(accept = '.json,.unifile.json,application/json') {
+export function pickFileInput(accept = '.uni,.txt,.json,text/plain,application/json') {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
