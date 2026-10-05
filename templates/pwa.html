@@ -187,9 +187,10 @@
 
   <!--
     PWA DATA STORE
-    Unlike the quine, the PWA reads from IndexedDB.
-    This script tag provides default empty data for a fresh install.
-    On load, the app will check IndexedDB first.
+    Unlike the quine, the PWA keeps its documents in IndexedDB — the document
+    LIBRARY (src/core/library.js): one record per document, each remembered as
+    it was left.  This script tag only names the app (dslType, stamped by the
+    build) and seeds a fresh install's first, empty document.
   -->
   <script id="unifile-data" type="application/json">
 {

@@ -4,8 +4,11 @@
  * Quine mode:  data lives in <script id="unifile-data" type="application/json">
  *              saving generates a new HTML file and triggers a download.
  *
- * PWA mode:    data lives in IndexedDB; File System Access API is used
- *              to open/save .html quine files.
+ * PWA mode:    documents live in IndexedDB — the LIBRARY store (one record per
+ *              document, see core/library.js); the legacy single-document
+ *              `documents` store is read once for migration.  Device files are
+ *              `.unifile.json` written via the File System Access API where it
+ *              exists, else the share sheet / a download.
  */
 
 /* global UNIFILE_MODE */
@@ -13,7 +16,9 @@ const IS_QUINE = (typeof UNIFILE_MODE !== 'undefined' ? UNIFILE_MODE : 'quine') 
 
 const USER_PREFS_KEY = 'unifile_user_prefs';
 const IDB_DB_NAME = 'unifile';
-const IDB_STORE = 'documents';
+const IDB_STORE = 'documents';        // legacy: one record per app (pre-library)
+const IDB_LIBRARY = 'library';        // the document library (core/library.js records)
+const IDB_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // HTML template capture (quine mode)
@@ -185,16 +190,48 @@ let _db = null;
 async function openIDB() {
   if (_db) return _db;
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDB_DB_NAME, 1);
+    const req = indexedDB.open(IDB_DB_NAME, IDB_VERSION);
     req.onupgradeneeded = e => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains(IDB_STORE)) {
         db.createObjectStore(IDB_STORE, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(IDB_LIBRARY)) {
+        const lib = db.createObjectStore(IDB_LIBRARY, { keyPath: 'id' });
+        lib.createIndex('app', 'app', { unique: false });
+      }
     };
-    req.onsuccess = e => { _db = e.target.result; resolve(_db); };
+    req.onsuccess = e => {
+      _db = e.target.result;
+      // Another tab upgraded the schema: drop our connection so the next call
+      // reopens at the new version instead of failing forever.
+      _db.onversionchange = () => { try { _db.close(); } catch {} _db = null; };
+      resolve(_db);
+    };
     req.onerror = () => reject(req.error);
   });
+}
+
+function _idbReq(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * The library's IndexedDB store adapter (see core/library.js `Library`).
+ * Records are stored whole — including a FileSystemFileHandle, which the
+ * structured clone keeps.
+ */
+export function idbLibraryStore() {
+  const tx = async (mode) => (await openIDB()).transaction(IDB_LIBRARY, mode).objectStore(IDB_LIBRARY);
+  return {
+    async getAll() { return (await _idbReq((await tx('readonly')).getAll())) ?? []; },
+    async get(id)  { return _idbReq((await tx('readonly')).get(id)); },
+    async put(rec) { await _idbReq((await tx('readwrite')).put(rec)); },
+    async delete(id) { await _idbReq((await tx('readwrite')).delete(id)); },
+  };
 }
 
 /**
@@ -242,41 +279,108 @@ export async function listIDBDocuments() {
 }
 
 // ---------------------------------------------------------------------------
-// File System Access API (PWA – open/save local quine files)
+// Device files (.unifile.json)
+//
+// Three ways out of the sandbox, by capability — all offline:
+//   • File System Access (Chromium): a FileSystemFileHandle picked once, then
+//     stored on the library record, so later saves write silently (after a
+//     permission check that only prompts inside a user gesture).
+//   • The OS share sheet (iOS): "Save to Files" → iCloud Drive / On My iPhone.
+//   • A plain download (everything else).
 // ---------------------------------------------------------------------------
 
-/**
- * Open a local .html quine file and return its data object.
- * @returns {Promise<{ data: object, fileHandle: FileSystemFileHandle }>}
- */
-export async function openLocalQuine() {
-  if (!('showOpenFilePicker' in window)) {
-    throw new Error('File System Access API not supported in this browser');
-  }
-  const [fileHandle] = await window.showOpenFilePicker({
-    types: [{ description: 'Unifile quines', accept: { 'text/html': ['.html'] } }],
-    multiple: false
-  });
-  const file = await fileHandle.getFile();
-  const html = await file.text();
+const UNIFILE_TYPES = [{
+  description: 'unifile documents',
+  accept: { 'application/json': ['.json'] },
+}];
 
-  // Extract unifile-data
-  const match = html.match(/<script[^>]+id="unifile-data"[^>]*>([\s\S]*?)<\/script>/);
-  if (!match) throw new Error('This HTML file does not contain unifile data');
-
-  const data = JSON.parse(match[1]);
-  return { data, fileHandle, html };
+/** Whether this browser can link a document to a device file (Chromium). */
+export function canLinkDeviceFiles() {
+  return typeof window !== 'undefined' && 'showSaveFilePicker' in window && 'showOpenFilePicker' in window;
 }
 
 /**
- * Save updated quine HTML back to the original file.
- * @param {FileSystemFileHandle} fileHandle
- * @param {string} html
+ * Pick where to save a `.unifile.json` (File System Access).  Must run inside
+ * a user gesture.  Resolves null when the user cancels.
+ * @param {string} suggestedName
+ * @returns {Promise<FileSystemFileHandle|null>}
  */
-export async function saveToFileHandle(fileHandle, html) {
-  const writable = await fileHandle.createWritable();
-  await writable.write(html);
+export async function pickSaveHandle(suggestedName) {
+  try {
+    return await window.showSaveFilePicker({ suggestedName, types: UNIFILE_TYPES });
+  } catch (e) {
+    if (e?.name === 'AbortError') return null;
+    throw e;
+  }
+}
+
+/**
+ * Pick a `.unifile.json` on the device to open (File System Access).  Resolves
+ * null when the user cancels.
+ * @returns {Promise<FileSystemFileHandle|null>}
+ */
+export async function pickOpenHandle() {
+  try {
+    const [h] = await window.showOpenFilePicker({ types: UNIFILE_TYPES, multiple: false });
+    return h ?? null;
+  } catch (e) {
+    if (e?.name === 'AbortError') return null;
+    throw e;
+  }
+}
+
+/**
+ * Make sure we may write through a stored handle.  A handle restored from
+ * IndexedDB starts in the 'prompt' state; `requestPermission` only succeeds
+ * inside a user gesture (a Save tap), which is why autosave never writes to
+ * the device — only an explicit Save does.
+ * @returns {Promise<boolean>}
+ */
+export async function ensureHandleWritable(handle, { request = true } = {}) {
+  if (!handle?.queryPermission) return false;
+  const opts = { mode: 'readwrite' };
+  try {
+    if ((await handle.queryPermission(opts)) === 'granted') return true;
+    if (!request) return false;
+    return (await handle.requestPermission(opts)) === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+/** Write text through a File System Access handle. */
+export async function writeHandle(handle, text) {
+  const writable = await handle.createWritable();
+  await writable.write(text);
   await writable.close();
+}
+
+/** Read a handle's file as text. */
+export async function readHandle(handle) {
+  const file = await handle.getFile();
+  return file.text();
+}
+
+/** Legacy alias (older callers wrote quine HTML through a handle). */
+export const saveToFileHandle = writeHandle;
+
+/**
+ * Prompt for a file with a plain `<input type=file>` (every browser; the
+ * fallback where File System Access is missing).  Resolves null on cancel.
+ * @returns {Promise<File|null>}
+ */
+export function pickFileInput(accept = '.json,.unifile.json,application/json') {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    // There is no reliable cancel event for a file input, so a cancelled pick
+    // simply never resolves — callers await it as a one-off action.
+    input.addEventListener('change', () => { input.remove(); resolve(input.files?.[0] ?? null); });
+    input.click();
+  });
 }
 
 // ---------------------------------------------------------------------------

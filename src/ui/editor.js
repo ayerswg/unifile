@@ -413,7 +413,7 @@ function makeUnifileKeymap() {
       key: 'Mod-s',
       preventDefault: true,
       run: () => {
-        if (state.isDirty) state.openPanel(PANELS.COMMIT);
+        state.emit('save-document');
         return true;
       }
     },
@@ -629,7 +629,6 @@ export class Editor {
     this._build();
 
     this._unsub.push(state.on('checkout',     ({ content }) => this.setValue(content)));
-    this._unsub.push(state.on('branch-switch',({ content }) => this.setValue(content)));
 
     // Rotating between portrait/landscape suppresses or restores the section
     // bars (see editor-sections.js). Rebuild them without disturbing the

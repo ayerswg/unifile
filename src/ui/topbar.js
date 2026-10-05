@@ -1,20 +1,19 @@
 /**
- * Top bar component
+ * Desktop top bar
  *
- * Layout (left → right):
- *   [DSL menu icon ▾]  [editable title]  [↑commit]  [branch ▾][hash ▾]
+ *   [‹ documents]  [menu ▾]  [editable title]          [Save ●][hash ▾]
  *
- * The view-mode toggle (Editor / Split / Preview) has been moved to the
- * pane divider bar — click it to cycle through modes.
+ *   - ‹ opens the document library (the drawer on the left; see library-pane.js)
+ *   - Menu       → file-level verbs (new, save, save to device, open from
+ *                  device…), help, blame, export, comments, settings
+ *   - Save pill  → appears while there are unsaved changes; a click saves a
+ *                  snapshot into history (Ctrl+S).  The ▾ half lists history.
+ *   - hash pill  → the current save; its dropdown is the history list — click
+ *                  a save to open the read-only diff against the working text.
  *
- * Two independent VCS dropdowns:
- *   - Branch pill  → lists all branches; click to switch
- *   - Commit pill  → lists commits on current branch; click to checkout
- *                    When dirty: becomes a split button — left half commits,
- *                    right half (▾) opens the history dropdown.
- *
- * The DSL icon at the far left is a dropdown menu that replaces the former
- * ⋯ tools menu and ⚙ settings gear.
+ * History is ONE linear line now (no branches, no detached head): a save is a
+ * snapshot, a restore brings an old text back as an unsaved change.  The
+ * history list is also mounted into the phone's history pane (mountCommitLog).
  */
 
 import { state, PANELS } from './state.js';
@@ -24,7 +23,7 @@ function dslActions(dslId) {
   try { return getDSL(dslId)?.actions ?? []; } catch { return []; }
 }
 import { shortHash } from '../core/hash.js';
-import { loadUserPrefs, loadBackupMark } from '../core/storage.js';
+import { loadUserPrefs } from '../core/storage.js';
 import { showArchivedCommentsModal } from './comments.js';
 import { listDSLs, getDSL } from '../dsl/registry.js';
 import {
@@ -41,7 +40,6 @@ export class TopBar {
   constructor(container, handlers = {}) {
     this.el = container;
     this.handlers = handlers;
-    this._branchOpen = false;
     this._commitOpen = false;
     this._dslMenuOpen = false;
     this._unsub = [];
@@ -51,6 +49,8 @@ export class TopBar {
     // Refresh the mobile commit-log pane's selected-commit highlight as the diff
     // selection changes (diff-change doesn't emit the generic 'change' event).
     this._unsub.push(state.on('diff-change', () => this._refreshCommitLog()));
+    // The device pill + the "on device" marker follow the device-file link.
+    this._unsub.push(state.on('device-change', () => this.render()));
 
     this.render();
   }
@@ -66,11 +66,17 @@ export class TopBar {
   render() {
     const { isDirty } = state;
     const hash = state.shortHeadHash;
-    const branch = state.currentBranch;
-    const isDetached = state.isDetached;
+    const dev = state.deviceFile;
+    const devTitle = !dev ? 'Not saved to the device yet — click to save a .unifile.json you keep'
+      : dev.saved ? `On the device${dev.fileName ? ' as ' + dev.fileName : ''}${dev.linked ? ' (linked — Save writes to it)' : ''}`
+      : `Changed since it was saved to the device${dev.fileName ? ' (' + dev.fileName + ')' : ''} — click to save again`;
 
     this.el.innerHTML = `
       <div class="topbar">
+        ${state.library ? `
+        <button class="tb-library" id="tb-library" title="Documents (Ctrl+Shift+L)" aria-label="Documents">
+          ${iconBack()}
+        </button>` : ''}
         <button class="tb-hamburger${this._dslMenuOpen ? ' active' : ''}" id="tb-dsl-menu-toggle"
           title="Menu" aria-label="Menu">
           ${iconHamburger()}
@@ -85,39 +91,36 @@ export class TopBar {
 
         <div class="topbar-right">
           <div class="vcs-pill-group">
-            <button class="vcs-pill branch-pill${isDetached ? ' detached' : ''}" id="tb-branch-toggle"
-              title="${isDetached ? 'Detached HEAD — click to manage branches' : `Branch: ${escHtml(branch)}`}">
-              ${iconBranch()}
-              <span class="vcs-pill-text">${isDetached ? '⚠ detached' : escHtml(branch)}</span>
-              <span class="vcs-pill-caret">▾</span>
-            </button>
             ${isDirty ? `
               <button class="vcs-pill commit-pill dirty commit-action-pill" id="tb-commit-action"
-                title="Commit changes (Ctrl+S)">
-                <span class="vcs-pill-text vcs-pill-mono">${escHtml(hash)}</span>
-                <span class="dirty-dot" title="Uncommitted changes">●</span>
+                title="Save a snapshot into history (Ctrl+S)">
+                <span class="vcs-pill-text">Save</span>
+                <span class="dirty-dot" title="Unsaved changes">●</span>
               </button>
               <button class="vcs-pill commit-pill dirty commit-caret-pill" id="tb-commit-toggle"
-                title="View commits on this branch">
+                title="History">
                 <span class="vcs-pill-caret">▾</span>
               </button>
             ` : `
               <button class="vcs-pill commit-pill" id="tb-commit-toggle"
-                title="Commit: ${escHtml(hash)}">
+                title="History — current save ${escHtml(hash)}">
                 <span class="vcs-pill-text vcs-pill-mono">${escHtml(hash)}</span>
                 <span class="vcs-pill-caret">▾</span>
               </button>
             `}
           </div>
+          ${state.library ? `
+          <button class="vcs-pill device-pill${!dev ? ' none' : dev.saved ? ' saved' : ' stale'}" id="tb-device"
+            title="${escHtml(devTitle)} (Ctrl+Shift+S)">
+            ${dev?.saved ? iconCheck() : iconDevice()}
+            <span class="vcs-pill-text">${!dev ? 'Save to device' : dev.saved ? 'On device' : 'Save to device'}</span>
+          </button>` : ''}
         </div>
 
       </div>
 
       <div class="vcs-dropdown dsl-menu-dropdown${this._dslMenuOpen ? ' open' : ''}" id="tb-dsl-menu-dd">
         ${this._renderDslMenuList()}
-      </div>
-      <div class="vcs-dropdown${this._branchOpen ? ' open' : ''}" id="tb-branch-dd">
-        ${this._branchOpen ? this._renderBranchList() : ''}
       </div>
       <div class="vcs-dropdown${this._commitOpen ? ' open' : ''}" id="tb-commit-dd">
         ${this._commitOpen ? this._renderCommitList() : ''}
@@ -126,7 +129,7 @@ export class TopBar {
 
     this._bindEvents();
     // Keep the mobile commit-log pane (if mounted) in sync with every re-render
-    // — render() fires on state 'change', which covers commit/checkout/branch.
+    // — render() fires on state 'change', which covers save/restore/open.
     this._refreshCommitLog();
   }
 
@@ -173,28 +176,27 @@ export class TopBar {
   }
 
   /**
-   * The pending-commit node shown at the top of the log while there are
-   * uncommitted changes.  It's styled distinctly from real commits (a hollow,
-   * dashed node) and carries the message field + commit action inline, so a new
-   * commit is composed right where it will land.  Message and version are both
-   * optional.
+   * The pending node shown at the top of the history while there are unsaved
+   * changes.  It's styled distinctly from real saves (a hollow, dashed node)
+   * and carries the message field + Save inline, so a save is composed right
+   * where it will land.  Message and version are both optional.
    */
   _renderPendingNode() {
     if (!state.isDirty) return '';
     const head = state.vcs?.log?.()?.[0];
     const suggested = head?.tag ? _incPatch(head.tag) : '';
     return `
-      <div class="commit-log-pending" aria-label="Uncommitted changes">
+      <div class="commit-log-pending" aria-label="Unsaved changes">
         <div class="clp-graph"><span class="clp-node"></span></div>
         <div class="clp-body">
-          <div class="clp-label">Uncommitted changes</div>
+          <div class="clp-label">Unsaved changes</div>
           <textarea class="clp-msg" id="clp-msg" rows="1" autocomplete="off"
             placeholder="Describe this change (optional)"></textarea>
           <div class="clp-row">
             <input class="clp-ver" id="clp-ver" type="text" autocomplete="off"
               placeholder="v ${escHtml(suggested || '0.0.0')}" value="${escHtml(suggested)}"
               aria-label="Version (optional)">
-            <button class="clp-commit" id="clp-commit" type="button">Commit</button>
+            <button class="clp-commit" id="clp-commit" type="button">Save</button>
           </div>
         </div>
       </div>`;
@@ -204,18 +206,10 @@ export class TopBar {
     if (this._committing || !state.isDirty || !this.handlers?.onCommit) return;
     const message = this._commitLogEl?.querySelector('#clp-msg')?.value.trim() || '';
     const tag     = this._commitLogEl?.querySelector('#clp-ver')?.value.trim() || undefined;
-
-    // Detached HEAD (needs a branch name) or no saved identity → hand off to the
-    // full commit dialog, carrying the typed message/version so they aren't lost.
+    // Identity is optional (Settings); an unnamed save is still a save.
     const prefs = loadUserPrefs();
-    if (state.isDetached || !prefs?.name || !prefs?.email) {
-      state.pendingCommit = { message, tag };
-      state.openPanel(PANELS.COMMIT);
-      return;
-    }
-
     this._committing = true;
-    Promise.resolve(this.handlers.onCommit({ author: prefs.name, email: prefs.email, message, tag }))
+    Promise.resolve(this.handlers.onCommit({ author: prefs?.name, email: prefs?.email, message, tag }))
       .catch(err => console.warn('[commit-log] commit failed:', err?.message))
       .finally(() => { this._committing = false; this._refreshCommitLog(); });
   }
@@ -241,8 +235,29 @@ export class TopBar {
     const dslName = DSL_HELP[activeDslId]?.name ?? activeDslId;
     return `
       <ul class="tools-menu-list">
-        <li class="tools-menu-item" id="tb-new-doc" title="Discard this document and start a new one">
-          ${iconNewDoc()} New document…
+        <li class="tools-menu-item" id="tb-new-doc" title="${state.library ? 'A new, empty document in the library' : 'Discard this document and start a new one'}">
+          ${iconNewDoc()} New document
+        </li>
+        ${state.library ? `
+        <li class="tools-menu-item" id="tb-library-item" title="The documents of this app (Ctrl+Shift+L)">
+          ${iconLibrary()} Documents…
+          <kbd>⌃⇧L</kbd>
+        </li>` : ''}
+        <li class="tools-menu-sep" role="separator"></li>
+        <li class="tools-menu-item${state.isDirty ? '' : ' disabled'}" id="tb-save" title="Save a snapshot into history (Ctrl+S)">
+          ${iconCommit()} Save
+          <kbd>⌃S</kbd>
+        </li>
+        <li class="tools-menu-item${state.isDirty ? '' : ' disabled'}" id="tb-save-msg" title="Save with a message and an optional version">
+          ${iconCommit()} Save with message…
+        </li>
+        <li class="tools-menu-item" id="tb-save-device" title="Write the document + full history as a .unifile.json you keep (Ctrl+Shift+S)">
+          ${iconExport()} Save to device…
+          <kbd>⌃⇧S</kbd>
+        </li>
+        <li class="tools-menu-item" id="tb-open-device" title="Open a .unifile.json from the device (Ctrl+Shift+O)">
+          ${iconImport()} Open from device…
+          <kbd>⌃⇧O</kbd>
         </li>
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-dsl-help" title="Syntax reference for ${escHtml(dslName)}">
@@ -254,25 +269,14 @@ export class TopBar {
         </li>`).join('')}
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item${hasCommits ? '' : ' disabled'}" id="tb-blame"
-          title="${hasCommits ? 'Blame view (Ctrl+Shift+B)' : 'Available after first commit'}">
+          title="${hasCommits ? 'Blame view (Ctrl+Shift+B)' : 'Available after the first save'}">
           ${iconBlame()} Blame view
           <kbd>⌃⇧B</kbd>
-        </li>
-        <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-save-data" title="Save the document + full history as a small .unifile.json text file">
-          ${iconExport()} Save data file…
-        </li>
-        <li class="tools-menu-item" id="tb-open-data" title="Open a .unifile.json data file (replaces the current document)">
-          ${iconImport()} Open data file…
         </li>
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-export" title="Export document (Ctrl+Shift+E)">
           ${iconExport()} Export…
           <kbd>⌃⇧E</kbd>
-        </li>
-        <li class="tools-menu-item" id="tb-merge" title="Import & merge another unifile (Ctrl+Shift+M)">
-          ${iconImport()} Import & merge…
-          <kbd>⌃⇧M</kbd>
         </li>
         ${listDSLs().some(d => (d.extensionSlots?.length ?? 0) > 0) ? `
         <li class="tools-menu-item" id="tb-extensions" title="Configure DSL extensions">
@@ -295,58 +299,26 @@ export class TopBar {
     `;
   }
 
-  _renderBranchList() {
-    const vcs = state.vcs;
-    if (!vcs) return '<p class="dd-empty">No branches yet.</p>';
-
-    const branches = vcs.listBranches();
-    const isDetached = state.isDetached;
-    const detachedHash = vcs.detachedHead;
-
-    return `
-      ${isDetached ? `
-        <div class="dd-detached-notice">
-          <strong>Detached HEAD</strong> — viewing commit ${escHtml(shortHash(detachedHash))}.
-          Select a branch to reattach, or commit to create a new branch automatically.
-        </div>
-      ` : ''}
-      <div class="dd-section-label">Branches</div>
-      <ul class="dd-branch-list">
-        ${branches.map(b => `
-          <li class="dd-branch-item${b.isCurrent && !isDetached ? ' current' : ''}" data-branch="${escHtml(b.name)}">
-            <span class="dd-branch-icon">${b.isCurrent && !isDetached ? '●' : '○'}</span>
-            <span class="dd-branch-name">${escHtml(b.name)}</span>
-            <span class="dd-branch-hash">${shortHash(b.head)}</span>
-          </li>
-        `).join('')}
-      </ul>
-    `;
-  }
-
   _renderCommitList() {
     const vcs = state.vcs;
-    if (!vcs) return '<p class="dd-empty">No commits yet.</p>';
+    if (!vcs) return '<p class="dd-empty">No saves yet.</p>';
 
     const log = vcs.log();
-    const isDetached = state.isDetached;
-    const detachedHash = vcs.detachedHead;
-    const currentHash = isDetached ? detachedHash : state.headHash;
+    const currentHash = state.headHash;
 
-    // Export marker: whichever commit was last written OUT to a .unifile.json is
-    // the user's durable save point. We badge it so "committed" (in-app history)
-    // is visibly distinct from "exported" (a permanent copy off the device).
-    const mark = loadBackupMark(state.docId ?? location.href);
-    const exportedHash = mark?.headHash ?? null;
-    const exportedWhen = mark?.at ? formatRelative(mark.at) : '';
+    // Device marker: the save the device file carries (the last Save to device
+    // / linked-file write) — "saved here" is visibly distinct from "the device
+    // holds a copy".
+    const dev = state.deviceFile;
+    const exportedHash = dev?.savedHead ?? null;
+    const exportedWhen = dev?.savedAt ? formatRelative(dev.savedAt) : '';
 
     // While a diff is open, mark the commit currently selected as its RIGHT
     // (source) side so the commit-log pane shows what's being compared/merged.
     const selectedHash = state.diff?.right && state.diff.right !== 'WORKING' ? state.diff.right : null;
 
     return `
-      <div class="dd-section-label">
-        Commits <span class="dd-branch-ctx">on ${escHtml(state.currentBranch)}</span>
-      </div>
+      <div class="dd-section-label">History</div>
       <ul class="dd-commit-list">
         ${log.map(c => `
           <li class="dd-commit-item${c.hash === currentHash ? ' current' : ''}${c.hash === exportedHash ? ' exported' : ''}${c.hash === selectedHash ? ' selected' : ''}"
@@ -355,7 +327,7 @@ export class TopBar {
               <span class="dd-commit-hash">${shortHash(c.hash)}</span>
               ${c.tag ? `<span class="dd-commit-tag">${escHtml(c.tag)}</span>` : ''}
               ${c.hash === exportedHash
-                ? `<span class="dd-commit-exported" title="Exported to a file${exportedWhen ? ' ' + escHtml(exportedWhen) : ''} — you have a permanent copy of this state">${_iconExported()} exported</span>`
+                ? `<span class="dd-commit-exported" title="Saved to the device${dev?.fileName ? ' as ' + escHtml(dev.fileName) : ''}${exportedWhen ? ' ' + escHtml(exportedWhen) : ''}${dev?.saved ? '' : ' — changed since'}">${_iconExported()} on device</span>`
                 : ''}
               <span class="dd-commit-date">${formatRelative(c.timestamp)}</span>
             </div>
@@ -363,7 +335,7 @@ export class TopBar {
             <div class="dd-commit-author">${escHtml(c.author)}</div>
           </li>
         `).join('')}
-        ${log.length === 0 ? '<li class="dd-empty">No commits yet.</li>' : ''}
+        ${log.length === 0 ? '<li class="dd-empty">No saves yet.</li>' : ''}
       </ul>
     `;
   }
@@ -387,11 +359,18 @@ export class TopBar {
       });
     }
 
-    // Commit action — primary part of the split pill when dirty
+    // Save — the primary part of the split pill while dirty (a plain snapshot;
+    // Shift-click opens the dialog for a message / version).
     const commitActionBtn = this.el.querySelector('#tb-commit-action');
     if (commitActionBtn) {
-      commitActionBtn.addEventListener('click', () => state.openPanel(PANELS.COMMIT));
+      commitActionBtn.addEventListener('click', (e) => {
+        if (e.shiftKey) state.openPanel(PANELS.COMMIT); else state.emit('save-document');
+      });
     }
+    // Save to device / on-device status
+    this.el.querySelector('#tb-device')?.addEventListener('click', () => state.emit('save-to-device'));
+    // The library drawer
+    this.el.querySelector('#tb-library')?.addEventListener('click', () => state.emit('open-library'));
 
     // DSL menu toggle (far-left icon button)
     const dslMenuBtn = this.el.querySelector('#tb-dsl-menu-toggle');
@@ -399,18 +378,7 @@ export class TopBar {
       dslMenuBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._dslMenuOpen = !this._dslMenuOpen;
-        if (this._dslMenuOpen) { this._branchOpen = false; this._commitOpen = false; }
-        this._syncDropdowns();
-      });
-    }
-
-    // Branch pill toggle
-    const branchBtn = this.el.querySelector('#tb-branch-toggle');
-    if (branchBtn) {
-      branchBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._branchOpen = !this._branchOpen;
-        if (this._branchOpen) { this._commitOpen = false; this._dslMenuOpen = false; }
+        if (this._dslMenuOpen) this._commitOpen = false;
         this._syncDropdowns();
       });
     }
@@ -421,7 +389,7 @@ export class TopBar {
       commitPillBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._commitOpen = !this._commitOpen;
-        if (this._commitOpen) { this._branchOpen = false; this._dslMenuOpen = false; }
+        if (this._commitOpen) this._dslMenuOpen = false;
         this._syncDropdowns();
       });
     }
@@ -429,7 +397,6 @@ export class TopBar {
     // Close all dropdowns on outside click
     document.addEventListener('click', (e) => {
       if (!this.el.contains(e.target)) {
-        this._branchOpen = false;
         this._commitOpen = false;
         this._dslMenuOpen = false;
         this._syncDropdowns();
@@ -446,12 +413,6 @@ export class TopBar {
       dslMenuDd.classList.toggle('open', this._dslMenuOpen);
       if (this._dslMenuOpen) dslMenuDd.innerHTML = this._renderDslMenuList();
     }
-    // Branch dropdown
-    const branchDd = this.el.querySelector('#tb-branch-dd');
-    if (branchDd) {
-      branchDd.classList.toggle('open', this._branchOpen);
-      if (this._branchOpen) branchDd.innerHTML = this._renderBranchList();
-    }
     // Commit dropdown
     const commitDd = this.el.querySelector('#tb-commit-dd');
     if (commitDd) {
@@ -466,12 +427,18 @@ export class TopBar {
   }
 
   _bindDropdownEvents() {
-    // New document — confirmation modal (with backup/commit prompts) then reset.
-    this.el.querySelector('#tb-new-doc')?.addEventListener('click', () => {
+    const item = (id, fn) => this.el.querySelector(id)?.addEventListener('click', () => {
+      if (this.el.querySelector(id)?.classList.contains('disabled')) return;
       this._dslMenuOpen = false;
       this._syncDropdowns();
-      showNewDocumentModal(this.handlers);
+      fn();
     });
+    item('#tb-new-doc',      () => state.emit('new-document'));
+    item('#tb-library-item', () => state.emit('open-library'));
+    item('#tb-save',         () => state.emit('save-document'));
+    item('#tb-save-msg',     () => state.openPanel(PANELS.COMMIT));
+    item('#tb-save-device',  () => state.emit('save-to-device'));
+    item('#tb-open-device',  () => state.emit('open-from-device'));
 
     // DSL help modal — uses active section DSL or document default
     this.el.querySelector('#tb-dsl-help')?.addEventListener('click', () => {
@@ -497,27 +464,11 @@ export class TopBar {
         else state.openPanel(PANELS.BLAME);
       }
     });
-    this.el.querySelector('#tb-save-data')?.addEventListener('click', () => {
-      this._dslMenuOpen = false;
-      this._syncDropdowns();
-      state.emit('save-data-file');
-    });
-    this.el.querySelector('#tb-open-data')?.addEventListener('click', () => {
-      this._dslMenuOpen = false;
-      this._syncDropdowns();
-      state.emit('open-data-file');
-    });
     this.el.querySelector('#tb-export')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
       if (state.activePanel === PANELS.EXPORT) state.closePanel();
       else state.openPanel(PANELS.EXPORT);
-    });
-    this.el.querySelector('#tb-merge')?.addEventListener('click', () => {
-      this._dslMenuOpen = false;
-      this._syncDropdowns();
-      if (state.activePanel === PANELS.MERGE) state.closePanel();
-      else state.openPanel(PANELS.MERGE);
     });
     this.el.querySelector('#tb-extensions')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
@@ -544,113 +495,38 @@ export class TopBar {
       else state.openPanel(PANELS.SETTINGS);
     });
 
-    // Checkout a commit
-    this.el.querySelectorAll('.dd-commit-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const hash = item.dataset.hash;
+    // A save in the history list → the read-only diff against the working text
+    this.el.querySelectorAll('.dd-commit-item').forEach(li => {
+      li.addEventListener('click', () => {
+        const hash = li.dataset.hash;
         if (hash) this._onCommitClick(hash);
       });
     });
-
-    // Switch to a branch
-    this.el.querySelectorAll('.dd-branch-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const branch = item.dataset.branch;
-        const isCurrentAndAttached = item.classList.contains('current');
-        if (branch && !isCurrentAndAttached) {
-          this._onSwitchBranch(branch);
-        } else if (branch && isCurrentAndAttached) {
-          this._branchOpen = false;
-          this._syncDropdowns();
-        }
-      });
-    });
   }
 
   // ---------------------------------------------------------------------------
-  // VCS navigation with auto-stash
+  // History navigation
   // ---------------------------------------------------------------------------
-
-  _maybeStash() {
-    if (state.isDirty) {
-      state.stash = { content: state.currentContent, fromHash: state.headHash };
-    }
-  }
-
-  _applyStash(hash, baseContent) {
-    if (state.stash && state.stash.fromHash === hash) {
-      const stashedContent = state.stash.content;
-      state.stash = null;
-      return stashedContent;
-    }
-    return baseContent;
-  }
 
   /**
-   * Clicking a commit opens the read-only diff (clicked commit vs working
-   * state).  Clicking the current commit does nothing.  Actual checkout-to-edit
-   * is the explicit `_onCheckout` path.
+   * Clicking a save opens the read-only diff (that save vs the working text);
+   * the diff bar's "Restore" brings its text back.  Clicking the current save
+   * with nothing changed does nothing.
    */
   _onCommitClick(hash) {
     this._commitOpen = false;
     this._syncDropdowns?.();
     if (!hash) return;
-    // Already diffing → the clicked commit becomes the RIGHT (source) side,
-    // keeping the current LEFT (target) selection.
+    // Already diffing → the clicked save becomes the RIGHT side, keeping the
+    // current LEFT selection.
     if (state.diff) { state.openDiff(state.diff.left, hash); return; }
     // Nothing to compare if this commit's content IS the current working state
     // (e.g. clicking the head with no uncommitted changes).
     if (state.vcs?.getContentAt(hash) === state.currentContent) return;
-    // Working state = LEFT (middle / merge target), clicked commit = RIGHT
-    // (merge source). Merge is always right → left.
+    // Working text = LEFT, the clicked save = RIGHT.
     state.openDiff('WORKING', hash);
   }
 
-  _onCheckout(hash) {
-    const vcs = state.vcs;
-    if (!vcs) return;
-
-    const currentHash = state.headHash;
-    const isDetached = state.isDetached;
-    const branchHead = vcs.branches?.[vcs.currentBranch]?.head ?? null;
-
-    if (hash === currentHash && !isDetached) {
-      this._commitOpen = false;
-      this._syncDropdowns();
-      return;
-    }
-
-    this._maybeStash();
-
-    if (hash === branchHead && isDetached) {
-      const baseContent = vcs.switchBranch(vcs.currentBranch);
-      const newHash = vcs.headHash;
-      const content = this._applyStash(newHash, baseContent);
-      state.update({ currentContent: content, isDirty: content !== baseContent });
-      state.emit('branch-switch', { name: vcs.currentBranch, content });
-    } else {
-      const { content: baseContent } = vcs.checkout(hash);
-      const content = this._applyStash(hash, baseContent);
-      state.update({ currentContent: content, isDirty: content !== baseContent });
-      state.emit('checkout', { hash, content });
-    }
-
-    this._commitOpen = false;
-    this.render();
-  }
-
-  _onSwitchBranch(name) {
-    this._maybeStash();
-
-    const baseContent = state.vcs.switchBranch(name);
-    const newHash = state.vcs.headHash;
-    const content = this._applyStash(newHash, baseContent);
-    state.update({ currentContent: content, isDirty: content !== baseContent });
-    state.emit('branch-switch', { name, content });
-
-    this._branchOpen = false;
-    this.render();
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -679,10 +555,26 @@ function iconExport() {
   </svg>`;
 }
 
-function iconBranch() {
-  return `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-    <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Z"/>
-  </svg>`;
+function iconBack() {
+  return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>`;
+}
+
+function iconLibrary() {
+  return `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="2" y="2" width="4" height="12" rx="1"/><rect x="7" y="2" width="4" height="12" rx="1"/><path d="M12 3l2.5 10.5"/></svg>`;
+}
+
+function iconDevice() {
+  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 11v2a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2"/></svg>`;
+}
+
+function iconCheck() {
+  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>`;
 }
 
 function iconGear() {
@@ -742,91 +634,6 @@ function iconNewDoc() {
     <path d="M9 1H4a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5V5.5L9 1zm0 1.414L12.086 5.5H9.5A.5.5 0 0 1 9 5V2.414zM4 2h4v3a1.5 1.5 0 0 0 1.5 1.5h3v7a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5v-11A.5.5 0 0 1 4 2z"/>
     <path d="M8 8a.5.5 0 0 1 .5.5V10h1.5a.5.5 0 0 1 0 1H8.5v1.5a.5.5 0 0 1-1 0V11H6a.5.5 0 0 1 0-1h1.5V8.5A.5.5 0 0 1 8 8z"/>
   </svg>`;
-}
-
-// ---------------------------------------------------------------------------
-// New-document confirmation modal
-//
-// Starting a new document replaces the ENTIRE current document — content,
-// branches, commits and comments — so before the user commits to that we make
-// it easy to keep the current work (commit any dirty changes, and/or export a
-// durable .unifile.json copy) and require an explicit destructive confirm.
-// ---------------------------------------------------------------------------
-
-export function showNewDocumentModal(handlers) {
-  const overlay = document.createElement('div');
-  overlay.className = 'dsl-help-overlay';
-
-  const commitCount = state.vcs?.log?.().length ?? 0;
-  const dirty = state.isDirty;
-  const historyNote = commitCount === 0
-    ? 'The current document has no commits yet.'
-    : `This discards the current document and its entire history — ${commitCount} commit${commitCount === 1 ? '' : 's'}.`;
-
-  overlay.innerHTML = `
-    <div class="dsl-help-modal newdoc-modal" role="dialog" aria-modal="true" aria-label="Start a new document" tabindex="-1">
-      <div class="dsl-help-header">
-        <div class="dsl-help-title">Start a new document</div>
-        <button class="dsl-help-close" aria-label="Close">&times;</button>
-      </div>
-      <div class="dsl-help-body newdoc-body">
-        <p class="newdoc-warn">${escHtml(historyNote)} <strong>This can’t be undone.</strong></p>
-        ${dirty ? '<p class="newdoc-dirty">⚠ You have uncommitted changes that will be lost.</p>' : ''}
-        <p class="newdoc-hint">Keep this work first — commit it and/or save a copy — then start fresh.</p>
-        <div class="newdoc-actions">
-          ${dirty ? '<button class="newdoc-btn" id="newdoc-commit">Commit…</button>' : ''}
-          <button class="newdoc-btn" id="newdoc-save">Save data file…</button>
-        </div>
-        <p class="newdoc-status" id="newdoc-status" aria-live="polite"></p>
-      </div>
-      <div class="dsl-help-footer newdoc-footer">
-        <button class="newdoc-btn newdoc-cancel" id="newdoc-cancel">Cancel</button>
-        <button class="newdoc-btn newdoc-danger" id="newdoc-confirm">Discard &amp; start new</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-
-  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
-  document.addEventListener('keydown', onKey);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-  const setStatus = (msg, ok = false) => {
-    const s = overlay.querySelector('#newdoc-status');
-    if (s) { s.textContent = msg; s.classList.toggle('ok', ok); }
-  };
-
-  overlay.querySelector('.dsl-help-close')?.addEventListener('click', close);
-  overlay.querySelector('#newdoc-cancel')?.addEventListener('click', close);
-
-  // Commit path: hand off to the full commit UI (the new-doc modal steps aside).
-  overlay.querySelector('#newdoc-commit')?.addEventListener('click', () => {
-    close();
-    state.openPanel(PANELS.COMMIT);
-  });
-
-  // Backup path: export a .unifile.json and report the outcome; the modal stays
-  // open so the user can then discard with confidence.
-  overlay.querySelector('#newdoc-save')?.addEventListener('click', async () => {
-    setStatus('Saving…');
-    try {
-      const result = await (handlers.onSaveDataFile?.() ?? Promise.resolve('downloaded'));
-      if (result === 'cancelled') setStatus('Save cancelled — nothing was exported.');
-      else setStatus('✓ Saved. Safe to start a new document.', true);
-    } catch (e) {
-      setStatus('Save failed: ' + (e?.message ?? e));
-    }
-  });
-
-  // Destructive confirm: the user has accepted the loss of unbacked-up work.
-  overlay.querySelector('#newdoc-confirm')?.addEventListener('click', () => {
-    close();
-    handlers.onNewDocument?.();
-  });
-
-  overlay.querySelector('.newdoc-modal')?.focus?.();
 }
 
 // ---------------------------------------------------------------------------

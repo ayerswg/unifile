@@ -6,12 +6,12 @@
  *     the bubble.
  *   • listBubbleActions(ctx, view) → the round action button (action-fab.js),
  *     CONTEXTUAL to the pane that is showing:
- *       editor → text/music verbs: play · one measure per line · piano roll
- *                (ABC), comment, indent · outdent, undo · redo
- *       render → play / pause (ABC); zoom to fit · zoom in · zoom out
- *                (Mermaid) — nothing for other DSLs (bubble hides)
- *       commit → the branches (tap one to switch), New branch…, Commit…
- *                (the bubble itself reads `{⑂} <branch>` in this view)
+ *       editor  → text/music verbs: play · one measure per line · piano roll
+ *                 (ABC), comment, indent · outdent, undo · redo
+ *       render  → play / pause (ABC); zoom to fit · zoom in · zoom out
+ *                 (Mermaid) — nothing for other DSLs (bubble hides)
+ *       history → Save (the tap), Save with message…, Save to device
+ *       library → New document (the tap), Open from device…
  *
  * Every action carries a single UTF-8 TEXT glyph (never an emoji — code points
  * with an emoji presentation get U+FE0E appended so iOS keeps them monochrome)
@@ -23,9 +23,7 @@
 import { state, PANELS } from './state.js';
 import { getDSL, listDSLs } from '../dsl/registry.js';
 import { generateQuine, downloadFile, downloadBlob } from '../core/storage.js';
-import {
-  showNewDocumentModal, showDslHelpModal, showExtensionsModal,
-} from './topbar.js';
+import { showDslHelpModal, showExtensionsModal } from './topbar.js';
 import { showArchivedCommentsModal } from './comments.js';
 import { zoomAll as mermaidZoom } from '../dsl/mermaid-zoom.js';
 
@@ -47,11 +45,11 @@ export function dslActions(dslId = currentDslId()) {
 
 /**
  * The action a fresh install runs on a plain tap of the bubble, per DSL and
- * view.  'menu' = the tap opens the bubble's own grid (the commit view: pick a
- * branch).
+ * view.  'menu' = the tap opens the bubble's own grid.
  */
 export function defaultPrimary(dslId, view = 'editor') {
-  if (view === 'commit') return 'menu';
+  if (view === 'history') return 'save';
+  if (view === 'library') return 'new';
   if (dslId === 'abcjs') return 'play';
   // The diagram's render view: a tap re-fits the diagram (zoom to extents).
   if (view === 'render' && dslId === 'mermaid') return 'fit';
@@ -72,10 +70,10 @@ const mk = (a) => ({ key: a.label, disabled: false, star: true, ...a });
 
 /**
  * @param {object} ctx   { handlers, editor }
- * @param {string} view  'editor' | 'render' | 'commit'
+ * @param {string} view  'editor' | 'render' | 'history' | 'library'
  * @returns {Array<{id,label,key,glyph,run,disabled,star}>}
  *   key  — stable sort key (labels like Play/Pause change; the tile shouldn't move)
- *   star — false = can't be made the tap action (branch rows)
+ *   star — false = can't be made the tap action
  */
 export function listBubbleActions(ctx = {}, view = 'editor') {
   const dslId = currentDslId();
@@ -100,17 +98,20 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
     return acts;
   }
 
-  if (view === 'commit') {
-    const vcs = state.vcs;
-    const detached = state.isDetached;
-    for (const b of vcs?.listBranches?.() ?? []) {
-      const cur = b.isCurrent && !detached;
-      acts.push(mk({ id: `branch:${b.name}`, label: b.name, key: `0 ${b.name}`, glyph: cur ? '●' : '○',
-        star: false, current: cur, run: () => switchBranch(b.name) }));
-    }
-    acts.push(mk({ id: 'branch-new', label: 'New branch…', key: '1 new', glyph: '⑂', star: false, run: () => newBranch() }));
-    acts.push(mk({ id: 'commit', label: 'Commit…', key: '2 commit', glyph: '◉', star: false,
+  if (view === 'history') {
+    acts.push(mk({ id: 'save', label: 'Save', key: '0 save', glyph: '◉', disabled: !state.isDirty,
+      run: () => state.emit('save-document') }));
+    acts.push(mk({ id: 'save-msg', label: 'Save with message…', key: '1 save msg', glyph: '✎', star: false,
       disabled: !state.isDirty, run: () => composeCommit() }));
+    acts.push(mk({ id: 'save-device', label: 'Save to device', key: '2 device', glyph: '⤓',
+      run: () => state.emit('save-to-device') }));
+    return acts;
+  }
+
+  if (view === 'library') {
+    acts.push(mk({ id: 'new', label: 'New document', key: '0 new', glyph: '+', run: () => state.emit('new-document') }));
+    acts.push(mk({ id: 'open-device', label: 'Open from device…', key: '1 open', glyph: '⤒', star: false,
+      run: () => state.emit('open-from-device') }));
     return acts;
   }
 
@@ -157,8 +158,8 @@ export function listMenuActions(ctx = {}) {
   const add = (a) => acts.push(mk(a));
 
   const hasCommits = (state.vcs?.log?.().length ?? 0) > 0;
-  add({ id: 'new-doc', label: 'New document…', glyph: '+', group: 'document',
-        run: () => showNewDocumentModal(ctx.handlers) });
+  add({ id: 'new-doc', label: 'New document', glyph: '+', group: 'document',
+        run: () => state.emit('new-document') });
   add({ id: 'rename', label: 'Rename document…', glyph: '✎', group: 'document', run: () => renameDoc() });
   add({ id: 'help', label: 'Help…', glyph: '?', group: 'document', run: () => showDslHelpModal(dslId) });
   for (const a of dslActions(dslId)) {
@@ -167,12 +168,18 @@ export function listMenuActions(ctx = {}) {
   add({ id: 'blame', label: 'Blame view', glyph: '⌕', group: 'document', disabled: !hasCommits,
         run: () => state.activePanel === PANELS.BLAME ? state.closePanel() : state.openPanel(PANELS.BLAME) });
 
-  add({ id: 'save-data', label: 'Save data file…', glyph: '↧', group: 'file',
-        run: () => state.emit('save-data-file') });
-  add({ id: 'open-data', label: 'Open data file…', glyph: '↥', group: 'file',
-        run: () => state.emit('open-data-file') });
-  add({ id: 'merge', label: 'Import & merge…', glyph: '⋎', group: 'file',
-        run: () => state.activePanel === PANELS.MERGE ? state.closePanel() : state.openPanel(PANELS.MERGE) });
+  add({ id: 'save', label: 'Save', glyph: '◉', group: 'file', disabled: !state.isDirty,
+        run: () => state.emit('save-document') });
+  add({ id: 'history', label: 'History', glyph: '◷', group: 'file',
+        run: () => state.emit('mobile-goto-pane', 'history') });
+  add({ id: 'save-device', label: state.deviceFile?.saved ? 'On device ✓ — save again' : 'Save to device…',
+        glyph: '⤓', group: 'file', run: () => state.emit('save-to-device') });
+  add({ id: 'open-device', label: 'Open from device…', glyph: '⤒', group: 'file',
+        run: () => state.emit('open-from-device') });
+  if (state.library) {
+    add({ id: 'library', label: 'Documents…', glyph: '‹', group: 'file',
+          run: () => state.emit('open-library') });
+  }
   if (listDSLs().some(d => (d.extensionSlots?.length ?? 0) > 0)) {
     add({ id: 'extensions', label: 'Extensions…', glyph: '⧉', group: 'file', run: () => showExtensionsModal() });
   }
@@ -205,30 +212,9 @@ export function renameDoc() {
   state.update({ data: { ...state.data, title: next } });
 }
 
-export function switchBranch(name) {
-  if (!name || !state.vcs || (name === state.currentBranch && !state.isDetached)) return;
-  if (state.isDirty) state.stash = { content: state.currentContent, fromHash: state.headHash };
-  const baseContent = state.vcs.switchBranch(name);
-  const newHash = state.vcs.headHash;
-  let content = baseContent;
-  if (state.stash && state.stash.fromHash === newHash) { content = state.stash.content; state.stash = null; }
-  state.update({ currentContent: content, isDirty: content !== baseContent });
-  state.emit('branch-switch', { name, content });
-}
-
-export function newBranch() {
-  const name = (window.prompt('New branch name:') || '').trim();
-  if (!name) return;
-  if (!/^[A-Za-z0-9/_-]+$/.test(name)) { window.alert('Branch name may only contain letters, numbers, /, _ and -'); return; }
-  try { state.vcs.createBranch(name, state.headHash); }
-  catch (err) { window.alert(err?.message || 'Could not create branch.'); return; }
-  state.update({ data: { ...state.data, ...state.vcs.serialize() } });
-  switchBranch(name);
-}
-
-/** Commit from the phone: the composer is the pending node at the top of the log. */
+/** Save with a message from the phone: the composer is the pending node at the top of the history. */
 export function composeCommit() {
-  state.emit('mobile-goto-pane', 'commit');
+  state.emit('mobile-goto-pane', 'history');
   const log = document.getElementById('uf-commit-log');
   log?.scrollTo?.({ top: 0, behavior: 'smooth' });
   const msg = log?.querySelector('#clp-msg');

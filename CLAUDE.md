@@ -20,23 +20,26 @@ heads the phone title bar, and sits beside the name on the site. Build ids stay
 same apps. Glyphs were picked for having no emoji presentation; action glyphs
 that do (▶ ⏸ ⚙) get U+FE0E appended (`actions.js`).
 
-A **single-file, fully-offline** document editor with **built-in git-style version
-history**. A document is plain text; its sections declare their own format
+A **single-file, fully-offline** document editor with **built-in save history**
+(git-style snapshots under the hood, one linear line of saves in the UI). A document is plain text; its sections declare their own format
 (Markdown, ABC music notation, Mermaid, Fountain…) via `#!shebang` lines.
 Everything runs client-side — **no server, no account, no network at runtime**.
 
 Two shipping shapes per content "type":
 - **Quine** — one standalone `.html` file that embeds the whole app *and* the
   document data. Saving regenerates the file. Opens from disk (`file://`) or hosted.
-- **PWA** — an installable, offline Progressive Web App (data in IndexedDB).
+- **PWA** — an installable, offline Progressive Web App. Its documents live in the
+  **library** (IndexedDB, many documents per app, each remembered as it was left — see
+  "The document library"); **Save to device** writes a `.unifile.json` out of the sandbox.
 
 ### Non-negotiable principles
 1. **Offline & self-contained.** Every library is bundled by esbuild. No runtime
    CDN fetches. The only network call is the update check (`GET /version.json`).
 2. **Privacy: nothing leaves the device.** unifile.app is a static site (Cloudflare
    Pages) — it stores nothing. No telemetry, no analytics. Keep it that way.
-3. **Plain-text, portable data.** The VCS (branches, commits-as-diffs) is plain
-   JSON. A document + full history round-trips through a tiny `.unifile.json`.
+3. **Plain-text, portable data.** The history (saves stored as line diffs) is plain
+   JSON. A document + full history round-trips through a tiny `.unifile.json` — the
+   file **Save to device** writes and **Open from device** reads.
 4. **Strict same-origin CSP.** See `templates/pwa.html` / `quine.html`. Adding a
    third-party origin is a big deal — we removed Google Drive sync partly to keep
    the CSP locked down.
@@ -49,9 +52,13 @@ Two shipping shapes per content "type":
 src/
   main.js            Dev entry (imports all DSLs). The build generates a slimmer entry per variant.
   core/              Framework-agnostic logic (no DOM where avoidable)
-    vcs.js           Git-like VCS: branches, commits (stored as line diffs), detached HEAD
+    vcs.js           Git-like VCS (branches, commits-as-diffs, detached HEAD) — the FILE FORMAT; the UI uses it as ONE
+                     linear line of saves on `main` (no branch/merge/detached UI since 2026-10)
     diff.js          LCS line diff: computePatch/applyPatch, lineDiff (side-by-side), unifiedDiff, blame
-    storage.js       Quine capture/generate, IndexedDB, File System Access, drafts, user prefs, IS_QUINE
+    storage.js       Quine capture/generate, IndexedDB (`library` store + legacy `documents`), the device-file pickers
+                     (File System Access / share sheet / download), drafts (quine only), user prefs, IS_QUINE
+    library.js       THE DOCUMENT LIBRARY (pure, Node-tested): records, migration, `Library` class over a store adapter
+    device-file.js   Save to device / Open from device — the one implementation every shell calls
     front-matter.js  Nested-YAML-subset parser/serializer for the leading `---`…`---` block
     doc-sections.js  Parses `#!dslId@ver+ext` shebang sections
     abc-voices.js    Parses ABC `V:` voice lines (voiceIdOfLine / buildVoiceMap) — shared by the gutter + abcjs.js for mute/solo
@@ -71,6 +78,7 @@ src/
   upub/              The uPub variant's own shell (no CodeMirror — see "uPub")
     main.js, app.js, editor.js, syntax.js, epub.js, zip.js, preview.js, guide-content.js
     comments.js      Inline comments for the custom editor (overlay highlights + card) — uDraft reuses it
+    library.js       `ShellLibrary`: the library for the uPub-style shells (boot/persist/sheet/device verbs) — uDraft reuses it
     (editor.js = the SHARED custom line editor: `syntax:` option plugs in a
      classifier/renderer; uDraft reuses it — see "uDraft")
   udraft/            The uDraft variant's own shell (see "uDraft")
@@ -84,16 +92,20 @@ src/
     editor.js        CodeMirror 6 setup: per-section highlighting, inline-comment gestures, no gutter
     editor-sections.js  Collapsible front-matter bar (default-collapsed on load; the only section kind)
     preview.js       Renders the active model/DSL to the preview pane
-    topbar.js        Title, DSL menu, VCS pills (desktop only); commit-log pane (pending node + export marker). Also `showDslHelpModal` = the per-DSL syntax reference (grouped, navigable sidebar; `DSL_HELP[dsl].sections[]` with optional `group`)
-    pane-switch.js   PHONE top bar: (branch circle) {mark} Title ⌄ (eye circle) + the one dropdown (see Mobile)
-    actions.js       The phone actions: listMenuActions (title dropdown, file level) + listBubbleActions (bubble, per view)
-    action-fab.js    The draggable `{glyph}` action bubble, contextual per pane: tap = primary · hold = grid · drag = snap to a corner; `{⑂} branch` pill in the history view
-    commit-dialog.js Full commit dialog (identity + message + tag)
+    topbar.js        Desktop top bar: ‹ library button, menu, title, Save pill + history pill, device pill; the history list
+                     (pending "Unsaved changes" node + "on device" marker; also mounted as the phone's history pane).
+                     Also `showDslHelpModal` = the per-DSL syntax reference (grouped, navigable sidebar; `DSL_HELP[dsl].sections[]` with optional `group`)
+    pane-switch.js   PHONE top bar: (‹ back-arrow circle → the library) {mark} Title ● ⌄ (eye circle) + the one dropdown (see Mobile)
+    actions.js       The phone actions: listMenuActions (title dropdown, file level) + listBubbleActions (bubble, per view:
+                     editor · render · history = Save · library = New)
+    action-fab.js    The draggable `{glyph}` action bubble, contextual per pane: tap = primary · hold = grid · drag = snap to a corner
+    library-pane.js  The document list (phone pane `library` / desktop drawer `[data-library]`): open, + New, ⋯ rename/duplicate/delete
+    commit-dialog.js "Save with message…" dialog (optional identity + message + version)
     diff-view.js     DiffView overlay + DiffBar (read-only commit diff)
     dsl-footer.js    ABC transport (play/scrub/time)
     settings-panel.js  Identity, theme, updates (check button), audio output (MIDI)
     comments.js      Inline comments: persistent range highlights + the thread card (a CM tooltip)
-    blame-view.js, merge-dialog.js, export-dialog.js, site-nav.js,
+    blame-view.js, export-dialog.js, site-nav.js,
     theme.js, editor-theme.js (CM theme on the app's CSS tokens), plugin-extensions.js, update-check.js
   styles/app.css     All app CSS (single file; mobile rules in @media(max-width:640px))
 build/
@@ -124,7 +136,7 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 - **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
 - `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft), `slides`(sld). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
 - A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `upub` and `udraft` variants use this (see below) — no CodeMirror, no DSL registry, their own CSS.
-- `npm test` → `node --test test/**` — the uDraft core (parser/layout/SVG) unit tests; pure Node, no browser.
+- `npm test` → `node --test test/**` — pure Node, no browser: the uDraft core, the library (`test/library.test.mjs`), page config, emoji, etc.
 - `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
 - Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model. The exception is `slides`, whose deck IS Markdown (Marpit) — it bundles only `slides.js` (no marked/docx).
@@ -143,12 +155,12 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 **Entry:** `main.js` → `new App().init()`. In quine mode the app is on `window.__unifile`. The build also exposes `globalThis.__uf = { state }` for tests/preview automation.
 
-**State (`state.js`)** is a tiny EventBus singleton (`state`). Mutate via `state.update(patch)` (broadcasts `change`) or `state.emit(event, payload)`; subscribe with `state.on(event, fn)`. Key fields: `data` (the full serialized doc), `vcs`, `currentContent`, `isDirty`, `viewMode`, `activePanel`, `diff`, `pendingCommit`, `user`. Getters: `headHash`, `currentBranch`, `isDetached`.
+**State (`state.js`)** is a tiny EventBus singleton (`state`). Mutate via `state.update(patch)` (broadcasts `change`) or `state.emit(event, payload)`; subscribe with `state.on(event, fn)`. Key fields: `data` (the full serialized doc), `vcs`, `currentContent`, `isDirty`, `viewMode`, `activePanel`, `diff`, `pendingCommit`, `user`, and the library trio `library` (a `Library`, null in a quine) · `docId` (the open record) · `deviceFile` (`{fileName, savedAt, savedHead, saved, linked}` mirrored from the record; `device-change` fires when it moves). Getters: `headHash`, `currentBranch`; `isDetached` is always false now.
 
 **Data model (`state.data`)** is the JSON embedded in the quine / stored in IDB:
-`{ branches, commits, currentBranch, detachedHead, currentContent, dslType, title, comments/commentThreads, version, password, … }`. `vcs.serialize()` returns the branch/commit fields; after a commit the app does `state.update({ data: { ...state.data, ...vcs.serialize() } })` to keep them in sync.
+`{ branches, commits, currentBranch, detachedHead(always null), currentContent, dslType, title, comments/commentThreads, assets, version, password, … }`. `vcs.serialize()` returns the branch/commit fields; after a save the app does `state.update({ data: { ...state.data, ...vcs.serialize() } })` to keep them in sync. `_currentDataObject()` is the canonical builder (it also prunes unreferenced assets).
 
-**VCS (`core/vcs.js`)** — git-inspired, all JSON. Commits store a **line diff (patch)** against their parent; the root stores `fullContent`. `getContentAt(hash)` reconstructs by walking ancestors + applying patches. Branches, tags (SemVer), detached HEAD. `checkout(hash)` enters detached HEAD.
+**VCS (`core/vcs.js`)** — git-inspired, all JSON, kept whole for the file format. Commits (= saves) store a **line diff (patch)** against their parent; the root stores `fullContent`. `getContentAt(hash)` reconstructs by walking ancestors + applying patches. **The UI uses ONE linear line (2026-10):** every save lands on `currentBranch` (`main`), a diff is "a save vs the working text", **Restore** copies an old save's text into the editor as an unsaved change (no `checkout`, no detached head, no stash, no branch switching, no merge — all of that UI was removed; `detachedHead` is forced null on every load so old files reattach with their working text intact, and extra branches in old files are carried along untouched).
 
 **Sections & DSLs (`doc-sections.js` + `dsl/registry.js`)** — `#!dslId@version+ext1+ext2` lines split a document into sections, each rendered by its DSL. No shebang → whole doc uses the build's `defaultDslType`. A DSL module calls `registerDSL({ id, getEditorExtensions, render, exporters, … })`.
 
@@ -173,6 +185,52 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 **Theme (app.css tokens, 2026-10 — the iA Writer palette).** Catppuccin is gone. Dark = neutral near-black (`--bg #181818`, `--text #dedede`, `--accent #3d9bff` = the caret blue), light = white (`--bg #ffffff`, `--text #1a1a1a`, `--accent #1a8cf5`); every surface, the CM editor (`editor-theme.js`), the piano roll's canvas fallbacks, `templates/pwa.html` `theme-color` + `manifest.json` colours use the same values, and **uPub/uDraft (`upub.css`) carry the identical palette** so all six apps match. The four token blocks (`:root`, auto-light `@media`, forced `[data-theme=light]`, forced `[data-theme=dark]`) must stay in sync — a token added to one goes in all four. Print/slide layouts keep their own light values.
 
 **Diff view (`diff-view.js`)** — clicking a non-current commit opens a read-only side-by-side diff (clicked commit vs working state) via `state.openDiff(left,right)` (`'WORKING'` sentinel = live content). `state.on('diff-change')` toggles `#unifile-app[data-diff]` → CSS swaps the panes for `#uf-diff` + the bottom picker bar.
+
+---
+
+## The document library & saving (2026-10 — the iA Writer model)
+
+**Many documents per app, a back arrow to the list, no branches.** `src/core/library.js`
+(pure; `test/library.test.mjs`) + `src/core/device-file.js` (the device verbs) are shared by
+all three shells; the UI lives in `ui/library-pane.js` (standard) and `upub/library.js`
+(`ShellLibrary`, {write} + {draft}).
+
+- **One IndexedDB record per document** (`library` store, DB version 2; index `app`). A record =
+  `{ id 'd_…', app (dslType — every PWA on the origin shares the DB, each lists its own), title,
+  excerpt, data (the WHOLE data object incl. `currentContent` = the unsaved working text,
+  comments, assets), createdAt, updatedAt, savedAt, savedKey, handle, fileName }`. The
+  last-opened id is `localStorage unifile_lib_current:<app>`.
+- **Three layers, all on the device, nothing online:** (1) **remembered** — every edit persists
+  the record (1 s debounce; flushed on `visibilitychange`/`pagehide`; quines keep the old
+  localStorage draft instead); (2) **Save** = a snapshot into history (Ctrl+S / the Save pill /
+  the phone bubble in the history view / the pending node's Save; optional message + version via
+  "Save with message…" = the old commit dialog; identity optional — `anonymous`); (3) **Save to
+  device** = the `.unifile.json` written out of the sandbox by capability: File System Access
+  (Chromium — the handle is stored ON the record, structured-clone keeps it, so later saves write
+  silently after `ensureHandleWritable`; the permission prompt only works inside a user gesture,
+  which is why autosave never writes to the device and a Save does), else the share sheet (iOS →
+  Files), else a download. **Open from device** adopts a file as a new record (linked on
+  Chromium; `isSameEntry` dedupes), or replaces the document in a quine. `savedKey` =
+  `stateKey(data)` (head + text + title fingerprint) → `isSavedToDevice(rec)` is one compare; the
+  "on device" marker in history sits on `savedHead`, the device pill / list row say saved ·
+  changed · not on device.
+- **Migration:** on the first library launch with no records, the pre-library single document
+  (`documents` store id `default` / `upub` / `udraft`) becomes the first record — for the
+  standard shell the localStorage draft's text wins (that PWA never reloaded IndexedDB; the
+  draft was its only persistence of unsaved text, and commits were silently lost on reload —
+  real bug, fixed by the library).
+- **Chrome:** desktop = `‹` button → the drawer (`#unifile-app[data-library]`, closes on outside
+  click / Ctrl+Shift+L); phone = the left circle → the `library` pane (`data-mobile-pane`
+  values: `library · history · editor · render`; the old `commit` pane is `history`). Quines
+  have no library: `state.library` is null, the entry points hide, the left circle becomes a
+  history clock. Shortcuts: Ctrl+S save · Ctrl+Shift+S save to device · Ctrl+Shift+O open
+  from device · Ctrl+Shift+L library. Events: `save-document`, `save-to-device`,
+  `open-from-device`, `new-document`, `restore-version`, `open-library`/`close-library`,
+  `document-change`, `device-change`.
+- **Pickers in headless Chromium hang/refuse**: `saveDocumentToDevice`/`pickDocumentFromDevice`
+  catch a refused picker and fall through to share/download/`<input type=file>`; the Playwright
+  checks mock `showSaveFilePicker` (methods on a prototype, so the stored "handle" clones to
+  `{name, kind}`) or delete it to exercise the download path.
 
 ---
 
@@ -357,7 +415,7 @@ touch-first editing mode: single tap on empty = add, single tap on an active-voi
 - **Canvas roll**: keyboard column + beat/measure ruler (click/drag scrubs via `abc-seek-preview`/`abc-seek`),
   notes colored per voice, non-active voices ghosted, muted voices near-invisible, playhead with
   auto-follow, wheel scroll / ctrl+wheel time-zoom. **Fit-to-tune runs ONCE per document**
-  (`_maybeFit`, reset on checkout/branch-switch) — never on edit re-renders, which must not move the
+  (`_maybeFit`, reset on `checkout` = document open / restore) — never on edit re-renders, which must not move the
   user's view; it's also deferred until the canvas has nonzero width (the pane can open in a hidden tab).
 - **Voice identity**: `--voice-0…7` CSS vars (Catppuccin accents, themed) assigned by score order
   (`core/voice-colors.js`). Header chips = the DAW track list: click selects the edit-target voice
@@ -409,7 +467,7 @@ rationale in `plans/udraft-dsl.md`; user-facing reference in
 `src/udraft/guide-content.js` (rendered in-app AND emitted as `/udraft/guide/`
 — keep it current). Like uPub it ships its own shell (`DSL_META.udraft.entry`
 = `udraft/main.js`, css = `styles/udraft.css`) and reuses `core/` for
-storage/VCS; PWA docId `'udraft'`, `dslType: 'udraft'`.
+storage/VCS; legacy PWA docId `'udraft'` (migrated into the library), `dslType: 'udraft'`.
 
 - **The DSL is strictly one statement per line** (that property is what makes
   line diffs, click-to-source, and a future direct-manipulation canvas work —
@@ -661,15 +719,15 @@ slides layout) is untouched and unrelated.
 The app is a `100dvh`-ish flex column. On phones (`@media max-width:640px`, OR landscape `(orientation: landscape) and (max-height: 500px) and (pointer: coarse)`) **the desktop top bar is hidden entirely** (`#uf-topbar { display:none }`) and the **phone top bar (`#uf-pane-switch`, `src/ui/pane-switch.js`) is the sole top chrome**, sitting directly below the site-nav (if present) under the safe-area inset (which lives on `#unifile-app` padding-top). Only the active one of three panes (**commit-log · editor · render**) is displayed; `App._setupMobilePanes()` tracks the pane into `#unifile-app[data-mobile-pane]`.
 
 **Phone top bar (2026-09 redesign): `( ⑂ )   {♪} Title ⌄   ( ◉ )`.** Three controls, portrait AND landscape (the old segmented slider + the landscape collapsible dock are gone):
-- **Left circle = branch icon.** Tap → the commit/history pane; the circle FILLS (accent) while that pane is up; tap again → back to the editor. Carries the dirty dot (`--pending`; red when detached).
-- **Centre = `{mark}` + document title + caret — ALWAYS the title, same menu in every view** (the branch name lives on the bubble in the history view, never here). The mark is `appMark(data.dslType)` in mono. Tap → the ONE dropdown (`.ps-menu`) with the FILE-LEVEL options only, grouped: Document, File, Export, More (settings) — **`src/ui/actions.js` `listMenuActions(ctx)`**. Editing verbs and branches are deliberately NOT in it.
+- **Left circle = the back arrow.** Tap → the document LIBRARY pane (`library-pane.js`); the circle FILLS (accent) while that pane is up; tap again → back to the editor. In a quine (no library) it is a clock and opens the history pane. The history pane is reached from the title dropdown (File → History) or the Save-with-message flow.
+- **Centre = `{mark}` + document title + the dirty dot + caret — ALWAYS the title, same menu in every view.** The mark is `appMark(data.dslType)` in mono. Tap → the ONE dropdown (`.ps-menu`) with the FILE-LEVEL options only, grouped: Document (New, Rename, Help, Blame), File (Save, History, Save to device, Open from device, Documents), Export, More (settings) — **`src/ui/actions.js` `listMenuActions(ctx)`**. Editing verbs are deliberately NOT in it.
 - **The bar blends into the page** (`background: var(--bg)`, no rule — iA-style) and is **`user-select:none`/`-webkit-touch-callout:none`**: a slightly held tap on the title/mark otherwise started an iOS text selection ("tapping the branch circle edits the top-left text" — real bug). The skeleton is **built once per mode and PATCHED** on state changes (`_build`/`render`) — rebuilding the buttons under a finger mid-tap (state changes land between touchstart and click) hands the tap to whatever is underneath.
 - **Right circle = eye.** Tap → the rendered DSL pane; filled while showing; tap again → editor. Always the eye (not a per-DSL render icon).
 - **Diff mode:** circles unchanged; the centre reads `L <hash> ↔ R <hash>` and its dropdown holds both side pickers.
 - **Hidden while typing:** `App._bindEditingChrome()` sets `#unifile-app[data-editing]` (→ `#uf-pane-switch { display:none }`) when the editor has focus (`editor-focus` from CM's `focusChanged` + document focusin/out) AND the soft keyboard is genuinely up (`_kbOpen`: the visual viewport is >100px shorter than the tallest seen at this window width, tracked in `_trackViewportHeight`; focus alone where there's no visualViewport) AND `pointer: coarse`. Mirrors uPub's rule; iOS's own keyboard ✓ blurs the editor and brings the bar back. Can't be seen in desktop Chromium (no keyboard) — verify by setting the attribute by hand.
 
 **Phones have NO transport bar and NO per-verb FABs.** Editing verbs live on the **action bubble (`src/ui/action-fab.js`, `.uf-fab`)** — one round `{glyph}` circle (mono, accent), `position:absolute` in `#unifile-app`, z-index 70, phone-only via CSS. **It is CONTEXTUAL to the pane showing** (`listBubbleActions(ctx, view)`, re-rendered by a MutationObserver on `data-mobile-pane`): **editor** = play · one measure per line · piano roll (ABC) + indent · outdent (`Editor.indent/outdent` = CM's `indentMore/indentLess` on the selected lines — a soft keyboard has no Tab) + undo · redo; **render** = play/pause (ABC) or zoom to fit · zoom in · zoom out (Mermaid — `mermaid-zoom.js zoomAll()` dispatches a `uf-mmd-zoom` document CustomEvent every mounted stage obeys; tap = fit by default); with no actions the bubble HIDES, e.g. Markdown render; **history** = the branch list (● current; tap = switch), New branch…, Commit… (`composeCommit` → scrolls the log to the pending node and focuses its message). File-level operations and settings are never on the bubble — they're the title dropdown.
-- **Tap = the PRIMARY action** (default: `play` for ABC, `fit` in the Mermaid render view, `indent` in the Mermaid editor (the diagram DSL is indentation-shaped), `undo` in the other editors, else the grid itself — `defaultPrimary(dsl, view)`; persisted per DSL+view in `localStorage.uf_fab_primary:<dsl>:<view>`; `'menu'` = tap opens the grid). The bubble shows the primary's glyph in braces (`{▶}`, `{↶}`), pulses a ring while playing. **In the history view it elongates into a pill `{⑂} main`** (`.uf-fab.wide`) and a tap opens the branch grid.
+- **Tap = the PRIMARY action** (default: `play` for ABC, `fit` in the Mermaid render view, `indent` in the Mermaid editor (the diagram DSL is indentation-shaped), `undo` in the other editors, `save` in the history view, `new` in the library view, else the grid itself — `defaultPrimary(dsl, view)`; persisted per DSL+view in `localStorage.uf_fab_primary:<dsl>:<view>`; `'menu'` = tap opens the grid). The bubble shows the primary's glyph in braces (`{▶}`, `{↶}`, `{◉}`), pulses a ring while playing.
 - **Long-press (480 ms, <8 px) = the grid** (`.uf-fab-grid` + `.uf-fab-scrim`, `#unifile-app[data-fab-open]`): the view's actions alphabetical (sorted by the stable `key`, so Play/Pause doesn't jump; branches sort first by name), 4 columns portrait / 6 landscape, the primary ringed; tile tap = run; the tile's ☆ = make it the primary (`star:false` rows — branches — have none). A hint row explains tap/hold/drag and holds a 2×2 corner picker.
 - **Drag = move**; on release it SNAPS to the nearest of the four corners (`data-corner` tl/tr/bl/br, persisted in `localStorage.uf_fab_corner`, default `br`). While dragging (`#unifile-app[data-fab-drag]`) four dashed ghost circles mark the corners and the nearest grows. Top corners sit under the top bar via `--uf-fab-top` (= `#uf-main.offsetTop`, re-measured on resize + a MutationObserver on `data-editing`, so it drops to 0 while typing). A one-time caption ("Hold for all actions · drag to a corner") shows until first use (`uf_fab_seen`).
 - **Focus is preserved:** `pointerdown`/`mousedown` are `preventDefault()`ed on the button AND the grid tiles, so Undo/Redo/Play never blur the editor or drop the keyboard. `setPointerCapture` is try/caught (stale/synthetic ids throw). The button hides in diff mode; the piano roll (z 120) covers it in landscape and has its own close.
@@ -682,7 +740,7 @@ Institutional knowledge — **do not silently "simplify" these; each fixed a rea
 - **Document must never scroll.** `App._lockWindowScroll()` snaps `window`/`scrollingElement` back to (0,0); `overscroll-behavior` contains inner scrollers. iOS otherwise scrolls the whole doc when the keyboard is up and shifts the bars.
 - **Bottom bar (`#uf-bottom`) is an in-flow flex child**, not `position:fixed` + JS pinning (that pushed it off-screen). It sits flush because the column is exactly the visible height.
 - **The phone top bar is the sole top chrome on mobile** (desktop top bar hidden). Its dropdown (`.ps-menu`) opens centred under the title; `#uf-pane-switch` needs `z-index` above `#uf-main` because it's DOM-first (paints under main otherwise). The **safe-area inset is on `#unifile-app` itself** (`padding-top: env(safe-area-inset-top)` + `background:var(--bg)` — the SAME colour as the blended bar and the page, and `theme-color` in pwa.html matches; `--bg-alt` there drew a darker band around the island — real bug; border-box keeps `--app-height`), so the bar sits below the notch. Bar is **56px portrait / 46px landscape** and hides while typing (`data-editing`). (Historical: a segmented three-tab slider with per-segment menus, and before it an auto-hiding title bar — superseded by the circles + title dropdown.)
-- **VCS UX (mobile), redesigned:** the old draft/commit/back-up **banners are gone** — replaced by passive markers. Uncommitted work → the dirty dot (on the branch circle) + a **pending node** at the top of the commit log (dashed hollow node with an inline, optional message + version + Commit, so a commit is composed where it lands). Durability → an **"exported" marker** on the commit matching `loadBackupMark(scope)` (the last state written out to a `.unifile.json`), so committed-but-in-sandbox is visibly distinct from durably-saved. **Commit messages are optional** (dialog + pending node). Branch switching/creation lives on the action bubble in the history view (`actions.js switchBranch/newBranch`); `commit-bar.js` is gone.
+- **Save UX (mobile):** no banners — passive markers. Unsaved work → the dirty dot (after the title) + a **pending node** at the top of the history list (dashed hollow node with an inline, optional message + version + Save, so a save is composed where it lands). Durability → the **"on device" marker** on the save the device file carries (`state.deviceFile.savedHead`), so saved-in-app is visibly distinct from saved-to-the-device. Saving lives on the action bubble in the history view (Save · Save with message… · Save to device); the library view's bubble is New · Open from device. `commit-bar.js`, the branch pill, the merge dialog and the New-document confirmation modal are gone.
 - **Document title is the single source of truth.** The centred top-bar title edits `data.title`; ABC derives its `T:` from it (a DOM heading in the live preview so char-positions still map 1:1; `_withDerivedTitle` string-injects for exports). An explicit `T:` in the source overrides. Preview re-renders on rename (`preview.js` tracks `_lastTitle`).
 - **No gutter at all (2026-10)** — no rail, no line numbers, no fold column, no active-line tint: the caret marks the line (iA Writer). Comments are highlights in the text (see Comments); the ABC M/S marks are `::before` pseudo-elements in the line's left margin. The side margin lives on `.cm-line` padding (not `.cm-content`) so selection/decoration backgrounds reach the edge.
 - **Zoom fix:** viewport `maximum-scale=1, user-scalable=no, viewport-fit=cover`; `.cm-content`/inputs forced to `font-size:16px` to stop Safari focus-zoom.

@@ -163,6 +163,42 @@ body {
 
 #wr-top-actions { flex: none; display: flex; }
 
+/* ‹ Documents — the library (upub/library.js); hidden in a quine. */
+#wr-back { margin-left: -8px; width: 38px; }
+#wr-back[hidden] { display: none; }
+
+/* The document library sheet */
+.wr-lib-head { display: flex; align-items: center; justify-content: space-between; }
+.wr-lib-new { padding: 6px 12px; font-size: 13px; }
+.wr-lib { padding: 0; }
+.wr-lib-item { position: relative; display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
+.wr-lib-item.current { background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.wr-lib-open {
+  flex: 1; min-width: 0; text-align: left; background: none; border: 0; color: inherit;
+  padding: 11px 6px 11px 16px; display: flex; flex-direction: column; gap: 3px; cursor: pointer;
+  font: inherit; -webkit-tap-highlight-color: transparent;
+}
+.wr-lib-open:active { background: var(--bg-alt); }
+.wr-lib-title { font-weight: 600; font-size: 15px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wr-lib-title .wr-menu-dot { vertical-align: middle; }
+.wr-lib-excerpt { font-size: 13px; color: var(--fg-mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono, ui-monospace, monospace); }
+.wr-lib-meta { font-size: 11px; color: var(--dim); }
+.wr-lib-dev.saved { color: var(--accent); }
+.wr-lib-dev.stale { color: var(--pending); }
+.wr-lib-more { flex: 0 0 44px; border: 0; background: none; color: var(--dim); font-size: 20px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.wr-lib-menu {
+  position: absolute; right: 10px; top: 44px; z-index: 3; display: flex; flex-direction: column; min-width: 160px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 4px 0;
+}
+.wr-lib-menu button { text-align: left; background: none; border: 0; color: var(--fg); font: inherit; font-size: 14px; padding: 9px 14px; cursor: pointer; }
+.wr-lib-menu button:active { background: var(--bg-alt); }
+.wr-lib-menu button.danger { color: var(--pending); }
+.wr-lib-foot { padding: 12px 16px 16px; }
+.wr-lib-foot p { margin: 8px 0 0; font-size: 12px; line-height: 1.45; color: var(--dim); }
+.wr-lib-foot code { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; }
+.wr-lib-link { background: none; border: 0; color: var(--accent); font: inherit; font-size: 14px; padding: 4px 0; cursor: pointer; }
+.wr-menu button[disabled] { opacity: .45; pointer-events: none; }
+
 .wr-icon-btn {
   appearance: none;
   border: 0;

@@ -2,7 +2,7 @@
  * The phone action button — one round `{glyph}` bubble that does three things:
  *
  *   • TAP        runs the PRIMARY action (play/pause for {compose}, undo elsewhere;
- *                in the history view it opens the branch picker);
+ *                Save in the history view, New document in the library);
  *   • LONG-PRESS opens a grid of the view's actions, alphabetical, with the
  *                primary ringed — each tile runs its action, its ☆ makes it
  *                the primary;
@@ -11,10 +11,9 @@
  *
  * The bubble is CONTEXTUAL to the pane that is showing (actions.js
  * listBubbleActions): editor = text/music verbs, render = play (ABC) or zoom
- * to fit / in / out (Mermaid) — otherwise the bubble hides, history = the
- * branches.  In the history view
- * the bubble elongates into a pill reading `{⑂} <branch>`.  File-level
- * operations and settings are NOT here — they're under the title dropdown.
+ * to fit / in / out (Mermaid) — otherwise the bubble hides, history = Save /
+ * Save to device, library = New / Open from device.  File-level operations and
+ * settings are NOT here — they're under the title dropdown.
  *
  * Corner + primary choice persist in localStorage (primary per DSL + view).
  * Phone only (CSS hides it on desktop, where the transport bar / top bar remain).
@@ -69,7 +68,7 @@ export class ActionFab {
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this._open) this.close(); });
 
     // Re-render on anything that changes the action list or the primary glyph.
-    for (const ev of ['change', 'abc-play-state', 'checkout', 'branch-switch', 'active-section-change', 'piano-roll-change']) {
+    for (const ev of ['change', 'abc-play-state', 'checkout', 'active-section-change', 'piano-roll-change']) {
       state.on(ev, () => this.render());
     }
     state.on('diff-change', () => this.close());
@@ -93,7 +92,7 @@ export class ActionFab {
   // Primary action
   // ---------------------------------------------------------------------------
 
-  /** The pane showing now: 'editor' | 'render' | 'commit'. */
+  /** The pane showing now: 'editor' | 'render' | 'history' | 'library'. */
   get view() { return this.root.getAttribute('data-mobile-pane') || 'editor'; }
 
   get primaryId() {
@@ -132,14 +131,7 @@ export class ActionFab {
     this.el.dataset.view = view;
     this.el.dataset.primary = primary?.id ?? 'menu';
     this.el.classList.toggle('playing', primary?.id === 'play' && !!state.abcPlaying);
-    this.el.classList.toggle('wide', view === 'commit');
-    if (view === 'commit') {
-      // The bubble names the branch here; a tap opens the branch picker.
-      const label = state.isDetached ? 'detached' : state.currentBranch;
-      this.el.innerHTML = `<span class="uf-fab-mark" aria-hidden="true">{⑂}</span><span class="uf-fab-text">${esc(label)}</span>`;
-      this.el.setAttribute('aria-label', `Branch ${label} — tap to switch branch, drag to move`);
-      this.el.title = 'Branches (drag to a corner)';
-    } else {
+    {
       const glyph = primary?.glyph ?? '⋯';
       this.el.innerHTML = `<span class="uf-fab-mark" aria-hidden="true">{${esc(glyph)}}</span>`;
       const what = primary?.label ?? 'Actions';
@@ -168,11 +160,9 @@ export class ActionFab {
         aria-label="Move the button to the ${CORNER_LABEL[c]}" title="${CORNER_LABEL[c]}"></button>`).join('');
 
     const view = this.view;
-    const tapLine = view === 'commit'
-      ? `<b>Tap</b> the bubble = this branch list. `
-      : primary ? `<b>Tap</b> the bubble = <b>${esc(primary.label)}</b> (★ picks another). `
-                : `<b>Tap</b> the bubble = this menu. `;
-    const heading = view === 'commit' ? '<div class="uf-fab-glabel">Branches</div>' : '';
+    const tapLine = primary ? `<b>Tap</b> the bubble = <b>${esc(primary.label)}</b> (★ picks another). `
+                            : `<b>Tap</b> the bubble = this menu. `;
+    const heading = '';
     this.grid.innerHTML = `
       ${heading}
       <div class="uf-fab-tiles">${tiles}</div>
