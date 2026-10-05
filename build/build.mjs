@@ -93,27 +93,6 @@ export const APP_CHANNEL = detectChannel();
 // ---------------------------------------------------------------------------
 
 /**
- * Stub out the ELK graph layout engine (elkjs) — a 1.4 MB dependency pulled in
- * by mermaid's flowchart-elk diagram type.  Diagrams that request `elk` layout
- * will get a clear runtime error; all other Mermaid diagram types are unaffected.
- */
-const elkjsStubPlugin = {
-  name: 'elkjs-stub',
-  setup(build) {
-    build.onResolve({ filter: /^elkjs\// }, () => ({
-      path: 'elkjs-stub', namespace: 'elkjs-stub',
-    }));
-    build.onLoad({ filter: /.*/, namespace: 'elkjs-stub' }, () => ({
-      contents: `export default class ELK {
-  layout() { return Promise.reject(new Error('ELK layout is not included in this build. Use dagre or other layouts.')); }
-  terminateWorker() {}
-}`,
-      loader: 'js',
-    }));
-  },
-};
-
-/**
  * Redirect abcjs's internal `require('./load-note')` to our offline note loader
  * (src/dsl/abcjs-piano-loader.js), which decodes the bundled FluidR3
  * acoustic_grand_piano soundfont on demand instead of fetching per-note mp3s.
@@ -262,7 +241,6 @@ function makeInitialData(defaultDslType = DEFAULT_DSL_TYPE) {
  */
 function buildOptions(entryPoint, unifileMode, plugins) {
   const esPlugins = [];
-  if (plugins.includes('mermaid')) esPlugins.push(elkjsStubPlugin);
   if (plugins.includes('abcjs'))   esPlugins.push(loadNoteOverridePlugin, abc2svgExportPlugin);
 
   return {

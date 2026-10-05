@@ -1,13 +1,20 @@
 /**
- * Mermaid DSL plugin
+ * Mermaid DSL plugin — the {diagram} app.
  *
  * Always bundled offline — no CDN fetches at runtime.
- * Rendering: mermaid (npm), bundled by esbuild; the live preview wraps the
- *            svg in a zoom/pan stage (mermaid-zoom.js).
+ * Rendering: mermaid 12 (npm), bundled whole by esbuild — every diagram type
+ *            it ships, the `@{ shape: … }` node syntax, `look: handDrawn`, and
+ *            BOTH layout engines (dagre + ELK; ELK is mermaid 12's default, so
+ *            it can no longer be stubbed out of the bundle).  The live preview
+ *            wraps the svg in a zoom/pan stage (mermaid-zoom.js).
+ * Front matter: mermaid's `config:` / `displayMode:` keys are read from the
+ *            DOCUMENT's front matter (core/mermaid-front-matter.js) — the
+ *            layout strips that block before the body reaches render().
  * Export:    SVG, PNG (via canvas)
  *
- * Supports flowcharts, sequence diagrams, class diagrams,
- * state diagrams, gantt charts, pie charts, and more.
+ * Icons (`@{ icon: … }`, architecture `(logos:…)`) need an iconify pack
+ * registered via mermaid.registerIconPacks — mermaid fetches none itself; no
+ * pack is bundled yet, so only mermaid's built-in architecture icons draw.
  */
 
 import mermaid from 'mermaid';
@@ -17,6 +24,8 @@ import { hoverTooltip } from '@codemirror/view';
 import { registerDSL } from './registry.js';
 import { getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint } from '../core/fm-schema.js';
+import { prepareMermaidSource } from '../core/mermaid-front-matter.js';
+import { state } from '../ui/state.js';
 import { mountZoomStage } from './mermaid-zoom.js';
 
 // ---------------------------------------------------------------------------
@@ -24,7 +33,11 @@ import { mountZoomStage } from './mermaid-zoom.js';
 // Provides keyword, operator, string, and comment highlighting.
 // ---------------------------------------------------------------------------
 
-const MERMAID_KEYWORDS = /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|gantt|pie|journey|gitGraph|mindmap|quadrantChart|erDiagram|requirementDiagram|C4Context|C4Container|block-beta)\b/;
+// Every diagram keyword mermaid 12 detects (the first meaningful line).
+const MERMAID_KEYWORDS = /^(graph|flowchart|flowchart-elk|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|gantt|pie|journey|gitGraph|mindmap|quadrantChart|erDiagram|requirementDiagram|requirement|timeline|kanban|packet-beta|packet|architecture-beta|xychart-beta|xychart|sankey-beta|sankey|radar-beta|treemap-beta|treemap|block-beta|block|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment|usecase-beta|venn-beta|wardley-beta|railroad-beta|ishikawa-beta|treeView-beta|swimlane-beta|cynefin-beta|zenuml)\b/;
+
+// Keys of the `@{ shape: …, label: …, icon: … }` node-metadata syntax (mermaid ≥ 11.3).
+const MERMAID_NODE_ATTRS = /^(shape|label|icon|form|pos|h|w|constraint|img|dir)(?=\s*:)/;
 
 const mermaidLanguage = StreamLanguage.define({
   name: 'mermaid',
@@ -35,6 +48,9 @@ const mermaidLanguage = StreamLanguage.define({
     if (stream.sol() && stream.match(MERMAID_KEYWORDS)) return 'keyword';
     // Subgraph / direction keywords
     if (stream.match(/\b(subgraph|end|direction|LR|RL|TD|TB|BT)\b/)) return 'keyword';
+    // `A@{ shape: docs, label: "…" }` — the @ and the attribute names
+    if (stream.match(/@(?=\{)/)) return 'punctuation';
+    if (stream.match(MERMAID_NODE_ATTRS)) return 'propertyName';
     // Edge labels and arrows
     if (stream.match(/-->|==>|-\.->|--[^>]*-->|===[^>]*==>/)) return 'operator';
     if (stream.match(/->|\|/)) return 'separator';
@@ -66,6 +82,25 @@ function _initTheme(theme) {
 }
 
 // ---------------------------------------------------------------------------
+// Document front matter → mermaid source
+// ---------------------------------------------------------------------------
+
+/** Inner YAML of the current document's leading `---` block (null if none). */
+function _docFrontMatterYaml() {
+  return getFrontMatterRange(state.currentContent ?? '')?.innerText ?? null;
+}
+
+/**
+ * What mermaid parses for `text` (a bare body from the layout, or a full
+ * document from an export): the document's `config:` / `displayMode:` front
+ * matter keys forwarded as a mermaid front matter block, then the body.
+ * `body` is the diagram text proper — its offsets are the editor's.
+ */
+function _prepare(text) {
+  return prepareMermaidSource(text, _docFrontMatterYaml());
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -89,9 +124,10 @@ async function render(content, el) {
   _initTheme(inPrintContext ? 'default' : _resolveTheme());
 
   const id = `mermaid-${++_renderCounter}`;
+  const { source, body } = _prepare(content);
 
   try {
-    const { svg } = await mermaid.render(id, content);
+    const { svg } = await mermaid.render(id, source);
     el.innerHTML = svg;
 
     const svgEl = el.querySelector('svg');
@@ -108,7 +144,8 @@ async function render(content, el) {
 
       // Annotate individual flowchart nodes with their source positions so
       // click-back lands on the specific node rather than the whole block.
-      _annotateFlowNodes(svgEl, content, el);
+      // (`body` = `content` minus a leading front matter block of its own.)
+      _annotateFlowNodes(svgEl, body, el, content.length - body.length);
 
       // Live preview: zoom & pan by default (diagrams outgrow a pane fast).
       // Print layouts keep the plain, page-sized svg.
@@ -116,7 +153,10 @@ async function render(content, el) {
     }
   } catch (e) {
     el.innerHTML = `<pre class="error">Mermaid error:\n${e.message}</pre>`;
+    // mermaid leaves its scratch container behind when the parse fails
+    // (`#d<id>` since mermaid 11; `#<id>` in 10).
     document.getElementById(id)?.remove();
+    document.getElementById(`d${id}`)?.remove();
   }
 }
 
@@ -128,28 +168,33 @@ async function render(content, el) {
  * different SVG structures. Falls back gracefully for unknown types.
  *
  * @param {SVGElement} svgEl   The rendered SVG element
- * @param {string}     content The mermaid source text passed to render()
+ * @param {string}     content The diagram body (offsets as in the editor)
  * @param {Element}    wrapEl  The wrapper element with data-doc-from (absolute offset)
+ * @param {number}     [skew]  Chars of `render()`'s input that precede `content`
+ *                             (a section-level front matter block), default 0
  */
-function _annotateFlowNodes(svgEl, content, wrapEl) {
-  const nodes = svgEl.querySelectorAll('g.node');
+function _annotateFlowNodes(svgEl, content, wrapEl, skew = 0) {
+  // `look: handDrawn` draws nodes as `g.rough-node` (roughjs) instead of `g.node`.
+  const nodes = svgEl.querySelectorAll('g.node, g.rough-node');
   if (!nodes.length) return;
 
   // Absolute document offset where this section's *content* starts (after shebang).
   // dslContentFrom is set by layout renderers; fall back to docFrom for the
   // standalone preview path where docFrom already points at content start.
-  const base = parseInt(wrapEl.dataset.dslContentFrom ?? wrapEl.dataset.docFrom ?? '0', 10);
+  const base = parseInt(wrapEl.dataset.dslContentFrom ?? wrapEl.dataset.docFrom ?? '0', 10) + skew;
 
   for (const node of nodes) {
-    // Mermaid node id format: "flowchart-NODEID-N" or "mermaid-abc-NODEID-N"
+    // Mermaid node id formats: mermaid 12 "mermaid-7-flowchart-NODEID-N" (svg id,
+    // then the diagram type), mermaid 10 "flowchart-NODEID-N" / "mermaid-abc-NODEID-N".
     const rawId = node.id ?? '';
-    const m = /^(?:flowchart-|mermaid-[^-]+-|mermaid-[a-z0-9]+-)?(.+?)-\d+$/.exec(rawId);
+    const m = /^(?:mermaid-[^-]+-)?(?:flowchart-)?(.+?)-\d+$/.exec(rawId);
     if (!m) continue;
     const nodeId = m[1];
     if (!nodeId) continue;
 
-    // Search source text for the node ID at a word boundary.
-    const re = new RegExp(`(?:^|\\s|[\\[\\](){}|>])${_escRegex(nodeId)}(?:$|[\\s\\[\\](){}|<>\\-=.])`, 'm');
+    // Search source text for the node ID at a word boundary (`@` = the
+    // `A@{ shape: … }` metadata syntax, `:` = `A:::class`).
+    const re = new RegExp(`(?:^|\\s|[\\[\\](){}|>&])${_escRegex(nodeId)}(?:$|[\\s\\[\\](){}|<>\\-=.@:&])`, 'm');
     const match = re.exec(content);
     if (!match) continue;
 
@@ -185,7 +230,7 @@ async function renderToString(content) {
   try {
     _initTheme(_resolveTheme());
     const id = `mermaid-noscript-${Date.now()}`;
-    const { svg } = await mermaid.render(id, content);
+    const { svg } = await mermaid.render(id, _prepare(content).source);
     return svg;
   } catch {
     return `<pre>${content}</pre>`;
@@ -201,7 +246,7 @@ async function exportSVG(content) {
   // previous render — possibly a print-layout page — happened to leave set).
   _initTheme(_resolveTheme());
   const id = `mermaid-export-${Date.now()}`;
-  const { svg } = await mermaid.render(id, content);
+  const { svg } = await mermaid.render(id, _prepare(content).source);
   return new Blob([svg], { type: 'image/svg+xml' });
 }
 
@@ -210,7 +255,7 @@ async function exportPNG(content) {
   // the light theme regardless of the app's colour scheme.
   _initTheme('default');
   const id = `mermaid-export-png-${Date.now()}`;
-  const { svg } = await mermaid.render(id, content);
+  const { svg } = await mermaid.render(id, _prepare(content).source);
 
   const blob = await new Promise(resolve => {
     const img = new Image();
@@ -241,6 +286,8 @@ async function exportPNG(content) {
  */
 const mermaidFrontMatterSchema = {
   title:  { type: 'string', doc: 'Document title — shown in the top bar and rendered by the layout.' },
+  config: { type: 'map', freeform: true, doc: 'Mermaid config, forwarded to every diagram: `look: handDrawn | classic | neo`, `layout: dagre | elk`, `theme: default | dark | forest | neutral | base`, per-diagram keys (`flowchart: { curve: basis }`), …' },
+  displayMode: { type: 'enum', values: ['compact'], doc: 'Gantt: `compact` packs tasks onto shared rows.' },
   model:  { type: 'enum', values: ['flow', 'grid', 'spatial', 'timeline', 'graph'],
             doc: 'Document model (how the layout arranges content). `flow` is the default.' },
   layout: { type: 'enum', values: ['webpage', 'document', 'slides'],
@@ -265,6 +312,62 @@ const MERMAID_DIAGRAM_TYPES = {
   requirementDiagram: 'Requirements diagram.',
   timeline: 'Timeline diagram.',
   'block-beta': 'Block diagram (beta).',
+  kanban: 'Kanban board — columns of cards.',
+  'architecture-beta': 'Cloud / system architecture: groups, services, edges (beta).',
+  'packet-beta': 'Network packet / bit-field layout (beta).',
+  'xychart-beta': 'XY chart — bar and line series on axes (beta).',
+  'sankey-beta': 'Sankey flow diagram from CSV-style rows (beta).',
+  'radar-beta': 'Radar / spider chart (beta).',
+  'treemap-beta': 'Treemap of nested values (beta).',
+  C4Context: 'C4 model: system context diagram.',
+  C4Container: 'C4 model: container diagram.',
+  C4Component: 'C4 model: component diagram.',
+  C4Dynamic: 'C4 model: dynamic diagram.',
+  C4Deployment: 'C4 model: deployment diagram.',
+  'usecase-beta': 'UML use-case diagram (beta).',
+  'venn-beta': 'Venn diagram (beta).',
+  'wardley-beta': 'Wardley map (beta).',
+  'railroad-beta': 'Railroad (grammar) diagram (beta).',
+  'ishikawa-beta': 'Ishikawa / fishbone diagram (beta).',
+  'treeView-beta': 'Tree view of nested items (beta).',
+  'swimlane-beta': 'Swimlane flowchart (beta).',
+};
+
+// `@{ shape: … }` — every shape name mermaid 12 registers (short names + aliases).
+const MERMAID_SHAPES = [
+  'rect', 'rounded', 'stadium', 'subroutine', 'cyl', 'circle', 'odd', 'diamond', 'hex',
+  'lean-r', 'lean-l', 'trap-b', 'trap-t', 'dbl-circ', 'text', 'notch-rect', 'lin-rect',
+  'sm-circ', 'fr-circ', 'fork', 'hourglass', 'brace', 'brace-r', 'braces', 'bolt', 'doc',
+  'delay', 'h-cyl', 'lin-cyl', 'curv-trap', 'div-rect', 'tri', 'win-pane', 'f-circ',
+  'lin-doc', 'notch-pent', 'flip-tri', 'sl-rect', 'docs', 'st-rect', 'bow-rect', 'cross-circ',
+  'tag-doc', 'tag-rect', 'paper-tape', 'flag', 'bang', 'cloud', 'browser', 'bucket',
+  'console', 'datastore', 'folder', 'person', 'rect',
+  // aliases (as in the docs' shape table)
+  'proc', 'process', 'rectangle', 'event', 'terminal', 'pill', 'subproc', 'framed-rectangle',
+  'db', 'database', 'cylinder', 'data-store', 'directory', 'circ', 'decision', 'question',
+  'hexagon', 'prepare', 'lean-right', 'in-out', 'lean-left', 'out-in', 'priority',
+  'trapezoid-bottom', 'trapezoid', 'manual', 'trapezoid-top', 'inv-trapezoid',
+  'double-circle', 'card', 'notched-rectangle', 'lined-rectangle', 'lined-process',
+  'lin-proc', 'shaded-process', 'start', 'small-circle', 'stop', 'framed-circle', 'join',
+  'collate', 'comment', 'brace-l', 'com-link', 'lightning-bolt', 'document',
+  'half-rounded-rectangle', 'das', 'horizontal-cylinder', 'disk', 'lined-cylinder',
+  'curved-trapezoid', 'display', 'div-proc', 'divided-rectangle', 'divided-process',
+  'extract', 'triangle', 'internal-storage', 'window-pane', 'junction', 'filled-circle',
+  'loop-limit', 'notched-pentagon', 'manual-file', 'flipped-triangle', 'manual-input',
+  'sloped-rectangle', 'documents', 'st-doc', 'stacked-document', 'procs', 'processes',
+  'stacked-rectangle', 'stored-data', 'bow-tie-rectangle', 'summary', 'crossed-circle',
+  'tagged-document', 'tagged-rectangle', 'tag-proc', 'tagged-process', 'lined-document',
+];
+const MERMAID_NODE_ATTR_DOCS = {
+  shape: 'Node shape, e.g. `shape: docs` — see the Node shapes help.',
+  label: 'Node text (quote it: `label: "Multiple Documents"`).',
+  icon: 'Iconify icon name (`icon: "fa:user"`) — needs a registered icon pack.',
+  form: 'Icon / image node form: `square`, `circle` or `rounded`.',
+  pos: 'Label position for icon / image nodes: `t` (top) or `b` (bottom).',
+  h: 'Height for icon / image nodes.',
+  w: 'Width for icon / image nodes.',
+  constraint: 'Image node: `on` keeps the aspect ratio, `off` stretches.',
+  img: 'Image URL / data URI for an image node.',
 };
 
 // In-diagram keywords → short docs (completion + hover).
@@ -325,6 +428,27 @@ function mermaidBodyComplete(context, bodyFrom) {
   const word = before.match(MERMAID_WORD_RE);
   const from = word ? context.pos - word[0].length : context.pos;
 
+  // Inside `A@{ … }`: after `shape:` → the shape names; otherwise the attribute keys.
+  const meta = /@\{[^}]*$/.exec(before);
+  if (meta) {
+    const shapeVal = /\bshape\s*:\s*([\w-]*)$/.exec(before);
+    if (shapeVal) {
+      return {
+        from: context.pos - shapeVal[1].length,
+        options: MERMAID_SHAPES.map(label => ({ label, type: 'constant', detail: 'shape' })),
+        validFor: /^[\w-]*$/,
+      };
+    }
+    if (context.explicit || (word && /[{,]\s*[\w-]*$/.test(before))) {
+      return {
+        from,
+        options: Object.entries(MERMAID_NODE_ATTR_DOCS).map(([label, info]) => ({ label, type: 'property', info, apply: `${label}: ` })),
+        validFor: /^[\w-]*$/,
+      };
+    }
+    return null;
+  }
+
   // First meaningful body line → diagram type.
   if (line.from === _firstBodyLineFrom(cmDoc, bodyFrom) && (context.explicit || word)) {
     return {
@@ -357,7 +481,8 @@ const mermaidHover = hoverTooltip((view, pos) => {
   for (const m of line.text.matchAll(/[A-Za-z][\w-]*/g)) {
     const s = m.index, e = s + m[0].length;
     if (col < s || col > e) continue;
-    const info = MERMAID_DIAGRAM_TYPES[m[0]] || MERMAID_KEYWORD_DOCS[m[0]];
+    const info = MERMAID_DIAGRAM_TYPES[m[0]] || MERMAID_KEYWORD_DOCS[m[0]]
+      || (/@\{[^}]*$/.test(line.text.slice(0, s)) ? MERMAID_NODE_ATTR_DOCS[m[0]] : null);
     if (info) return { pos: line.from + s, end: line.from + e, above: true,
                        create: () => ({ dom: _hoverDom(m[0], info) }) };
   }
@@ -385,13 +510,29 @@ async function mermaidLintSource(view) {
   const bodyFrom = region ? region.bodyFrom : 0;
   const body = doc.slice(bodyFrom);
   if (body.trim()) {
+    // Parse exactly what render() parses: the forwarded `config:` block + body.
+    const { source, prefixLines } = prepareMermaidSource(body, region?.innerText ?? null);
     try {
-      await mermaid.parse(body);   // resolves when the diagram is valid
+      await mermaid.parse(source);   // resolves when the diagram is valid
     } catch (err) {
       // Prefer a structured line (jison hash is 0-based); else scrape the message.
       let lineNo = (err && err.hash && typeof err.hash.line === 'number') ? err.hash.line + 1 : null;
       const msg = (err && (err.str || err.message)) || String(err);
       if (lineNo == null) { const m = /line\s*(\d+)/i.exec(msg); if (m) lineNo = parseInt(m[1], 10); }
+      // A bad forwarded `config:` fails in mermaid's YAML parser, whose message
+      // ends its first line with `(line:col)` relative to the front matter.
+      if (lineNo == null && prefixLines) { const m = /^[^\n]*\((\d+):\d+\)\s*$/m.exec(msg); if (m) lineNo = parseInt(m[1], 10) + 1; }
+
+      // A line inside the forwarded block = the document's own `config:` is bad.
+      if (lineNo != null && prefixLines && lineNo <= prefixLines && region) {
+        const cfg = region.innerText.search(/^(config|displayMode)\s*:/m);
+        const at = region.innerFrom + Math.max(cfg, 0);
+        const line = view.state.doc.lineAt(Math.min(at, docLen));
+        diags.push({ from: line.from, to: line.to, severity: 'error',
+                     message: `Mermaid config: ${_mermaidReason(msg)}` });
+        return diags;
+      }
+      if (lineNo != null && prefixLines) lineNo -= prefixLines;
 
       // Map the body-relative line to an absolute document line.
       const bodyLines = body.split('\n');
@@ -447,7 +588,7 @@ const mermaidDSL = {
   },
 
   detect(content) {
-    return /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|gantt|pie|journey|gitGraph)/m
+    return /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|gitGraph|mindmap|timeline|kanban|quadrantChart|requirementDiagram|xychart|sankey|packet|architecture|block|radar|treemap|C4)/m
       .test(content.trim());
   }
 };

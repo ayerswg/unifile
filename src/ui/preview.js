@@ -341,10 +341,7 @@ export class Preview {
       this._lastModel    = model;
       this._lastRenderer = `dsl:${wholeDsl.id}`;
 
-      const spinnerTimer = setTimeout(() => {
-        if (this._lastContent === content)
-          this.content.innerHTML = '<div class="preview-spinner"></div>';
-      }, 300);
+      const spinnerTimer = this._armSpinner(content, 300);
 
       const savedScrollTop = this.pane.scrollTop;
       try {
@@ -385,10 +382,7 @@ export class Preview {
           return;
         }
 
-        const spinnerTimer = setTimeout(() => {
-          if (this._lastContent === content)
-            this.content.innerHTML = '<div class="preview-spinner"></div>';
-        }, 300);
+        const spinnerTimer = this._armSpinner(content, 300);
 
         try {
           await renderer.render(content, this.content, { signal: ac.signal });
@@ -419,12 +413,9 @@ export class Preview {
           return;
         }
 
-        const spinnerTimer = setTimeout(() => {
-          if (this._lastContent === content) {
-            this.content.innerHTML = '<div class="preview-spinner"></div>';
-            if (layout === 'slides') this.content.classList.add('slides-mode');
-          }
-        }, 300);
+        const spinnerTimer = this._armSpinner(content, 300, () => {
+          if (layout === 'slides') this.content.classList.add('slides-mode');
+        });
 
         // Snapshot scroll position so a full render that resets it can be undone.
         const savedScrollTop = this.pane.scrollTop;
@@ -492,10 +483,7 @@ export class Preview {
       ? `<div class="preview-version-warn">⚠ Document uses ${_esc(dslId)}@${_esc(declaredVer)}, plugin is ${_esc(pluginVer)} — rendering with available version</div>`
       : '';
 
-    const spinnerTimer = setTimeout(() => {
-      if (this._lastContent === content)
-        this.content.innerHTML = '<div class="preview-spinner"></div>';
-    }, 200);
+    const spinnerTimer = this._armSpinner(content, 200);
 
     try {
       await dsl.render(renderContent, this.content, { signal: ac.signal });
@@ -507,6 +495,28 @@ export class Preview {
     } finally {
       clearTimeout(spinnerTimer);
     }
+  }
+
+  /**
+   * Arm the "still rendering" spinner: after `delay` ms the pane shows a spinner
+   * instead of the stale previous render — but ONLY if the renderer has not yet
+   * started writing into the pane.  Layout renderers (webpage / document) clear
+   * the container synchronously and then append parts progressively, awaiting
+   * each DSL's render IN PLACE; a timer that blindly replaced innerHTML detached
+   * the part a slow render was still drawing into, so the diagram landed in a
+   * disconnected element and the pane kept the spinner forever (real bug: the
+   * first mermaid 12 render — ELK's warm-up — takes >300 ms).  The snapshot is
+   * the pane's first child before the render starts; a renderer that has begun
+   * has replaced it.  `onFire` runs with the spinner (e.g. the slides-mode class).
+   */
+  _armSpinner(content, delay, onFire) {
+    const snapshot = this.content.firstElementChild;
+    return setTimeout(() => {
+      if (this._lastContent !== content) return;
+      if (this.content.firstElementChild !== snapshot) return;   // renderer is already drawing
+      this.content.innerHTML = '<div class="preview-spinner"></div>';
+      onFire?.();
+    }, delay);
   }
 
   /** Teardown whatever renderer is currently active. */
