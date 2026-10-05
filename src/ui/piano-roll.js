@@ -404,14 +404,14 @@ export class PianoRoll {
     const cs = getComputedStyle(this.el);
     const get = (v, fb) => (cs.getPropertyValue(v) || '').trim() || fb;
     return {
-      bg:      get('--bg', '#1e1e2e'),
-      bgAlt:   get('--bg-alt', '#181825'),
-      surface: get('--bg-surface', '#313244'),
-      border:  get('--border', '#313244'),
-      text:    get('--text', '#cdd6f4'),
-      sub:     get('--text-sub', '#a6adc8'),
-      muted:   get('--text-muted', '#6c7086'),
-      accent:  get('--accent', '#89b4fa'),
+      bg:      get('--bg', '#181818'),
+      bgAlt:   get('--bg-alt', '#1f1f1f'),
+      surface: get('--bg-surface', '#272727'),
+      border:  get('--border', '#2c2c2c'),
+      text:    get('--text', '#dedede'),
+      sub:     get('--text-sub', '#a8a8a8'),
+      muted:   get('--text-muted', '#707070'),
+      accent:  get('--accent', '#3d9bff'),
     };
   }
 

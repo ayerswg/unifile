@@ -25,6 +25,7 @@ import { VCS } from '../core/vcs.js';
 import { shortHash } from '../core/hash.js';
 import { UPubEditor } from './editor.js';
 import { SlashMenu } from './slash-menu.js';
+import { UPubComments } from './comments.js';
 import { renderDocument, renderMarkdown } from './preview.js';
 import { buildEpub, slugify } from './epub.js';
 import { GUIDE_MD } from './guide-content.js';
@@ -102,9 +103,23 @@ export class UPubApp {
 
     this.editor = new UPubEditor(document.getElementById('wr-sheet'), {
       onChange: () => this._onEdit(),
+      onEdit: (change) => this.comments?.mapEdit(change),
       onSlash: (ctx) => this._onSlashCtx(ctx),
     });
     this.editor.setValue(this.content);
+    // Inline comments — highlights in the text, a card on the selection
+    // (see upub/comments.js); the threads live on this.data.commentThreads.
+    this.comments = new UPubComments({
+      editor: this.editor,
+      sheet: document.getElementById('wr-sheet'),
+      scroller: document.getElementById('wr-scroll'),
+      getData: () => this.data,
+      author: () => (this.prefs.name || '').trim() || 'Anonymous',
+      headHash: () => this.vcs.headHash,
+      onChange: () => { this._persistSoon(); this.comments.refresh(); },
+      openSheet: (html, cls) => this._openSheet(html, cls),
+      closeSheet: () => this._closeSheet(),
+    });
     this._refreshDirty();
     this._refreshCount();
     this._bindSlashMenu();
@@ -370,6 +385,7 @@ export class UPubApp {
 
   _onEdit() {
     this.content = this.editor.getValue();
+    this.comments?.refresh();
     this._refreshDirty();
     this._refreshCount();
     this._persistSoon();
@@ -432,6 +448,7 @@ export class UPubApp {
   setContent(text) {
     this.content = text;
     this.editor.setValue(text);
+    this.comments?.clamp();
     this._refreshDirty();
     this._refreshCount();
     this._persistSoon();
@@ -502,6 +519,7 @@ export class UPubApp {
         <button data-act="preview">Preview</button>
         <button data-act="focus">${focusOn ? '✓ ' : ''}Focus mode</button>
         <button data-act="history">History${this.isDirty ? ' <span class="wr-menu-dot"></span>' : ''}</button>
+        <button data-act="comments">Comments…</button>
         <button data-act="export">Export…</button>
         <button data-act="import">Import data file…</button>
         <button data-act="new">New document</button>
@@ -518,6 +536,7 @@ export class UPubApp {
         preview: () => this.togglePreview(true),
         focus: () => this.editor.setFocusMode(!focusOn),
         history: () => this._openHistory(),
+        comments: () => this.comments.showSheet(),
         export: () => this._openExport(),
         import: () => this._importData(),
         new: () => this._newDocument(),
@@ -679,7 +698,7 @@ export class UPubApp {
     this.data = {
       version: VERSION, title: 'Untitled', dslType: 'upub',
       currentBranch: 'main', branches: { main: { name: 'main', head: null } },
-      commits: {}, comments: {}, password: null,
+      commits: {}, comments: {}, commentThreads: {}, password: null,
     };
     this.vcs = new VCS(this.data);
     this.title = 'Untitled';

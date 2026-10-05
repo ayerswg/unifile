@@ -2,31 +2,29 @@
  * Editor component — powered by CodeMirror 6
  *
  * Features:
- *   - Catppuccin Mocha theme (dark) / Latte (light)
- *   - DSL-aware syntax highlighting
- *   - Line numbers with comment-thread highlighting:
- *       · Lines with active comment threads get an amber background on the
- *         line number.  Click any line number to open the inline accordion.
- *       · Range-anchored selections are highlighted while the accordion is open.
- *       · Right-click on selected text → "Add comment" context menu.
- *       · Clicking a cm-comment-range re-opens the accordion for that thread.
- *   - Active-line highlight, bracket matching
- *   - Autocomplete, selection highlighting
+ *   - The iA Writer surface: one monospaced size, tall accent caret, NO gutter
+ *     (theme tokens in app.css + editor-theme.js)
+ *   - DSL-aware per-section syntax highlighting
+ *   - Inline comments (comments.js): commented text carries a persistent
+ *     highlight; select text → right-click / long-press (or Mod-Alt-M, or the
+ *     phone bubble's Comment) → a card attached to the selection; click a
+ *     highlight to open its thread.  The same context menu carries Copy / Cut /
+ *     Paste and, on an ABC voice line, Mute / Solo for that voice.
+ *   - Bracket matching, autocomplete, column selection (Alt+drag)
  *   - Tab / Shift+Tab indent · Ctrl+S → commit · Alt+1/2/3 → view modes
  */
 
-import { EditorView, keymap, Decoration,
-         highlightActiveLineGutter, drawSelection,
+import { EditorView, keymap, Decoration, drawSelection,
          rectangularSelection, crosshairCursor,
-         highlightSpecialChars, gutter, GutterMarker } from '@codemirror/view';
-import { EditorState, Compartment, StateField, StateEffect, Transaction, RangeSetBuilder, Text } from '@codemirror/state';
+         highlightSpecialChars } from '@codemirror/view';
+import { EditorState, Compartment, StateField, StateEffect, Transaction, Annotation, RangeSetBuilder, Text } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab, undo, redo, indentMore, indentLess } from '@codemirror/commands';
 import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
 import { autocompletion, completionKeymap, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap } from '@codemirror/search';
 
-import { catppuccinTheme, catppuccinHighlight } from './editor-theme.js';
+import { editorTheme, editorHighlight } from './editor-theme.js';
 import { highlightTree } from '@lezer/highlight';
 import { state, VIEW_MODES, PANELS } from './state.js';
 import { getDSL } from '../dsl/registry.js';
@@ -34,12 +32,16 @@ import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
 import {
-  accordionField,
-  openAccordionEffect,
-  closeAccordionEffect,
-  getThreadsForLine,
+  commentsExtension,
+  commentCardField,
+  openCommentEffect,
+  closeCommentEffect,
+  refreshCommentsEffect,
   getThreadsForPos,
-  bumpThreadVersion
+  getThreadsInRange,
+  listOpenThreads,
+  mapThreadPositions,
+  clampThreadPositions
 } from './comments.js';
 import { sectionCollapseExtension, resetCollapseEffect,
          refreshSectionsEffect, landscapePhoneMql } from './editor-sections.js';
@@ -57,6 +59,10 @@ import { sectionCollapseExtension, resetCollapseEffect,
 // ---------------------------------------------------------------------------
 
 const DSL_SELECT_EVENT = 'dsl.select';
+
+// Marks a whole-document swap (checkout / branch switch / open) — comment
+// threads are clamped, not mapped, through it (see comments.js).
+const docReplaceAnnotation = Annotation.define();
 
 const setDslHighlight = StateEffect.define();
 
@@ -160,66 +166,11 @@ const shebangDecoField = StateField.define({
 });
 
 // ---------------------------------------------------------------------------
-// Custom line-number gutter with comment-thread highlighting
-//
-// Replaces the standard lineNumbers() extension so we can:
-//   • Show the line number (same look as default, but narrower)
-//   • Add `.cm-has-comments` class to lines with active threads → amber bg
-//   • Handle clicks to open the inline accordion for that line
+// ABC voice lookup (for the muted-voice fade + the Mute / Solo menu items)
 // ---------------------------------------------------------------------------
 
-class LineNumMarker extends GutterMarker {
-  constructor(lineNum, hasThread, isActive, voiceMark) {
-    super();
-    this.lineNum        = lineNum;
-    this.hasThread      = hasThread;
-    this.isActive       = isActive;
-    // voiceMark: 'M' (muted) / 'S' (soloed) shown in the rail for voice lines, else ''.
-    this.voiceMark      = voiceMark || '';
-    // elementClass is applied to the wrapper gutter cell element by CM6.
-    // The active-line + comment classes take visual priority.
-    this.elementClass = isActive
-      ? 'cm-has-comments cm-accordion-active'
-      : (hasThread ? 'cm-has-comments' : '');
-  }
-
-  toDOM() {
-    const el = document.createElement('div');
-    if (this.voiceMark) {
-      el.className = 'cm-ln-mark mark-' + this.voiceMark;
-      el.textContent = this.voiceMark;
-      el.title = this.voiceMark === 'S' ? 'Soloed voice — right-click to change'
-                                        : 'Muted voice — right-click to change';
-      return el;
-    }
-    el.className = 'cm-ln-text';
-    el.textContent = String(this.lineNum);
-    el.title = this.hasThread ? 'Comment — click to view' : 'Click to comment';
-    return el;
-  }
-
-  eq(other) {
-    return (
-      this.lineNum   === other.lineNum   &&
-      this.hasThread === other.hasThread &&
-      this.isActive  === other.isActive  &&
-      this.voiceMark === other.voiceMark
-    );
-  }
-}
-
-// Spacer determines initial gutter width
-class LineNumSpacer extends GutterMarker {
-  toDOM() {
-    const el = document.createElement('div');
-    el.className = 'cm-ln-text';
-    el.textContent = '0000'; // 4 digits — wide enough for most docs
-    return el;
-  }
-}
-
 // Voice map over the whole editor doc, cached per (immutable) doc instance —
-// the gutter asks per visible line, so don't rebuild the map for each one.
+// the fade asks per line, so don't rebuild the map for each one.
 let _docVmapCache = { doc: null, vmap: null };
 function _docVoiceMap(doc) {
   if (_docVmapCache.doc !== doc) {
@@ -237,127 +188,14 @@ function _voiceIdAtLine(doc, line) {
   return _docVoiceMap(doc).at(line.from);
 }
 
-/** The M/S voice mark for a line, or '' — shown on EVERY line of the voice. */
-function _voiceMarkForLine(doc, line) {
-  if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return '';
-  const id = _voiceIdAtLine(doc, line);
-  if (id == null) return '';
-  if (state.abcSoloVoices.has(id)) return 'S';
-  if (state.abcMutedVoices.has(id)) return 'M';
-  return '';
-}
-
-const commentLineNumbersExt = gutter({
-  class: 'cm-lineNumbers cm-comment-ln',
-
-  lineMarker(view, line) {
-    const lineInfo   = view.state.doc.lineAt(line.from);
-    const threads    = getThreadsForLine(line.from, view.state.doc);
-    // Check whether the accordion is currently anchored to this line
-    const acc        = view.state.field(accordionField);
-    const isActive   = acc.anchorPos !== null &&
-      view.state.doc.lineAt(acc.anchorPos).from === lineInfo.from;
-    const voiceMark  = _voiceMarkForLine(view.state.doc, lineInfo);
-    return new LineNumMarker(lineInfo.number, threads.length > 0, isActive, voiceMark);
-  },
-
-  lineMarkerChange: () => true,
-  initialSpacer: () => new LineNumSpacer(),
-
-  domEventHandlers: {
-    // Click the rail → the line's comment, directly (open the existing thread
-    // or a new-comment form). No menu: the rail is a streamlined comment rail.
-    click(view, line, event) {
-      const lineDoc = view.state.doc.lineAt(line.from);
-      _openLineComment(view, lineDoc);
-      return true;
-    },
-    // Right-click (long-press on Android) an ABC voice line → Mute / Solo.
-    contextmenu(view, line, event) {
-      const lineDoc = view.state.doc.lineAt(line.from);
-      if (!_showVoiceMenu(view, event.clientX, event.clientY, lineDoc)) return false;
-      event.preventDefault();
-      return true;
-    }
-  }
-});
-
-/** Open the line's comment thread, or a new-comment form anchored at the line. */
-function _openLineComment(view, lineDoc) {
-  const threads = getThreadsForLine(lineDoc.from, view.state.doc);
-  view.dispatch({
-    effects: openAccordionEffect.of({
-      anchorPos: lineDoc.to,
-      threadId:  threads[0]?.id ?? null,
-      newRange:  threads.length ? null : { from: lineDoc.from, to: lineDoc.from },
-    })
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Voice menu (floating popup on gutter RIGHT-click, ABC only)
-//
-// A line belonging to an ABC voice (declared by a `V:` line or an inline
-// `[V:id]` prefix) offers Mute / Solo, which silence / isolate that voice for
-// the whole song (see state + abcjs.js). Plain click is the comment (above).
-// ---------------------------------------------------------------------------
-
-let _gutterMenuEl = null;
-
-function _hideGutterMenu() {
-  _gutterMenuEl?.remove();
-  _gutterMenuEl = null;
-}
-
-/** @returns {boolean} true when the line has a voice and the menu opened */
-function _showVoiceMenu(view, x, y, lineDoc) {
-  _hideGutterMenu();
-
-  const voiceId = _voiceIdAtLine(view.state.doc, lineDoc);
-  if (voiceId == null) return false;
-
-  const menu = document.createElement('div');
-  menu.className = 'cm-comment-context-menu cm-gutter-menu';
-  menu.style.left = x + 'px';
-  menu.style.top  = y + 'px';
-
-  const addItem = (label, onClick) => {
-    const btn = document.createElement('button');
-    btn.className = 'cm-ccm-add';
-    btn.textContent = label;
-    btn.addEventListener('click', () => { _hideGutterMenu(); onClick(); });
-    menu.appendChild(btn);
-  };
-
-  addItem((state.abcMutedVoices.has(voiceId) ? 'Unmute voice ' : 'Mute voice ') + voiceId,
-    () => state.toggleVoiceMute(voiceId));
-  addItem((state.abcSoloVoices.has(voiceId) ? 'Unsolo voice ' : 'Solo voice ') + voiceId,
-    () => state.toggleVoiceSolo(voiceId));
-
-  document.body.appendChild(menu);
-  _gutterMenuEl = menu;
-
-  // Keep the menu on-screen (it's positioned from the click point).
-  const r = menu.getBoundingClientRect();
-  if (r.right > window.innerWidth)  menu.style.left = Math.max(4, window.innerWidth  - r.width  - 4) + 'px';
-  if (r.bottom > window.innerHeight) menu.style.top  = Math.max(4, window.innerHeight - r.height - 4) + 'px';
-
-  const dismiss = (e) => {
-    if (!menu.contains(e.target)) {
-      _hideGutterMenu();
-      document.removeEventListener('mousedown', dismiss, true);
-    }
-  };
-  document.addEventListener('mousedown', dismiss, true);
-  return true;
-}
-
 // ---------------------------------------------------------------------------
 // Muted-voice fade (editor)
 //
 // Lines belonging to a muted/non-soloed ABC voice are dimmed so it's clear
-// they won't sound or highlight during playback. Rebuilt on doc change and
-// whenever the mute/solo selection changes (refreshVoiceFadeEffect).
+// they won't sound or highlight during playback, and every line of a muted
+// (M) / soloed (S) voice carries a mark in its left margin (CSS ::before on
+// the line class — no gutter). Rebuilt on doc change and whenever the
+// mute/solo selection changes (refreshVoiceFadeEffect).
 // ---------------------------------------------------------------------------
 
 const refreshVoiceFadeEffect = StateEffect.define();
@@ -370,9 +208,12 @@ function _buildVoiceFade(editorState) {
   for (let n = 1; n <= doc.lines; n++) {
     const line = doc.line(n);
     const id = _voiceIdAtLine(doc, line);
-    if (id != null && state.isVoiceMuted(id)) {
-      builder.add(line.from, line.from, Decoration.line({ class: 'cm-voice-muted' }));
-    }
+    if (id == null) continue;
+    const cls = [];
+    if (state.abcSoloVoices.has(id)) cls.push('cm-voice-S');
+    else if (state.abcMutedVoices.has(id)) cls.push('cm-voice-M');
+    if (state.isVoiceMuted(id)) cls.push('cm-voice-muted');
+    if (cls.length) builder.add(line.from, line.from, Decoration.line({ class: cls.join(' ') }));
   }
   return builder.finish();
 }
@@ -432,7 +273,7 @@ function _buildSectionHighlights(editorState) {
       const lang = _extractLanguage(exts);
       if (!lang) return;
       const tree = lang.parser.parse(rangeText);
-      highlightTree(tree, catppuccinHighlight, (tFrom, tTo, classes) => {
+      highlightTree(tree, editorHighlight, (tFrom, tTo, classes) => {
         if (tFrom >= tTo) return;
         builder.add(from + tFrom, from + tTo, Decoration.mark({ class: classes }));
       });
@@ -508,13 +349,9 @@ const sectionSyntaxField = StateField.define({
 // ---------------------------------------------------------------------------
 
 const baseExtensions = [
-  commentLineNumbersExt,        // replaces lineNumbers(); comment + voice-mark gutter
-  accordionField,               // inline accordion widget + range marks
-  // Gutter line-number cell for the active line gets an accent highlight (the
-  // left rail on mobile). We intentionally do NOT highlightActiveLine() the
-  // content background — a full-width line tint fights with the text-selection
-  // highlight and makes the actively selected text hard to see (see app.css).
-  highlightActiveLineGutter(),
+  // No gutter and no active-line tint (iA Writer has neither): the caret marks
+  // the line. Comments live in the text as highlights + an anchored card.
+  commentsExtension,
   highlightSpecialChars(),
   drawSelection(),
   // Vertical (column) selection, following the common IDE convention:
@@ -553,17 +390,17 @@ const baseExtensions = [
   // what you see first).
   sectionCollapseExtension,
 
-  // Inject the catppuccin highlight CSS rules so sectionSyntaxField's
+  // Inject the highlight CSS rules so sectionSyntaxField's
   // Decoration.mark({ class }) spans get styled. Using the StyleModule directly
-  // (instead of syntaxHighlighting(catppuccinHighlight)) injects the CSS without
+  // (instead of syntaxHighlighting(editorHighlight)) injects the CSS without
   // triggering automatic whole-doc tree scanning.
-  EditorView.styleModule.of(catppuccinHighlight.module),
+  EditorView.styleModule.of(editorHighlight.module),
 
   // Per-section syntax highlighting
   sectionSyntaxField,
 
   // Theme
-  catppuccinTheme,
+  editorTheme,
 ];
 
 // ---------------------------------------------------------------------------
@@ -582,6 +419,8 @@ function makeUnifileKeymap() {
     },
     // Format the source when the active DSL provides a formatter (ABC: one measure per line).
     { key: 'Alt-Shift-f', preventDefault: true, run: (view) => alignActiveDsl(view) },
+    // Comment on the selection (the Google Docs chord).
+    { key: 'Mod-Alt-m', preventDefault: true, run: (view) => { commentOnSelection(view); return true; } },
     { key: 'Alt-1', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.EDITOR);  return true; } },
     { key: 'Alt-2', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.SPLIT);   return true; } },
     { key: 'Alt-3', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.PREVIEW); return true; } }
@@ -623,89 +462,156 @@ function alignActiveDsl(view) {
 }
 
 // ---------------------------------------------------------------------------
-// Context-menu state (floating "Add comment" popup on right-click + selection)
+// Comment helpers
 // ---------------------------------------------------------------------------
-
-let _ctxMenuEl = null;
 
 /**
- * Show the "Add comment" floating context menu.
- * @param {EditorView} view
- * @param {number} x  clientX from the contextmenu event
- * @param {number} y  clientY
- * @param {number} anchorPos  line.to where the block widget will be placed
- * @param {number|null} selFrom  selection start (null for whole-line comments)
- * @param {number|null} selTo   selection end   (null for whole-line comments)
+ * The range a "Comment" acts on: the selection when there is one, else the
+ * word under the caret, else the caret's line (trimmed).
  */
-function _showContextMenu(view, x, y, anchorPos, selFrom, selTo) {
-  _hideContextMenu();
+function _commentTarget(view, pos = null) {
+  const sel = view.state.selection.main;
+  if (sel.from < sel.to) return { from: sel.from, to: sel.to };
+  const at = pos ?? sel.head;
+  const word = view.state.wordAt(at);
+  if (word && word.from < word.to) return { from: word.from, to: word.to };
+  const line = view.state.doc.lineAt(at);
+  const text = line.text;
+  const lead = text.length - text.trimStart().length;
+  const trail = text.length - text.trimEnd().length;
+  if (text.trim()) return { from: line.from + lead, to: line.to - trail };
+  return { from: line.from, to: line.from };
+}
 
-  const menu = document.createElement('div');
-  menu.className = 'cm-comment-context-menu';
-  menu.style.left = x + 'px';
-  menu.style.top  = y + 'px';
-  menu.innerHTML  = `<button class="cm-ccm-add">Add comment</button>`;
+/**
+ * Open the card for the selection: an existing thread under it, else the
+ * composer for a new one.  Used by the context menu, Mod-Alt-M and the phone
+ * bubble's Comment action.
+ */
+export function commentOnSelection(view, pos = null) {
+  if (!view) return false;
+  const range = _commentTarget(view, pos);
+  const existing = getThreadsInRange(range.from, Math.max(range.to, range.from + 1));
+  if (existing.length && view.state.selection.main.empty) {
+    view.dispatch({ effects: openCommentEffect.of({ threadId: existing[0].id }) });
+    return true;
+  }
+  view.dispatch({
+    selection: { anchor: range.from, head: range.to },
+    effects: openCommentEffect.of({ range })
+  });
+  return true;
+}
 
-  menu.querySelector('.cm-ccm-add').addEventListener('click', () => {
-    _hideContextMenu();
-    view.dispatch({
-      effects: openAccordionEffect.of({
-        anchorPos,
-        threadId: null,
-        newRange: (selFrom !== null && selTo !== null) ? { from: selFrom, to: selTo } : null
-      })
-    });
+// ---------------------------------------------------------------------------
+// Context menu — right-click / long-press on the text
+//
+//   Comment            on the selection (or the word / line under the pointer)
+//   Copy · Cut · Paste the usual clipboard verbs (Paste only where the browser
+//                      lets a page read the clipboard)
+//   Mute / Solo voice  on an ABC voice line (a `V:` line, an inline `[V:id]`
+//                      line, or a music / lyrics line under a `V:` line)
+// ---------------------------------------------------------------------------
+
+let _menuEl = null;
+
+function _hideMenu() {
+  _menuEl?.remove();
+  _menuEl = null;
+}
+
+/**
+ * @param {EditorView} view
+ * @param {number} x  clientX
+ * @param {number} y  clientY
+ * @param {number|null} pos  document position under the pointer
+ */
+function _showEditorMenu(view, x, y, pos) {
+  _hideMenu();
+  const sel = view.state.selection.main;
+  const hasSel = sel.from < sel.to;
+  const items = [];
+
+  const target = _commentTarget(view, pos);
+  const under = getThreadsInRange(target.from, Math.max(target.to, target.from + 1));
+  items.push({
+    label: under.length && !hasSel ? 'Open comment' : 'Comment',
+    glyph: '❝',
+    run: () => commentOnSelection(view, pos)
   });
 
+  if (hasSel) {
+    const text = view.state.sliceDoc(sel.from, sel.to);
+    items.push({ label: 'Copy', run: () => navigator.clipboard?.writeText(text).catch(() => {}) });
+    items.push({ label: 'Cut', run: () => {
+      navigator.clipboard?.writeText(text).catch(() => {});
+      view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '' }, selection: { anchor: sel.from },
+                      annotations: Transaction.userEvent.of('delete.cut') });
+      view.focus();
+    } });
+  }
+  if (navigator.clipboard?.readText) {
+    items.push({ label: 'Paste', run: async () => {
+      let text = '';
+      try { text = await navigator.clipboard.readText(); } catch { return; }
+      if (!text) return;
+      const s = view.state.selection.main;
+      view.dispatch({ changes: { from: s.from, to: s.to, insert: text }, selection: { anchor: s.from + text.length },
+                      annotations: Transaction.userEvent.of('input.paste') });
+      view.focus();
+    } });
+  }
+
+  if (pos !== null) {
+    const line = view.state.doc.lineAt(pos);
+    const voiceId = _voiceIdAtLine(view.state.doc, line);
+    if (voiceId != null) {
+      items.push({ sep: true });
+      items.push({ label: (state.abcMutedVoices.has(voiceId) ? 'Unmute voice ' : 'Mute voice ') + voiceId,
+                   glyph: 'M', run: () => state.toggleVoiceMute(voiceId) });
+      items.push({ label: (state.abcSoloVoices.has(voiceId) ? 'Unsolo voice ' : 'Solo voice ') + voiceId,
+                   glyph: 'S', run: () => state.toggleVoiceSolo(voiceId) });
+    }
+  }
+
+  const menu = document.createElement('div');
+  menu.className = 'uf-ctx-menu';
+  menu.setAttribute('role', 'menu');
+  for (const it of items) {
+    if (it.sep) { const hr = document.createElement('div'); hr.className = 'uf-ctx-sep'; menu.appendChild(hr); continue; }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'uf-ctx-item';
+    btn.setAttribute('role', 'menuitem');
+    btn.innerHTML = `<span class="uf-ctx-glyph">${it.glyph ?? ''}</span><span class="uf-ctx-label"></span>`;
+    btn.querySelector('.uf-ctx-label').textContent = it.label;
+    // Keep the editor's selection: a mousedown on the menu must not move the caret.
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => { _hideMenu(); it.run(); });
+    menu.appendChild(btn);
+  }
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
   document.body.appendChild(menu);
-  _ctxMenuEl = menu;
+  _menuEl = menu;
+
+  // Keep the menu on-screen (it's positioned from the pointer).
+  const r = menu.getBoundingClientRect();
+  if (r.right > window.innerWidth)   menu.style.left = Math.max(4, window.innerWidth  - r.width  - 4) + 'px';
+  if (r.bottom > window.innerHeight) menu.style.top  = Math.max(4, window.innerHeight - r.height - 4) + 'px';
 
   const dismiss = (e) => {
-    if (!menu.contains(e.target)) {
-      _hideContextMenu();
-      document.removeEventListener('mousedown', dismiss, true);
-    }
+    if (menu.contains(e.target)) return;
+    _hideMenu();
+    document.removeEventListener('pointerdown', dismiss, true);
+    document.removeEventListener('keydown', onKey, true);
   };
-  document.addEventListener('mousedown', dismiss, true);
-}
-
-function _hideContextMenu() {
-  _ctxMenuEl?.remove();
-  _ctxMenuEl = null;
-}
-
-// ---------------------------------------------------------------------------
-// Thread position mapping (called from updateListener on docChanged)
-// ---------------------------------------------------------------------------
-
-export function mapThreadPositions(changes) {
-  const threads = state.data?.commentThreads;
-  if (!threads) return;
-
-  let bumped = false;
-  for (const t of Object.values(threads)) {
-    if (t.from === undefined || t.archived) continue;
-    const newFrom = changes.mapPos(t.from, 1);
-    const newTo   = Math.max(newFrom, changes.mapPos(t.to, -1));
-
-    if (t.from < t.to && newFrom >= newTo) {
-      // The range was meaningful but the text was completely deleted.
-      // Auto-archive so the dead thread doesn't linger on the gutter.
-      t.archived = true;
-      t.from = newFrom;
-      t.to   = newFrom;
-      bumped = true;
-    } else if (newFrom !== t.from || newTo !== t.to) {
-      t.from = newFrom;
-      t.to   = newTo;
-    }
-  }
-  if (bumped) {
-    bumpThreadVersion();
-    // Mark document dirty so the auto-archive is persisted on next commit
-    state.update({ data: state.data, isDirty: true });
-  }
-  // Gutter redraws automatically (lineMarkerChange: () => true)
+  const onKey = (e) => { if (e.key === 'Escape') dismiss(e); };
+  // Deferred: the pointerdown / contextmenu that opened the menu is still bubbling.
+  setTimeout(() => {
+    document.addEventListener('pointerdown', dismiss, true);
+    document.addEventListener('keydown', onKey, true);
+  }, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -733,17 +639,19 @@ export class Editor {
     });
     this._unsub.push(state.on('view-mode-change', () => this._updateVisibility()));
 
-    // Panel changes → update visibility only (accordion is now in CM6 state)
     this._unsub.push(state.on('panel-change', () => {
       this._updateVisibility();
     }));
 
-    // Thread data mutations (archive/restore) → force gutter re-render
+    // "Comment on selection" from the ⋯ menu / the phone bubble.
+    this._unsub.push(state.on('comment-selection', () => this.commentSelection()));
+
+    // Thread data mutations (new / reply / resolve) → rebuild the highlights + card.
     this._unsub.push(state.on('comments-change', () => {
-      if (this._view) this._view.dispatch({});
+      if (this._view) this._view.dispatch({ effects: refreshCommentsEffect.of(null) });
     }));
 
-    // Voice mute/solo change → refresh the gutter M/S marks + the muted-voice fade.
+    // Voice mute/solo change → refresh the M/S line marks + the muted-voice fade.
     this._unsub.push(state.on('abc-voices-change', () => {
       if (this._view) this._view.dispatch({ effects: refreshVoiceFadeEffect.of(null) });
     }));
@@ -870,13 +778,16 @@ export class Editor {
 
       // Map thread char-offset positions through any document change BEFORE
       // broadcasting the new content so subscribers see fresh positions.
-      if (update.docChanged) {
-        mapThreadPositions(update.changes);
-        // The gutter reads thread positions from state.data (mutated above),
-        // but it already rendered once against the new doc during this same
-        // transaction.  Queue a micro-task dispatch so the gutter re-evaluates
-        // with the corrected positions before the browser paints.
-        Promise.resolve().then(() => { if (this._view) this._view.dispatch({}); });
+      const docReplaced = update.docChanged && update.transactions.some(tr => tr.annotation(docReplaceAnnotation));
+      if (docReplaced) clampThreadPositions(update.state.doc.length);
+      if (update.docChanged && (docReplaced || mapThreadPositions(update.changes))) {
+        // The highlight field mapped its own decorations during this
+        // transaction; rebuild from the mapped thread offsets before paint so
+        // the two can never drift (and a thread whose text was deleted drops
+        // its highlight).
+        Promise.resolve().then(() => {
+          if (this._view) this._view.dispatch({ effects: refreshCommentsEffect.of(null) });
+        });
       }
 
       if (update.docChanged) {
@@ -981,45 +892,88 @@ export class Editor {
     this._view = new EditorView({ state: editorState, parent: this.el });
     this._updateVisibility();
 
-    // ── mousedown: close accordion when clicking editor content (not on an
-    //   accordion widget, not on a cm-comment-range, not on the gutter).
-    //   Also handle clicks on comment ranges to re-open the accordion.
+    this._bindCommentGestures();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Comment gestures: click a highlight → its card; right-click / long-press →
+  // the context menu; a click elsewhere in the text closes the card.
+  // ---------------------------------------------------------------------------
+
+  _bindCommentGestures() {
+    const content = this._view.contentDOM;
+
+    // Click in the text (not inside the card — it stops propagation) closes
+    // the card; a click on a comment highlight opens that thread instead.
     this.el.addEventListener('mousedown', (e) => {
       const view = this._view;
+      if (!view || e.button !== 0) return;
+      _hideMenu();
+      if (e.target.closest('.uf-comment-card, .cm-tooltip')) return;
+      if (e.target.closest('.cm-comment-range, .cm-comment-point')) return;   // handled on click
+      if (view.state.field(commentCardField).range) view.dispatch({ effects: closeCommentEffect.of(null) });
+    });
+    this.el.addEventListener('click', (e) => {
+      const view = this._view;
       if (!view) return;
-
-      // Always hide the floating context menu on any mousedown in the editor
-      _hideContextMenu();
-
-      // Never close when clicking inside the accordion itself
-      // (its children call e.stopPropagation())
-
-      // Gutter clicks are handled by the gutter extension — ignore here
-      if (e.target.closest('.cm-gutters')) return;
-
-      // If click is on a comment-range highlight, open/switch to that thread
-      if (e.target.closest('.cm-comment-range')) {
-        const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
-        if (pos !== null) {
-          const threads = getThreadsForPos(pos);
-          if (threads.length > 0) {
-            const t       = threads[0];
-            const lineEnd = view.state.doc.lineAt(t.from).to;
-            e.preventDefault(); // prevent text-selection change
-            view.dispatch({
-              effects: openAccordionEffect.of({ anchorPos: lineEnd, threadId: t.id })
-            });
-            return;
-          }
-        }
-      }
-
-      // Clicking anywhere else in the editor content → close the accordion
-      view.dispatch({ effects: closeAccordionEffect.of(null) });
+      const hit = e.target.closest('.cm-comment-range, .cm-comment-point');
+      if (!hit) return;
+      // A drag that ended here is a selection, not a tap on the comment.
+      if (!view.state.selection.main.empty) return;
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      const threads = hit.dataset.thread && state.data?.commentThreads?.[hit.dataset.thread]
+        ? [state.data.commentThreads[hit.dataset.thread]]
+        : (pos !== null ? getThreadsForPos(pos) : []);
+      if (threads.length) view.dispatch({ effects: openCommentEffect.of({ threadId: threads[0].id }) });
     });
 
-    // Comments are line-level: click the gutter to create/view one (see the
-    // commentLineNumbersExt click handler). No selection/range comment menu.
+    // Right-click (and Android long-press, which fires contextmenu).
+    content.addEventListener('contextmenu', (e) => {
+      const view = this._view;
+      if (!view) return;
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos === null) return;
+      e.preventDefault();
+      const sel = view.state.selection.main;
+      // Outside the selection the caret moves there first (native behaviour) so
+      // "Comment" targets the word under the pointer.
+      if (sel.empty || pos < sel.from || pos > sel.to) {
+        view.dispatch({ selection: { anchor: pos } });
+      }
+      _showEditorMenu(view, e.clientX, e.clientY, pos);
+    });
+
+    // Long-press on SELECTED text (iOS fires no contextmenu). Only inside an
+    // existing selection: elsewhere the long-press is the OS's own
+    // select-text gesture and must not be touched.
+    let press = null;
+    const cancel = () => { if (press) { clearTimeout(press.timer); press = null; } };
+    content.addEventListener('pointerdown', (e) => {
+      cancel();
+      if (e.pointerType === 'mouse') return;
+      const view = this._view;
+      if (!view) return;
+      const sel = view.state.selection.main;
+      if (sel.empty) return;
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos === null || pos < sel.from || pos > sel.to) return;
+      const x = e.clientX, y = e.clientY;
+      press = { x, y, timer: setTimeout(() => {
+        press = null;
+        _showEditorMenu(view, x, y, pos);
+        // iOS would start dragging the selection once the finger moves; our
+        // menu is up, so swallow the drag for a moment.
+        const stop = (ev) => ev.preventDefault();
+        content.addEventListener('dragstart', stop, { once: true });
+        setTimeout(() => content.removeEventListener('dragstart', stop), 1200);
+      }, 480) };
+    });
+    content.addEventListener('pointermove', (e) => {
+      if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 8) cancel();
+    });
+    content.addEventListener('pointerup', cancel);
+    content.addEventListener('pointercancel', cancel);
+    document.addEventListener('selectionchange', () => { if (press) cancel(); });
   }
 
   // ---------------------------------------------------------------------------
@@ -1054,7 +1008,8 @@ export class Editor {
     // the load-time section collapse defaults.
     this._view.dispatch({
       changes: { from: 0, to: current.length, insert: text ?? '' },
-      effects: resetCollapseEffect.of(null),
+      effects: [resetCollapseEffect.of(null), closeCommentEffect.of(null)],
+      annotations: docReplaceAnnotation.of(true),
     });
   }
 
@@ -1079,6 +1034,16 @@ export class Editor {
    * the Alt-Shift-F keybinding calls the same logic.
    */
   alignActiveDsl() { return alignActiveDsl(this._view); }
+
+  /**
+   * Comment on the selection (or the word / line at the caret): opens the
+   * composer card, or the existing thread under the caret.  The phone bubble's
+   * Comment action and the ⋯ menu call this.
+   */
+  commentSelection() { return commentOnSelection(this._view); }
+
+  /** True when the document has an open (unresolved) comment thread. */
+  hasComments() { return listOpenThreads().length > 0; }
 
   /**
    * Ask CodeMirror to re-measure its layout.  Needed after the editor pane is

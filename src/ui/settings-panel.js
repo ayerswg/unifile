@@ -96,7 +96,7 @@ export class SettingsPanel {
               <label class="form-label">Colour theme</label>
               <div class="theme-toggle-group" role="group" aria-label="Colour theme">
                 <button class="theme-toggle-btn${theme === 'dark'  ? ' active' : ''}"
-                  data-theme-pref="dark"  title="Always dark (Catppuccin Mocha)">
+                  data-theme-pref="dark"  title="Always dark">
                   🌙 Dark
                 </button>
                 <button class="theme-toggle-btn${theme === 'auto'  ? ' active' : ''}"
@@ -104,7 +104,7 @@ export class SettingsPanel {
                   🖥 Auto
                 </button>
                 <button class="theme-toggle-btn${theme === 'light' ? ' active' : ''}"
-                  data-theme-pref="light" title="Always light (Catppuccin Latte)">
+                  data-theme-pref="light" title="Always light">
                   ☀️ Light
                 </button>
               </div>

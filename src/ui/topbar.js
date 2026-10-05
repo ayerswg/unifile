@@ -279,8 +279,12 @@ export class TopBar {
           ${iconPlugin()} Extensions…
         </li>` : ''}
         <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-archived-comments" title="Browse archived comment threads">
-          ${iconComment()} Archived comments…
+        <li class="tools-menu-item" id="tb-comment" title="Comment on the selected text (Ctrl+Alt+M) — or right-click the text">
+          ${iconComment()} Comment on selection
+          <kbd>⌃⌥M</kbd>
+        </li>
+        <li class="tools-menu-item" id="tb-archived-comments" title="Browse resolved comment threads">
+          ${iconComment()} Resolved comments…
         </li>
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-settings-item" title="Settings (Ctrl+Shift+,)">
@@ -519,6 +523,12 @@ export class TopBar {
       this._dslMenuOpen = false;
       this._syncDropdowns();
       showExtensionsModal();
+    });
+
+    this.el.querySelector('#tb-comment')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      state.emit('comment-selection');
     });
 
     this.el.querySelector('#tb-archived-comments')?.addEventListener('click', () => {
@@ -1338,7 +1348,7 @@ clef=none          % no clef / percussion</code></pre>`
       {
         group: 'Playback (unifile)',
         title: 'Mute / Solo Voices',
-        content: `<p class="help-note"><strong>Right-click the gutter rail</strong> next to any <code>V:</code> line (or any line of that voice) and choose <strong>Mute</strong> or <strong>Solo</strong>; the piano roll's voice chips have M / S buttons too. A plain click on the rail is a comment. Muted voices don't sound or highlight and are dimmed in the editor and score (marked <code>M</code>); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
+        content: `<p class="help-note"><strong>Right-click</strong> (long-press on Android) any <code>V:</code> line, or any line of that voice, and choose <strong>Mute voice</strong> or <strong>Solo voice</strong>; the piano roll's voice chips have M / S buttons too. Muted voices don't sound or highlight and are dimmed in the editor and score (an <code>M</code> sits in the margin of every line of the voice); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
       },
       {
         group: 'Playback (unifile)',

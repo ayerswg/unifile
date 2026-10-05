@@ -2,14 +2,14 @@
  * Application colour-theme management.
  *
  * Supported preferences: 'dark' | 'light' | 'auto'
- *   dark  — always Catppuccin Mocha regardless of OS setting
- *   light — always Catppuccin Latte regardless of OS setting
+ *   dark  — always the neutral near-black theme regardless of OS setting
+ *   light — always the white theme regardless of OS setting
  *   auto  — follows prefers-color-scheme (the default)
  *
  * Implementation: sets data-theme="dark" or data-theme="light" on <html>.
  * CSS variables in app.css react to the attribute.
  * When no attribute is present, the @media (prefers-color-scheme: light) rule
- * handles auto-switching between Mocha and Latte.
+ * handles auto-switching between dark and light.
  */
 
 import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';

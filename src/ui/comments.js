@@ -1,30 +1,43 @@
 /**
- * Range-anchored comments system
+ * Inline comments — range-anchored, the way a word processor does them.
  *
  * Data model:  data.commentThreads = { [threadId]: Thread }
  *
  * Thread = {
  *   id: string,
  *   from: number,          // char offset, inclusive
- *   to: number,            // char offset, exclusive
+ *   to: number,            // char offset, exclusive (from === to: a point — the
+ *                          //   pre-v0.5 line comments; shown as a small marker)
  *   createdAtHash: string,
- *   archived: boolean,
- *   orphaned: boolean,     // range collapsed to a point after position mapping
+ *   archived: boolean,     // "resolved" in the UI
+ *   orphaned: boolean,
  *   messages: Message[]
  * }
  *
  * Message = { id, author, text, timestamp }
  *
- * The accordion widget is a CM6 block decoration rendered below the anchor
- * line.  Thread char-offset positions are mapped through document changes
- * inside editor.js's updateListener (see mapThreadPositions).
+ * How it looks and works (editor.js wires the gestures):
+ *   • Every open thread's text carries a persistent soft highlight
+ *     (`.cm-comment-range`, `commentHighlightField`) — comments are visible in
+ *     the text itself, there is no gutter and no line-level anchor.
+ *   • Select text → right-click / long-press (or the phone bubble's Comment,
+ *     or Mod-Alt-M) → "Comment" → a CARD opens attached to the selection
+ *     (`commentCardField`, a CodeMirror tooltip below the range, flipping above
+ *     when there is no room; it rides along with the text while scrolling).
+ *     The card holds the composer; once posted it shows the thread with a
+ *     reply box and Resolve.
+ *   • Click / tap a highlight → its card.  Esc, clicking elsewhere in the
+ *     text, or editing the document closes the card.
+ *   • Thread offsets are mapped through every document change
+ *     (`mapThreadPositions`, called from editor.js's updateListener); a thread
+ *     whose text is deleted entirely is resolved automatically.
  */
 
-import { StateField, StateEffect, RangeSetBuilder } from '@codemirror/state';
-import { EditorView, Decoration, WidgetType } from '@codemirror/view';
+import { StateField, StateEffect } from '@codemirror/state';
+import { EditorView, Decoration, WidgetType, showTooltip } from '@codemirror/view';
 
 import { state } from './state.js';
-import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
+import { loadUserPrefs } from '../core/storage.js';
 import { shortHash } from '../core/hash.js';
 
 // ---------------------------------------------------------------------------
@@ -32,25 +45,19 @@ import { shortHash } from '../core/hash.js';
 // ---------------------------------------------------------------------------
 
 /**
- * openAccordionEffect.of({ anchorPos, threadId, newRange })
- *   anchorPos : line.to position where the widget will be placed
- *   threadId  : existing thread to activate, or null → show new-thread form
- *   newRange  : { from, to } | null — proposed char range for the new thread
+ * openCommentEffect.of({ threadId }) — open an existing thread's card, or
+ * openCommentEffect.of({ range: { from, to } }) — open the composer for a new
+ * thread on that range.
  */
-export const openAccordionEffect   = StateEffect.define();
+export const openCommentEffect = StateEffect.define();
 
-/** Close the accordion unconditionally. */
-export const closeAccordionEffect  = StateEffect.define();
+/** Close the card unconditionally. */
+export const closeCommentEffect = StateEffect.define();
 
-/** Switch to a different thread without closing. Value: threadId string. */
-export const setActiveThreadEffect = StateEffect.define();
+/** Thread data changed (new / reply / resolve / positions mapped) — rebuild. */
+export const refreshCommentsEffect = StateEffect.define();
 
-// ---------------------------------------------------------------------------
-// Version counter
-// Bumped on every thread mutation so the gutter re-renders and the accordion
-// widget rebuilds.
-// ---------------------------------------------------------------------------
-
+// Bumped on every thread mutation so the card and highlights rebuild.
 let _threadDataVersion = 0;
 export function bumpThreadVersion() { _threadDataVersion++; }
 
@@ -58,42 +65,42 @@ export function bumpThreadVersion() { _threadDataVersion++; }
 // Public data helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Returns all active (non-archived) threads whose `from` offset falls on
- * the same line as `pos` in the given CM6 document.
- */
-export function getThreadsForLine(pos, doc) {
-  const threads = state.data?.commentThreads ?? {};
-  const line = doc.lineAt(pos);
-  return Object.values(threads).filter(t =>
-    !t.archived &&
-    t.from !== undefined &&
-    t.from >= line.from &&
-    t.from <= line.to
+function _threads() { return state.data?.commentThreads ?? {}; }
+
+/** All open (non-resolved) threads, in document order. */
+export function listOpenThreads() {
+  return Object.values(_threads())
+    .filter(t => !t.archived && t.from !== undefined)
+    .sort((a, b) => a.from - b.from || a.to - b.to);
+}
+
+/** Open threads whose range contains `pos` (a point thread matches its own offset). */
+export function getThreadsForPos(pos) {
+  return listOpenThreads().filter(t =>
+    t.from === t.to ? t.from === pos : (t.from <= pos && t.to > pos)
   );
 }
 
-/**
- * Returns all active threads whose range strictly contains `pos`.
- */
-export function getThreadsForPos(pos) {
-  const threads = state.data?.commentThreads ?? {};
-  return Object.values(threads).filter(t =>
-    !t.archived &&
-    t.from !== undefined &&
-    t.from <= pos && t.to > pos
-  );
+/** Open threads overlapping [from, to) — used to find a thread under a selection. */
+export function getThreadsInRange(from, to) {
+  return listOpenThreads().filter(t => t.from < to && t.to > from || (t.from === t.to && t.from >= from && t.from <= to));
 }
 
 // ---------------------------------------------------------------------------
 // Thread mutations
 // ---------------------------------------------------------------------------
 
-export function startThread(from, to, text) {
-  const author   = loadUserPrefs().name || state.user?.name || 'Anonymous';
-  const threadId = `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const msgId    = `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function _author() { return loadUserPrefs().name || state.user?.name || 'Anonymous'; }
+function _id(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 
+function _commit() {
+  state.update({ data: state.data, isDirty: true });
+  bumpThreadVersion();
+  state.emit('comments-change');
+}
+
+export function startThread(from, to, text) {
+  const threadId = _id('t');
   const thread = {
     id: threadId,
     from,
@@ -101,43 +108,87 @@ export function startThread(from, to, text) {
     createdAtHash: state.headHash,
     archived: false,
     orphaned: false,
-    messages: [{ id: msgId, author, text, timestamp: Date.now() }]
+    messages: [{ id: _id('m'), author: _author(), text, timestamp: Date.now() }]
   };
-
   const data = state.data;
   data.commentThreads ??= {};
   data.commentThreads[threadId] = thread;
-  state.update({ data, isDirty: true });
-  bumpThreadVersion();
+  _commit();
   return threadId;
 }
 
 export function replyToThread(threadId, text) {
-  const author = loadUserPrefs().name || state.user?.name || 'Anonymous';
-  const msgId  = `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-  const data = state.data;
-  data.commentThreads ??= {};
-  if (data.commentThreads[threadId]) {
-    data.commentThreads[threadId].messages.push({
-      id: msgId, author, text, timestamp: Date.now()
-    });
-  }
-  state.update({ data, isDirty: true });
-  bumpThreadVersion();
+  const t = state.data?.commentThreads?.[threadId];
+  if (!t) return;
+  t.messages.push({ id: _id('m'), author: _author(), text, timestamp: Date.now() });
+  _commit();
 }
 
+/** Resolve (archive) a thread — it leaves the text and lands in Resolved comments. */
 export function archiveThread(threadId) {
-  const data = state.data;
-  if (data.commentThreads?.[threadId]) {
-    data.commentThreads[threadId].archived = true;
+  const t = state.data?.commentThreads?.[threadId];
+  if (!t) return;
+  t.archived = true;
+  _commit();
+}
+
+// ---------------------------------------------------------------------------
+// Position mapping (called from editor.js's updateListener on docChanged)
+// ---------------------------------------------------------------------------
+
+export function mapThreadPositions(changes) {
+  const threads = state.data?.commentThreads;
+  if (!threads) return false;
+
+  // A change that replaces EXACTLY a thread's text with new text (autocorrect,
+  // an accepted completion) re-anchors the thread onto the replacement instead
+  // of collapsing it — plain mapping would resolve it as "deleted".
+  const replaced = new Map();
+  changes.iterChanges((fromA, toA, fromB, toB) => { if (toA > fromA && toB > fromB) replaced.set(`${fromA}:${toA}`, { from: fromB, to: toB }); });
+
+  let resolved = false, moved = false;
+  for (const t of Object.values(threads)) {
+    if (t.from === undefined || t.archived) continue;
+    const whole = t.from < t.to ? replaced.get(`${t.from}:${t.to}`) : null;
+    const newFrom = whole ? whole.from : changes.mapPos(t.from, 1);
+    const newTo   = whole ? whole.to : Math.max(newFrom, changes.mapPos(t.to, -1));
+
+    if (t.from < t.to && newFrom >= newTo) {
+      // The commented text was deleted entirely — the thread resolves itself.
+      t.archived = true;
+      t.from = newFrom;
+      t.to   = newFrom;
+      resolved = true;
+    } else if (newFrom !== t.from || newTo !== t.to) {
+      t.from = newFrom;
+      t.to   = newTo;
+      moved = true;
+    }
   }
-  state.update({ data, isDirty: true });
+  if (resolved) {
+    bumpThreadVersion();
+    // Persist the auto-resolve with the next save / commit.
+    state.update({ data: state.data, isDirty: true });
+  }
+  return resolved || moved;
+}
+
+/**
+ * The whole document was swapped (checkout / branch switch / open): the
+ * threads keep their offsets (mapping a full replacement would resolve every
+ * one of them), clamped to the new length.
+ */
+export function clampThreadPositions(docLen) {
+  for (const t of Object.values(state.data?.commentThreads ?? {})) {
+    if (t.from === undefined) continue;
+    t.from = Math.min(t.from, docLen);
+    t.to   = Math.min(Math.max(t.to, t.from), docLen);
+  }
   bumpThreadVersion();
 }
 
 // ---------------------------------------------------------------------------
-// Migration: lineNum-based → {from, to} offsets
+// Migration: lineNum-based → {from, to} offsets (pre-v0.0.6 data)
 // ---------------------------------------------------------------------------
 
 export function migrateCommentThreads(doc) {
@@ -150,7 +201,7 @@ export function migrateCommentThreads(doc) {
       const lineNum = Math.max(1, Math.min(t.lineNum, doc.lines));
       const line    = doc.line(lineNum);
       t.from    = line.from;
-      t.to      = line.from; // point range
+      t.to      = line.from; // point
       t.orphaned = false;
       delete t.lineNum;
       changed = true;
@@ -160,24 +211,280 @@ export function migrateCommentThreads(doc) {
 }
 
 // ---------------------------------------------------------------------------
-// Archived comments modal
+// The card — a CodeMirror tooltip anchored to the thread's text
+// ---------------------------------------------------------------------------
+
+const _closedCard = () => ({ threadId: null, range: null, version: -1, tooltip: null });
+
+/**
+ * One stable `create` function: CodeMirror matches tooltips by it, so a new
+ * tooltip object (different thread, bumped version) REUSES the card's DOM and
+ * calls its `update()` instead of rebuilding — the composer keeps its focus
+ * while typing, and a reply re-renders in place.
+ */
+function _createCard(view) { return new CommentCard(view); }
+
+export const commentCardField = StateField.define({
+  create: _closedCard,
+
+  update(value, tr) {
+    let { threadId, range } = value;
+    let changed = false;
+
+    if (tr.docChanged) {
+      // Editing the text closes the card (its anchor may no longer mean the same thing).
+      if (threadId !== null || range) { threadId = null; range = null; changed = true; }
+    }
+    for (const e of tr.effects) {
+      if (e.is(openCommentEffect)) {
+        threadId = e.value.threadId ?? null;
+        range    = e.value.range ?? null;
+        changed = true;
+      } else if (e.is(closeCommentEffect)) {
+        if (threadId !== null || range) changed = true;
+        threadId = null; range = null;
+      } else if (e.is(refreshCommentsEffect)) {
+        changed = true;
+      }
+    }
+    if (!changed && value.version === _threadDataVersion) return value;
+
+    // Resolve the anchor: an existing thread's current range, or the pending one.
+    let anchor = range;
+    if (threadId !== null) {
+      const t = state.data?.commentThreads?.[threadId];
+      if (!t || t.archived) return _closedCard();
+      anchor = { from: t.from, to: t.to };
+    }
+    if (!anchor) return _closedCard();
+
+    const docLen = tr.state.doc.length;
+    const from = Math.min(anchor.from, docLen);
+    const to   = Math.min(Math.max(anchor.to, from), docLen);
+    return {
+      threadId, range: { from, to }, version: _threadDataVersion,
+      tooltip: { pos: from, end: to, above: false, strictSide: false, arrow: false, create: _createCard }
+    };
+  },
+
+  provide: f => showTooltip.from(f, v => v.tooltip)
+});
+
+class CommentCard {
+  constructor(view) {
+    this.view = view;
+    this.dom = document.createElement('div');
+    this.dom.className = 'uf-comment-card';
+    this.dom.setAttribute('role', 'dialog');
+    this.dom.setAttribute('aria-label', 'Comment');
+    // Clicks inside the card must not reach the editor's "click elsewhere
+    // closes the card" handler, nor move the caret.
+    for (const ev of ['mousedown', 'pointerdown', 'touchstart', 'click']) {
+      this.dom.addEventListener(ev, (e) => e.stopPropagation(), { passive: ev === 'touchstart' });
+    }
+    this.dom.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this._close(); }
+    });
+    this._key = null;
+    this._render();
+  }
+
+  // Only the composer takes focus by itself — opening an existing thread by
+  // tapping its highlight must not pop the phone keyboard.
+  mount() { if (this.view.state.field(commentCardField, false)?.threadId === null) this._focusInput(); }
+
+  update() {
+    const v = this.view.state.field(commentCardField, false);
+    if (!v) return;
+    const key = `${v.threadId}|${v.range?.from}|${v.range?.to}|${v.version}`;
+    if (key === this._key) return;
+    const wasThread = this._key?.split('|')[0];
+    this._render();
+    // Switched to the composer for a new range: focus it.
+    if (v.threadId === null && wasThread !== 'null') this._focusInput();
+  }
+
+  _close() {
+    this.view.dispatch({ effects: closeCommentEffect.of(null) });
+    this.view.focus();
+  }
+
+  _focusInput() {
+    requestAnimationFrame(() => this.dom.querySelector('textarea')?.focus());
+  }
+
+  _render() {
+    const v = this.view.state.field(commentCardField, false);
+    if (!v || !v.range) return;
+    this._key = `${v.threadId}|${v.range.from}|${v.range.to}|${v.version}`;
+    const thread = v.threadId !== null ? state.data?.commentThreads?.[v.threadId] : null;
+    const excerpt = _excerpt(this.view.state.doc, v.range);
+    this.dom.innerHTML = '';
+
+    const head = document.createElement('div');
+    head.className = 'ucc-head';
+    head.innerHTML = `
+      <span class="ucc-excerpt" title="The commented text">${excerpt ? `“${escHtml(excerpt)}”` : '<em>this line</em>'}</span>
+      <button class="ucc-close" type="button" aria-label="Close">×</button>`;
+    head.querySelector('.ucc-close').addEventListener('click', () => this._close());
+    this.dom.appendChild(head);
+
+    if (!thread) this._renderComposer(v.range);
+    else this._renderThread(thread);
+  }
+
+  _renderComposer(range) {
+    const body = document.createElement('div');
+    body.className = 'ucc-body';
+    body.innerHTML = `
+      <textarea class="ucc-input" rows="2" placeholder="Comment…" aria-label="Comment"></textarea>
+      <div class="ucc-actions">
+        <span class="ucc-hint">⌘↩ to post</span>
+        <button class="ucc-btn ucc-cancel" type="button">Cancel</button>
+        <button class="ucc-btn ucc-primary ucc-post" type="button">Comment</button>
+      </div>`;
+    const ta = body.querySelector('.ucc-input');
+    _autoGrow(ta);
+    const post = () => {
+      const text = ta.value.trim();
+      if (!text) { ta.focus(); return; }
+      const id = startThread(range.from, range.to, text);
+      this.view.dispatch({ effects: openCommentEffect.of({ threadId: id }) });
+    };
+    body.querySelector('.ucc-post').addEventListener('click', post);
+    body.querySelector('.ucc-cancel').addEventListener('click', () => this._close());
+    ta.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); post(); }
+    });
+    this.dom.appendChild(body);
+  }
+
+  _renderThread(thread) {
+    const body = document.createElement('div');
+    body.className = 'ucc-body';
+
+    const list = document.createElement('div');
+    list.className = 'ucc-messages';
+    for (const m of thread.messages) {
+      const row = document.createElement('div');
+      row.className = 'ucc-msg';
+      row.innerHTML = `
+        <div class="ucc-msg-meta"><span class="ucc-author">${escHtml(m.author)}</span><span class="ucc-when">${formatRelative(m.timestamp)}</span></div>
+        <div class="ucc-text">${escHtml(m.text)}</div>`;
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+
+    const reply = document.createElement('div');
+    reply.className = 'ucc-reply';
+    reply.innerHTML = `
+      <textarea class="ucc-input" rows="1" placeholder="Reply…" aria-label="Reply"></textarea>
+      <div class="ucc-actions">
+        <button class="ucc-btn ucc-resolve" type="button" title="Resolve — hides the highlight; the thread stays under Resolved comments">Resolve</button>
+        <button class="ucc-btn ucc-primary ucc-send" type="button">Reply</button>
+      </div>`;
+    const ta = reply.querySelector('.ucc-input');
+    _autoGrow(ta);
+    const send = () => {
+      const text = ta.value.trim();
+      if (!text) { ta.focus(); return; }
+      replyToThread(thread.id, text);
+      this.view.dispatch({ effects: refreshCommentsEffect.of(null) });
+    };
+    reply.querySelector('.ucc-send').addEventListener('click', send);
+    ta.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); send(); }
+    });
+    reply.querySelector('.ucc-resolve').addEventListener('click', () => {
+      archiveThread(thread.id);
+      this._close();
+    });
+    body.appendChild(reply);
+    this.dom.appendChild(body);
+  }
+}
+
+/** A one-line excerpt of the commented text (first 60 chars of its first line). */
+function _excerpt(doc, range) {
+  if (range.from >= range.to) return '';
+  const text = doc.sliceString(range.from, Math.min(range.to, range.from + 200)).split('\n')[0].trim();
+  if (!text) return '';
+  const more = range.to - range.from > text.length || text.length > 60;
+  return text.slice(0, 60) + (more ? '…' : '');
+}
+
+// ---------------------------------------------------------------------------
+// Persistent highlights — every open thread's text
+// ---------------------------------------------------------------------------
+
+class PointMarker extends WidgetType {
+  constructor(threadId) { super(); this.threadId = threadId; }
+  eq(o) { return o.threadId === this.threadId; }
+  toDOM() {
+    const el = document.createElement('span');
+    el.className = 'cm-comment-point';
+    el.textContent = '❝';
+    el.title = 'Comment';
+    el.dataset.thread = this.threadId;
+    return el;
+  }
+  ignoreEvent() { return false; }
+}
+
+function _buildHighlights(editorState) {
+  const docLen = editorState.doc.length;
+  const active = editorState.field(commentCardField, false)?.threadId ?? null;
+  const decos = [];
+  for (const t of listOpenThreads()) {
+    const from = Math.min(t.from, docLen), to = Math.min(t.to, docLen);
+    if (from < to) {
+      decos.push(Decoration.mark({
+        class: 'cm-comment-range' + (t.id === active ? ' cm-comment-range-active' : ''),
+        attributes: { 'data-thread': t.id }
+      }).range(from, to));
+    } else {
+      decos.push(Decoration.widget({ widget: new PointMarker(t.id), side: -1 }).range(from));
+    }
+  }
+  return decos.length ? Decoration.set(decos, true) : Decoration.none;
+}
+
+export const commentHighlightField = StateField.define({
+  create: (s) => _buildHighlights(s),
+  update(deco, tr) {
+    // Any card open/close changes which range is "active"; a refresh means the
+    // thread data moved under us; a doc change is mapped here and rebuilt by
+    // the refresh editor.js dispatches once the thread offsets are mapped.
+    if (tr.effects.some(e => e.is(openCommentEffect) || e.is(closeCommentEffect) || e.is(refreshCommentsEffect))) {
+      return _buildHighlights(tr.state);
+    }
+    return tr.docChanged ? deco.map(tr.changes) : deco;
+  },
+  provide: f => EditorView.decorations.from(f)
+});
+
+/** The full comments extension set for the editor. */
+export const commentsExtension = [commentCardField, commentHighlightField];
+
+// ---------------------------------------------------------------------------
+// Resolved comments modal
 // ---------------------------------------------------------------------------
 
 export function showArchivedCommentsModal() {
-  const list = Object.values(state.data?.commentThreads ?? {}).filter(t => t.archived);
+  const list = Object.values(_threads()).filter(t => t.archived);
 
   const overlay = document.createElement('div');
   overlay.className = 'ath-overlay';
 
   overlay.innerHTML = `
-    <div class="ath-modal" role="dialog" aria-modal="true" aria-label="Archived comments">
+    <div class="ath-modal" role="dialog" aria-modal="true" aria-label="Resolved comments">
       <div class="ath-header">
-        <h3 class="ath-title">Archived comments</h3>
+        <h3 class="ath-title">Resolved comments</h3>
         <button class="ath-close" aria-label="Close">&times;</button>
       </div>
       <div class="ath-body">
         ${list.length === 0
-          ? '<p class="ath-empty">No archived comments.</p>'
+          ? '<p class="ath-empty">No resolved comments.</p>'
           : list.map(t => `
             <div class="ath-thread">
               <div class="ath-thread-info">
@@ -213,261 +520,10 @@ export function showArchivedCommentsModal() {
 }
 
 // ---------------------------------------------------------------------------
-// AccordionWidget — inline block widget
-// ---------------------------------------------------------------------------
-
-class AccordionWidget extends WidgetType {
-  constructor({ anchorPos, activeThreadId, threads, pendingRange, threadDataVersion }) {
-    super();
-    this.anchorPos         = anchorPos;
-    this.activeThreadId    = activeThreadId;
-    this.threads           = threads;
-    this.pendingRange      = pendingRange;
-    this.threadDataVersion = threadDataVersion;
-  }
-
-  eq(other) {
-    return (
-      this.anchorPos          === other.anchorPos          &&
-      this.activeThreadId     === other.activeThreadId     &&
-      this.threadDataVersion  === other.threadDataVersion  &&
-      this.pendingRange?.from === other.pendingRange?.from &&
-      this.pendingRange?.to   === other.pendingRange?.to
-    );
-  }
-
-  toDOM(view) {
-    const el = document.createElement('div');
-    el.className = 'cm-accordion';
-    el.setAttribute('role', 'region');
-    el.setAttribute('aria-label', 'Comment thread');
-    this._render(el, view);
-    return el;
-  }
-
-  _render(el, view) {
-    el.innerHTML = '';
-
-    // Prevent mousedown inside the accordion from closing it
-    el.addEventListener('mousedown', (e) => e.stopPropagation());
-
-    const body = document.createElement('div');
-    body.className = 'cm-accordion-body';
-
-    if (this.activeThreadId === null) {
-      this._renderNewForm(body, view);
-    } else {
-      const thread = this.threads.find(t => t.id === this.activeThreadId);
-      if (thread) {
-        this._renderThread(body, thread, view);
-      }
-    }
-
-    el.appendChild(body);
-  }
-
-  _renderNewForm(body, view) {
-    body.innerHTML = `
-      <textarea class="form-input form-textarea ct-acc-body"
-        placeholder="Write a comment… (Ctrl+Enter to submit)" rows="2"></textarea>
-      <div class="ct-actions">
-        <button class="btn btn-sm ct-acc-cancel">Cancel</button>
-        <button class="btn btn-primary btn-sm ct-acc-submit">Add comment</button>
-      </div>
-      <p class="form-error ct-acc-error" hidden></p>
-    `;
-
-    const bodyEl  = body.querySelector('.ct-acc-body');
-    const errorEl = body.querySelector('.ct-acc-error');
-
-    _autoGrow(bodyEl);
-
-    const submit = () => {
-      const text = bodyEl?.value.trim();
-      if (!text) { _showError(errorEl, 'Comment text is required.'); return; }
-      errorEl.hidden = true;
-
-      const range    = this.pendingRange ?? { from: this.anchorPos, to: this.anchorPos };
-      const threadId = startThread(range.from, range.to, text);
-      view.dispatch({ effects: setActiveThreadEffect.of(threadId) });
-    };
-
-    body.querySelector('.ct-acc-submit').addEventListener('click', submit);
-    bodyEl?.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') submit();
-    });
-    body.querySelector('.ct-acc-cancel').addEventListener('click', () => {
-      view.dispatch({ effects: closeAccordionEffect.of(null) });
-    });
-
-    setTimeout(() => bodyEl?.focus(), 0);
-  }
-
-  _renderThread(body, thread, view) {
-    // Messages — compact inline format
-    const msgsEl = document.createElement('div');
-    msgsEl.className = 'ct-messages';
-    for (const msg of thread.messages) {
-      const row = document.createElement('div');
-      row.className = 'ct-message';
-      row.innerHTML = `
-        <span class="ct-msg-who"><span class="ct-msg-author">${escHtml(msg.author)}</span><span class="ct-msg-date">${formatRelative(msg.timestamp)}</span></span>
-        <span class="ct-msg-body">${escHtml(msg.text)}</span>
-      `;
-      msgsEl.appendChild(row);
-    }
-    body.appendChild(msgsEl);
-
-    // Reply + archive row
-    const replyEl = document.createElement('div');
-    replyEl.className = 'ct-reply-form';
-    replyEl.innerHTML = `
-      <textarea class="form-input form-textarea ct-reply-body"
-        placeholder="Reply… (Ctrl+Enter)" rows="1"></textarea>
-      <div class="ct-reply-actions">
-        <button class="ct-archive-btn">Archive</button>
-        <button class="btn btn-sm ct-reply-submit">Reply</button>
-      </div>
-    `;
-
-    const textarea = replyEl.querySelector('.ct-reply-body');
-    _autoGrow(textarea);
-    const sendReply = () => {
-      const text = textarea?.value.trim();
-      if (!text) return;
-      replyToThread(thread.id, text);
-      view.dispatch({ effects: setActiveThreadEffect.of(thread.id) });
-    };
-
-    replyEl.querySelector('.ct-reply-submit').addEventListener('click', sendReply);
-    textarea?.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendReply();
-    });
-    replyEl.querySelector('.ct-archive-btn').addEventListener('click', () => {
-      archiveThread(thread.id);
-      view.dispatch({ effects: closeAccordionEffect.of(null) });
-    });
-
-    body.appendChild(replyEl);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// accordionField — CM6 StateField
-// ---------------------------------------------------------------------------
-
-const _emptyAccordion = () => ({
-  anchorPos:      null,
-  activeThreadId: null,
-  pendingRange:   null,
-  decorations:    Decoration.none
-});
-
-export const accordionField = StateField.define({
-  create: _emptyAccordion,
-
-  update(value, tr) {
-    let { anchorPos, activeThreadId, pendingRange } = value;
-
-    // ── Process effects ──────────────────────────────────────────────────────
-    for (const e of tr.effects) {
-      if (e.is(openAccordionEffect)) {
-        anchorPos      = e.value.anchorPos;
-        activeThreadId = e.value.threadId  ?? null;
-        pendingRange   = e.value.newRange  ?? null;
-      } else if (e.is(closeAccordionEffect)) {
-        anchorPos = null; activeThreadId = null; pendingRange = null;
-      } else if (e.is(setActiveThreadEffect)) {
-        activeThreadId = e.value;
-        pendingRange   = null;
-      }
-    }
-
-    // ── Auto-close on document edits ─────────────────────────────────────────
-    if (anchorPos !== null && tr.docChanged) {
-      anchorPos = null; activeThreadId = null; pendingRange = null;
-    }
-
-    // ── Build decorations ────────────────────────────────────────────────────
-    let decorations = Decoration.none;
-    if (anchorPos !== null) {
-      try {
-        decorations = _buildDecorations(
-          tr.state, anchorPos, activeThreadId, pendingRange
-        );
-      } catch {
-        anchorPos = null; activeThreadId = null; pendingRange = null;
-      }
-    }
-
-    return { anchorPos, activeThreadId, pendingRange, decorations };
-  },
-
-  provide: f => EditorView.decorations.from(f, v => v.decorations)
-});
-
-// ---------------------------------------------------------------------------
-// Decoration builder
-// ---------------------------------------------------------------------------
-
-function _buildDecorations(editorState, anchorPos, activeThreadId, pendingRange) {
-  const doc    = editorState.doc;
-  const line   = doc.lineAt(anchorPos);
-  const threads = getThreadsForLine(anchorPos, doc);
-  const sorted  = [...threads].sort((a, b) => a.from - b.from);
-
-  // Collect mark ranges, sort, then add
-  const marks = [];
-
-  for (const t of sorted) {
-    if (t.from < t.to) {
-      marks.push({
-        from: t.from,
-        to:   t.to,
-        cls:  t.id === activeThreadId ? 'cm-comment-range-active' : 'cm-comment-range'
-      });
-    }
-  }
-
-  if (pendingRange && pendingRange.from < pendingRange.to) {
-    marks.push({ from: pendingRange.from, to: pendingRange.to, cls: 'cm-comment-range-active' });
-  }
-
-  marks.sort((a, b) => a.from !== b.from ? a.from - b.from : a.to - b.to);
-
-  const builder = new RangeSetBuilder();
-
-  for (const m of marks) {
-    if (m.from < line.to) {
-      builder.add(m.from, Math.min(m.to, doc.length), Decoration.mark({ class: m.cls }));
-    }
-  }
-
-  // Block widget at end of anchor line
-  builder.add(line.to, line.to, Decoration.widget({
-    widget: new AccordionWidget({
-      anchorPos,
-      activeThreadId,
-      threads: sorted,
-      pendingRange,
-      threadDataVersion: _threadDataVersion
-    }),
-    block: true,
-    side: 1
-  }));
-
-  return builder.finish();
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Make a textarea grow to fit its content.
- * Sets the height to scrollHeight on every input event.
- * Uses a rAF for the initial sizing so CM6 has already laid out the widget.
- */
+/** Make a textarea grow to fit its content. */
 function _autoGrow(ta) {
   const resize = () => {
     ta.style.height = 'auto';
@@ -477,13 +533,13 @@ function _autoGrow(ta) {
   requestAnimationFrame(resize);
 }
 
-function escHtml(str) {
+export function escHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function formatRelative(ts) {
+export function formatRelative(ts) {
   if (!ts) return '';
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60000);
@@ -494,10 +550,4 @@ function formatRelative(ts) {
   const days = Math.floor(hrs / 24);
   if (days < 30) return `${days}d ago`;
   return new Date(ts).toLocaleDateString();
-}
-
-function _showError(el, msg) {
-  if (!el) return;
-  el.textContent = msg;
-  el.hidden = false;
 }
