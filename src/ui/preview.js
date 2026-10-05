@@ -103,10 +103,6 @@ export class Preview {
       this._suppressScrollAfterRender = false;
       this._scheduleRender(content, true);
     }));
-    this._unsub.push(state.on('branch-switch', ({ content }) => {
-      this._suppressScrollAfterRender = false;
-      this._scheduleRender(content, true);
-    }));
     this._unsub.push(state.on('active-section-change', ({ version }) => {
       this._activeSectionVersion = version ?? null;
       // In layout mode (slides / document / webpage) the full document is always

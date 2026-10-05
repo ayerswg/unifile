@@ -24,10 +24,11 @@
 
 import {
   IS_QUINE, captureTemplate, loadEmbeddedData, generateQuine,
-  saveToIDB, loadFromIDB, downloadBlob, shareOrDownloadFile,
+  downloadBlob, shareOrDownloadFile,
   requestPersistentStorage, loadUserPrefs, saveUserPrefs,
-  saveDraft, loadDraft, clearDraft, markBackedUp, loadBackupMark,
+  saveDraft, loadDraft, clearDraft,
 } from '../core/storage.js';
+import { ShellLibrary } from '../upub/library.js';
 import { VCS } from '../core/vcs.js';
 import { shortHash } from '../core/hash.js';
 import { UPubEditor } from '../upub/editor.js';
@@ -176,6 +177,7 @@ contour 1000 index -55,182 40,186 100,183 175,190
 `;
 
 const ICONS = {
+  back: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
   eye: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
   dots: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
 };
@@ -192,13 +194,14 @@ export class UDraftApp {
     if (IS_QUINE) captureTemplate();
 
     // ── Load document ──────────────────────────────────────────────────────
-    let data = null;
-    if (!IS_QUINE) {
-      try { data = await loadFromIDB(DOC_ID); } catch { /* fresh */ }
-    }
-    data = data || loadEmbeddedData();
+    // PWA: the document library (upub/library.js → core/library.js) — the
+    // last-opened record, migrating the pre-library single document (the
+    // legacy DOC_ID record) on first launch.  Quine: the embedded data.
+    this.lib = new ShellLibrary(this, { app: 'udraft', version: VERSION });
+    const { data } = await this.lib.boot(loadEmbeddedData(), DOC_ID);
     this.data = data;
     this.vcs = new VCS(data);
+    this.vcs.detachedHead = null;                 // one line of history
     this.title = data.title || 'Untitled';
     this.content = data.currentContent ?? this.vcs.headContent ?? '';
     if (!this.content && !this.vcs.headHash) {
@@ -341,9 +344,10 @@ export class UDraftApp {
     root.className = 'wr-app ud-app';
     root.innerHTML = `
       <header id="wr-top">
+        <button id="wr-back" class="wr-icon-btn" title="Documents" aria-label="Documents"${this.lib?.enabled ? '' : ' hidden'}>${ICONS.back}</button>
         <input id="wr-title" type="text" value="${esc(this.title)}" aria-label="Document title"
                autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
-        <span id="wr-dirty" title="Uncommitted changes" hidden></span>
+        <span id="wr-dirty" title="Unsaved changes" hidden></span>
         <div id="wr-top-actions">
           <button id="wr-count" title="Plan stats" aria-label="Plan stats"></button>
           <button id="wr-btn-preview" class="wr-icon-btn" title="Blueprint" aria-label="Toggle blueprint">${ICONS.eye}</button>
@@ -395,6 +399,7 @@ export class UDraftApp {
     });
     document.getElementById('wr-btn-preview').addEventListener('click', () => this.togglePreview());
     document.getElementById('wr-btn-menu').addEventListener('click', () => this._openMenu());
+    document.getElementById('wr-back').addEventListener('click', () => this.lib.openSheet());
     document.getElementById('wr-overlay').addEventListener('click', (e) => {
       if (e.target.id === 'wr-overlay') this._closeSheet();
     });
@@ -1219,7 +1224,7 @@ export class UDraftApp {
     if (IS_QUINE) {
       saveDraft(this.content, this.vcs.headHash);
     } else {
-      try { await saveToIDB(DOC_ID, data); } catch (e) { console.warn('autosave failed', e); }
+      await this.lib.persist(data);
     }
   }
 
@@ -1230,6 +1235,34 @@ export class UDraftApp {
     clearDraft();
     this._refreshDirty();
     await this._persistNow();
+    // A linked device file follows the history (Chromium; silent after the first grant).
+    await this.lib.afterSave(this._currentData());
+  }
+
+  /** Replace the open document (the library opened / created one, or a file). */
+  _loadDocument(data) {
+    this.data = data;
+    this.vcs = new VCS(data);
+    this.vcs.detachedHead = null;
+    this._setTitle(data.title || 'Untitled');
+    this._resetView?.();
+    this.setContent(data.currentContent ?? this.vcs.headContent ?? '');
+    if (!document.getElementById('wr-preview').hidden) this._renderPreview();
+  }
+
+  /** Plan view state that belongs to the outgoing document. */
+  _resetView() {
+    this.activeFloor = 0;
+    this._view = null;
+    this._ctxRoomId = null;
+    this._selFrom = null;
+  }
+
+  _setTitle(title) {
+    this.title = title;
+    const el = document.getElementById('wr-title');
+    if (el) el.value = title;
+    document.title = title;
   }
 
   setContent(text) {
@@ -1391,10 +1424,13 @@ export class UDraftApp {
     const modal = this._openSheet(`
       <div class="wr-menu">
         <button data-act="preview">Blueprint</button>
-        <button data-act="history">History${this.isDirty ? ' <span class="wr-menu-dot"></span>' : ''}</button>
+        ${this.lib?.enabled ? '<button data-act="documents">Documents</button>' : ''}
+        <button data-act="save"${this.isDirty ? '' : ' disabled'}>Save${this.isDirty ? ' <span class="wr-menu-dot"></span>' : ''}</button>
+        <button data-act="history">History</button>
+        <button data-act="save-device">${this.lib?.device?.saved ? 'Saved to device ✓ — save again' : 'Save to device…'}</button>
+        <button data-act="open-device">Open from device…</button>
         <button data-act="comments">Comments…</button>
         <button data-act="export">Export…</button>
-        <button data-act="import">Import data file…</button>
         <button data-act="new">New document</button>
         <hr>
         <button data-act="example">Example plan</button>
@@ -1408,11 +1444,14 @@ export class UDraftApp {
       this._closeSheet();
       const go = {
         preview: () => this.togglePreview(true),
+        documents: () => this.lib.openSheet(),
+        save: () => this._quickSave(),
         history: () => this._openHistory(),
+        'save-device': () => this.lib.saveToDevice(),
+        'open-device': () => this.lib.openFromDevice(),
         comments: () => this.comments.showSheet(),
         export: () => this._openExport(),
-        import: () => this._importData(),
-        new: () => this._newDocument(),
+        new: () => this.lib.newDocument(),
         example: () => this._loadExample(),
         guide: () => this._openGuide(),
         settings: () => this._openSettings(),
@@ -1426,29 +1465,29 @@ export class UDraftApp {
 
   _openHistory() {
     const commits = this.vcs.log();
-    const backup = loadBackupMark(this._backupScope());
+    const dev = this.lib.device;
     const fmtDate = (t) => new Date(t).toLocaleString(undefined,
       { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
     const pending = this.isDirty ? `
       <div class="wr-pending">
-        <div class="wr-pending-head"><span class="wr-node"></span>Uncommitted changes</div>
+        <div class="wr-pending-head"><span class="wr-node"></span>Unsaved changes</div>
         <div class="wr-pending-row">
           <input id="wr-commit-msg" type="text" placeholder="Message (optional)" autocomplete="off">
-          <button id="wr-commit-btn" class="wr-primary">Commit</button>
+          <button id="wr-commit-btn" class="wr-primary">Save</button>
         </div>
-      </div>` : '<div class="wr-clean">Everything committed.</div>';
+      </div>` : '<div class="wr-clean">Everything saved.</div>';
 
     const list = commits.length ? commits.map(c => `
       <div class="wr-commit" data-hash="${c.hash}">
         <div class="wr-commit-line">
           <span class="wr-commit-msg">${esc(c.message || '(no message)')}</span>
           ${c.tag ? `<span class="wr-tag">${esc(c.tag)}</span>` : ''}
-          ${backup && backup.headHash === c.hash ? '<span class="wr-tag wr-exported">exported</span>' : ''}
+          ${dev && dev.savedHead === c.hash ? `<span class="wr-tag wr-exported" title="${dev.saved ? 'The device file holds this save' : 'Saved to the device, changed since'}">on device</span>` : ''}
         </div>
         <div class="wr-commit-meta">${esc(shortHash(c.hash))} · ${esc(c.author || '')} · ${fmtDate(c.timestamp)}</div>
         <button class="wr-restore" data-hash="${c.hash}">Restore</button>
-      </div>`).join('') : '<div class="wr-clean">No commits yet.</div>';
+      </div>`).join('') : '<div class="wr-clean">No saves yet.</div>';
 
     const modal = this._openSheet(`
       <div class="wr-sheet-head">History</div>
@@ -1458,18 +1497,25 @@ export class UDraftApp {
       const msg = modal.querySelector('#wr-commit-msg').value.trim();
       await this.commit(msg);
       this._closeSheet();
-      this._toast('Committed');
+      this._toast('Saved');
     });
     modal.addEventListener('click', (e) => {
       const btn = e.target.closest('.wr-restore');
       if (!btn) return;
       const hash = btn.dataset.hash;
       if (hash === this.vcs.headHash && !this.isDirty) { this._closeSheet(); return; }
-      if (!confirm('Restore this version into the editor? Your current text stays in history only if committed.')) return;
+      if (!confirm('Restore this version into the editor? Your current text stays in history only if saved.')) return;
       this.setContent(this.vcs.getContentAt(hash));
       this._closeSheet();
-      this._toast('Restored — commit to keep it');
+      this._toast('Restored — save to keep it');
     });
+  }
+
+  /** Save now, no message (the menu's Save). */
+  async _quickSave() {
+    if (!this.isDirty) return;
+    await this.commit('');
+    this._toast('Saved');
   }
 
   // ── Export ────────────────────────────────────────────────────────────────
@@ -1479,7 +1525,6 @@ export class UDraftApp {
       .replace(/^-+|-+$/g, '') || 'plan';
   }
 
-  _backupScope() { return IS_QUINE ? location.href : DOC_ID; }
 
   _openExport() {
     const modal = this._openSheet(`
@@ -1489,7 +1534,6 @@ export class UDraftApp {
         <button data-act="svg">SVG — vector drawing of the current floor</button>
         <button data-act="png">PNG — image of the current floor</button>
         <button data-act="txt">Text (.udraft.txt) — the raw source</button>
-        <button data-act="data">Data file (.unifile.json) — text + full history</button>
         ${IS_QUINE ? '<button data-act="quine">Save a copy (.html) — app + document in one file</button>' : ''}
       </div>`);
     modal.addEventListener('click', async (e) => {
@@ -1501,7 +1545,6 @@ export class UDraftApp {
         if (act === 'svg') await shareOrDownloadFile(renderExportSvg(this.scene, this.activeFloor), this._slug() + '.svg', 'image/svg+xml');
         if (act === 'png') await this._exportPng();
         if (act === 'txt') await shareOrDownloadFile(this.content, this._slug() + '.udraft.txt', 'text/plain');
-        if (act === 'data') await this._exportData();
         if (act === 'quine') await this._exportQuine();
       } catch (err) {
         if (err?.name !== 'AbortError') this._toast('Export failed: ' + err.message);
@@ -1550,14 +1593,6 @@ export class UDraftApp {
     await this._shareOrDownloadBlob(blob, this._slug() + '.png');
   }
 
-  async _exportData() {
-    const json = JSON.stringify(this._currentData(), null, 2);
-    const res = await shareOrDownloadFile(json, this._slug() + '.unifile.json', 'application/json');
-    if (res !== 'cancelled' && this.vcs.headHash) {
-      markBackedUp(this._backupScope(), this.vcs.headHash);
-    }
-  }
-
   async _exportQuine() {
     const floor = this.scene.floors[this.activeFloor];
     const still = floor && floor.rooms.length
@@ -1580,48 +1615,6 @@ export class UDraftApp {
       if (e && e.name === 'AbortError') return;
     }
     downloadBlob(blob, filename);
-  }
-
-  _importData() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json,application/json';
-    input.addEventListener('change', async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const data = JSON.parse(await file.text());
-        if (!data.branches || !data.commits) throw new Error('not a unifile data file');
-        if (!confirm(`Replace the current document with “${data.title || 'Untitled'}” (including its history)?`)) return;
-        this.data = data;
-        this.vcs = new VCS(data);
-        this.title = data.title || 'Untitled';
-        document.getElementById('wr-title').value = this.title;
-        document.title = this.title;
-        this.setContent(data.currentContent ?? this.vcs.headContent ?? '');
-        await this._persistNow();
-        this._toast('Imported');
-      } catch (err) {
-        this._toast('Import failed: ' + err.message);
-      }
-    });
-    input.click();
-  }
-
-  _newDocument() {
-    if (!confirm('Start a new document? The current document and its history will be replaced'
-      + (IS_QUINE ? '.' : ' (export a data file first if you want to keep it).'))) return;
-    this.data = {
-      version: VERSION, title: 'Untitled', dslType: 'udraft',
-      currentBranch: 'main', branches: { main: { name: 'main', head: null } },
-      commits: {}, comments: {}, commentThreads: {}, password: null,
-    };
-    this.vcs = new VCS(this.data);
-    this.title = 'Untitled';
-    document.getElementById('wr-title').value = this.title;
-    document.title = this.title;
-    this.setContent('');
-    this._persistNow();
   }
 
   /**

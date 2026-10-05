@@ -1,23 +1,26 @@
 /**
- * Phone top bar — `( ⑂ )   {♪} Title ⌄   ( ◉ )`
+ * Phone top bar — `( ‹ )   {♪} Title ● ⌄   ( ◉ )`
  *
  * Three controls, and that's the whole top chrome on phones (portrait AND
  * landscape; the old landscape dock is gone):
  *
- *   • LEFT circle  — the branch icon.  Tap → the commit/history pane; it is
- *                    filled (accent) while that pane is showing; tap again →
- *                    back to the editor.  Carries the dirty dot.
- *   • CENTRE       — the app mark in braces + the document title + a caret.
- *                    ALWAYS the title (never the branch name — that lives on
- *                    the action bubble in the history view).  Tap → the ONE
- *                    dropdown with the file-level options: Document, File,
- *                    Export, More (settings).  Same menu in every view.
+ *   • LEFT circle  — the back arrow (iA Writer's).  Tap → the document
+ *                    LIBRARY pane (the list of this app's documents); filled
+ *                    (accent) while that pane is showing; tap again → back to
+ *                    the editor.  A quine has no library: its left circle is a
+ *                    clock and opens the history pane instead.
+ *   • CENTRE       — the app mark in braces + the document title (+ the dirty
+ *                    dot while there are unsaved changes) + a caret.  Tap →
+ *                    the ONE dropdown with the file-level options: Document,
+ *                    File (Save, History, Save to device, Open from device,
+ *                    Documents), Export, More (settings).  Same menu in every
+ *                    view.
  *   • RIGHT circle — the eye.  Tap → the rendered DSL; filled while showing;
  *                    tap again → back to the editor.
  *
  * The bar blends into the page (same background as the panes, iA-style) and
  * hides while typing (app.js sets `data-editing` on the shell).  Editing verbs
- * (play, undo, align…) and branches live on the floating action button
+ * (play, undo, align…) and Save live on the floating action button
  * (action-fab.js); this menu is file level only (actions.js listMenuActions).
  *
  * The DOM is built ONCE per mode and PATCHED on state changes — rebuilding the
@@ -34,7 +37,7 @@ import { shortHash } from '../core/hash.js';
 import { appMark } from '../core/brand.js';
 import { listMenuActions, GROUP_LABELS, MENU_GROUPS, esc } from './actions.js';
 
-const PANES = ['commit', 'editor', 'render'];
+const PANES = ['library', 'history', 'editor', 'render'];
 const WORKING = 'WORKING';
 
 export class PaneSwitch {
@@ -46,7 +49,7 @@ export class PaneSwitch {
     this._menuOpen = false;
     this._mode = null;             // 'normal' | 'diff' — which skeleton is built
 
-    for (const ev of ['change', 'content-change', 'branch-switch', 'checkout', 'active-section-change']) {
+    for (const ev of ['change', 'content-change', 'checkout', 'active-section-change']) {
       state.on(ev, () => this.render());
     }
     state.on('diff-change', () => { this._menuOpen = false; this.render(); });
@@ -84,21 +87,25 @@ export class PaneSwitch {
 
   _build(mode) {
     this._mode = mode;
+    // The left circle: the library's back arrow, or (quine — no library) the
+    // history clock.  Decided once per build: state.library is set before the
+    // shell mounts and never changes.
+    const leftPane = state.library ? 'library' : 'history';
     this.el.innerHTML = `
-      <button type="button" class="ps-circle ps-branch" data-pane="commit">
-        ${_iconBranch()}
-        <span class="ps-dirty-dot" aria-hidden="true" hidden></span>
+      <button type="button" class="ps-circle ps-left ps-${leftPane}" data-pane="${leftPane}">
+        ${state.library ? _iconBack() : _iconClock()}
       </button>
       <button type="button" class="ps-title-btn" aria-haspopup="menu" aria-expanded="false">
         <span class="ps-mark" aria-hidden="true"></span>
         <span class="ps-title"></span>
+        <span class="ps-dirty-dot" aria-hidden="true" hidden></span>
         <span class="ps-caret" aria-hidden="true">${_iconCaret()}</span>
       </button>
       <button type="button" class="ps-circle ps-eye" data-pane="render">${_iconEye()}</button>
       <div class="ps-menu" role="menu"></div>`;
 
     this._n = {
-      branch: this.el.querySelector('.ps-branch'),
+      left:   this.el.querySelector('.ps-left'),
       dot:    this.el.querySelector('.ps-dirty-dot'),
       titleBtn: this.el.querySelector('.ps-title-btn'),
       mark:   this.el.querySelector('.ps-mark'),
@@ -137,18 +144,17 @@ export class PaneSwitch {
     if (mode !== this._mode) this._build(mode);
     const n = this._n;
 
-    const commitActive = this._active === 'commit';
+    const leftPane = n.left.dataset.pane;
+    const leftActive = this._active === leftPane;
     const renderActive = this._active === 'render';
-    n.branch.classList.toggle('active', commitActive);
-    n.branch.setAttribute('aria-pressed', String(commitActive));
-    n.branch.setAttribute('aria-label', commitActive ? 'Back to the editor' : 'History and branches');
+    n.left.classList.toggle('active', leftActive);
+    n.left.setAttribute('aria-pressed', String(leftActive));
+    n.left.setAttribute('aria-label', leftActive ? 'Back to the document' : (leftPane === 'library' ? 'Documents' : 'History'));
     n.eye.classList.toggle('active', renderActive);
     n.eye.setAttribute('aria-pressed', String(renderActive));
     n.eye.setAttribute('aria-label', renderActive ? 'Back to the editor' : 'Show the rendered document');
 
-    const dirty = state.isDirty, detached = state.isDetached;
-    n.dot.hidden = !(dirty || detached);
-    n.dot.classList.toggle('detached', detached);
+    n.dot.hidden = !state.isDirty;
 
     if (mode === 'diff') {
       const d = state.diff;
@@ -200,11 +206,10 @@ export class PaneSwitch {
             <div class="ps-menu-label">Right side</div>${this._renderSidePicker('right')}`;
   }
 
-  /** A commit picker for one diff side: "Current" (left only) + all commits, all branches. */
+  /** A picker for one diff side: "Current" (left only) + every save. */
   _renderSidePicker(side) {
     const vcs = state.vcs;
     const cur = side === 'left' ? state.diff.left : state.diff.right;
-    const branches = vcs?.listBranches?.() ?? [];
     const item = (hash, name) => `
       <button class="ps-menu-item${hash === cur ? ' current' : ''}" data-act="pick" data-side="${side}" data-hash="${esc(hash)}" role="menuitem">
         <span class="ps-menu-ic">${hash === cur ? '●' : '○'}</span>
@@ -213,13 +218,9 @@ export class PaneSwitch {
       </button>`;
     let html = '';
     if (side === 'left') html += item(WORKING, 'Current');
-    for (const b of branches) {
-      const log = vcs.log(b.name);   // newest first
-      if (!log.length) continue;
-      html += `<div class="ps-menu-sublabel">${esc(b.name)}</div>`;
-      html += log.map(c => item(c.hash, c.message || '(no message)')).join('');
-    }
-    return html || '<div class="ps-menu-empty">No commits.</div>';
+    const log = vcs?.log?.() ?? [];   // newest first
+    html += log.map(c => item(c.hash, c.message || '(no message)')).join('');
+    return html || '<div class="ps-menu-empty">No saves.</div>';
   }
 
   _onMenuAction(ds) {
@@ -239,10 +240,14 @@ export class PaneSwitch {
 // Icons
 // ---------------------------------------------------------------------------
 
-function _iconBranch() {
-  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
-    <circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="6" r="1.7"/>
-    <path d="M4 5.2v5.6M4 9.5C4 7 12 9 12 7.7"/></svg>`;
+function _iconBack() {
+  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M10 3L5 8l5 5"/></svg>`;
+}
+
+function _iconClock() {
+  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>`;
 }
 
 function _iconCaret() {

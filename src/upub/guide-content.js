@@ -194,32 +194,47 @@ comment whose text you delete resolves itself. On a hardware keyboard,
 Comments are saved with the document (and in its data file), so they
 travel with it into any other unifile app.
 
-## Version history
+## Documents, saves and your device
 
-{write} keeps a git-style history *inside* the document. Open **⋯ menu →
-History**:
+The **‹** button at the top left opens your **documents** — every piece you
+have written in {write}, newest first, each one exactly as you left it. Tap
+one to open it, **+ New** to start another, **⋯** on a row to rename,
+duplicate or delete it. You never have to save before switching: the text
+you are typing is remembered as you type.
 
-- **Commit** snapshots the current text (a message is optional). Commits
-  are stored as diffs, so history stays small.
-- Tap any commit to **restore** its text into the editor. Restoring
-  doesn't delete anything — it just puts the old text back as the current
-  (uncommitted) state; commit it to make it the new tip.
-- The dot on the History menu item shows there are uncommitted changes.
+Three layers keep your writing safe, all on your device — nothing is ever
+sent anywhere:
 
-Set your author name for commits in **⋯ menu → Settings**.
+- **Remembered as you type.** Every document's current text, including
+  unsaved changes, is stored on the device the moment you type it.
+- **Save** (⋯ menu → Save, or the Save button in **History**) snapshots the
+  text into the document's **history**. Saves are stored as diffs, so
+  history stays small; a message is optional. In History, tap any save to
+  **restore** its text into the editor — restoring deletes nothing, it just
+  puts the old text back as the current (unsaved) state; save again to keep
+  it.
+- **Save to device** writes the document — text *and* full history — as a
+  small \`.unifile.json\` file you control: into a folder of your choosing
+  (desktop Chrome and Edge remember the file, so later saves write straight
+  to it), via the share sheet to **Files / iCloud Drive** on iPhone and iPad,
+  or as a download elsewhere. **Open from device** brings such a file back
+  into the documents list on any device — history and comments included.
+
+The dot on the Save menu item (and next to the title) means there are
+changes since the last save. The documents list shows whether the device
+file matches each document's current state.
+
+Set your author name for saves in **⋯ menu → Settings**.
 
 ## Where your text lives
 
 - **App (PWA):** documents are stored in the browser's IndexedDB on your
-  device and autosaved as you type. Use **Export → Data file
-  (.unifile.json)** for a durable backup — it contains the full text *and*
-  the complete history, and can be imported back on any device.
+  device and remembered as you type. Browsers can evict site data under
+  storage pressure — use **Save to device** for anything you care about;
+  the file holds the complete text and history and opens on any device.
 - **Single-file (.html):** the downloaded file *is* the app and the
-  document in one. "Save a copy" regenerates the file with your latest
-  text and history embedded.
-
-Autosave is instant, but browsers can evict site data under storage
-pressure — export a data file (or an EPUB) for anything you care about.
+  document in one (there is no documents list in this mode). "Save a copy"
+  regenerates the file with your latest text and history embedded.
 
 ## iOS install
 

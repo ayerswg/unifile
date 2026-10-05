@@ -3,7 +3,7 @@
  *
  * Two categories of export:
  *   1. Quine export  – downloads a new standalone .htm quine file.
- *                      Only available when the document is clean (committed).
+ *                      Only available when the document is clean (saved).
  *                      Filename: <title>.<7-char-hash>.htm
  *   2. Format export – converts the current content to the DSL's native
  *                      formats (HTML, PDF, SVG, MIDI, PNG, …).
@@ -83,14 +83,14 @@ export class ExportDialog {
               ${isDirty ? `
                 <div class="export-dirty-notice">
                   <span class="export-dirty-icon">⚠</span>
-                  You have uncommitted changes. Commit before exporting so the
+                  You have unsaved changes. Save before exporting so the
                   filename reflects the exact state of the file.
                 </div>
               ` : ''}
 
               <div class="export-option-row ${isDirty ? 'disabled' : ''}">
                 <div class="export-option-info">
-                  <strong>${escHtml(filename ?? '(commit required)')}</strong>
+                  <strong>${escHtml(filename ?? '(save first)')}</strong>
                   <span class="export-option-sub">
                     ${formatCommitCount(state.vcs)} · ${escHtml(dslId)}
                   </span>

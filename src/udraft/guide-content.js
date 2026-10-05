@@ -289,8 +289,9 @@ walls:
 ## Exports
 
 From the ⋯ menu: **SVG** (vector drawing), **PNG**, **PDF** — printed **at
-true scale** (put a scale ruler on it), plus the data file (text + full
-history) and, in single-file mode, a copy of the whole app.
+true scale** (put a scale ruler on it) and, in single-file mode, a copy of
+the whole app. The plan itself (text + full history) is kept by **Save to
+device** — see History.
 
 ## Comments
 
@@ -301,9 +302,21 @@ commented text keeps a soft highlight — tap it to read the thread, reply or
 (tap one to jump to it). Comments follow the text as you edit and are saved
 with the document.
 
-## History
+## Documents and history
 
-{draft} keeps git-style version history on your device — commit from the
-History sheet, restore any version. Everything is offline; nothing leaves
-your device.
+The **‹** button at the top left lists every plan you have drafted in
+{draft}, each one exactly as you left it — tap to open, **+ New** to start
+another, **⋯** on a row to rename, duplicate or delete. What you type is
+remembered on the device as you type it, so switching plans never loses
+anything.
+
+**Save** (⋯ menu → Save, or from the **History** sheet, where a message is
+optional) snapshots the text into the plan's history; tap any save there to
+**restore** it — the old text comes back as the current, unsaved state.
+**Save to device** writes the plan — text and full history — as a small
+\`.unifile.json\` you control (a folder of your choosing on desktop Chrome
+and Edge, which then write straight to that file on every save; the share
+sheet to Files on iPhone and iPad; a download elsewhere), and **Open from
+device** brings one back. Everything is offline; nothing leaves your
+device.
 `;

@@ -67,8 +67,8 @@ export class SettingsPanel {
           <div class="dialog-body">
             <!-- ── Identity ───────────────────────────────────────────── -->
             <p class="settings-intro">
-              Your identity is used as the commit author. Cached locally in this
-              browser and never shared.
+              Your identity is recorded as the author of your saves (optional).
+              Cached locally in this browser and never shared.
             </p>
 
             <div class="form-row">

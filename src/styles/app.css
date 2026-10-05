@@ -846,12 +846,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .vcs-pill-group .vcs-pill:not(:last-child) {
   border-right-width: 0;
 }
-/* Branch pill in the group — keep a thin separator before the commit pill */
-.vcs-pill-group .branch-pill:not(.detached) {
-  border-right: 1px solid rgba(0,0,0,.2);
-}
-
-/* VCS pills (branch + commit) */
+/* History pills (Save + current save) */
 .vcs-pill {
   display: inline-flex;
   align-items: center;
@@ -868,30 +863,31 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 }
 .vcs-pill:hover { border-color: var(--text-muted); color: var(--text); }
 .vcs-pill.dirty { border-color: var(--warning); }
-.vcs-pill.detached { border-color: var(--warning); border-style: dashed; color: var(--warning); }
 
-/* Branch pill — inverted: accent background with dark text */
-.branch-pill {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--bg);
-  font-weight: 600;
+/* The device pill — whether the device holds this document's current state.
+   none = never saved to the device, stale = changed since, saved = in sync. */
+.vcs-pill.device-pill { gap: 4px; }
+.vcs-pill.device-pill svg { flex-shrink: 0; }
+.vcs-pill.device-pill.saved { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, transparent); }
+.vcs-pill.device-pill.stale { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 55%, transparent); }
+.vcs-pill.device-pill.none  { color: var(--text-muted); }
+
+/* ‹ Documents — opens the library drawer (left of the menu button) */
+.tb-library {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  padding: 5px 5px;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+  user-select: none;
 }
-.branch-pill:hover {
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--bg);
-  filter: brightness(1.1);
-}
-/* Detached state overrides the inverted look */
-.branch-pill.detached {
-  background: color-mix(in srgb, var(--warning) 15%, transparent);
-  border-color: var(--warning);
-  border-style: dashed;
-  color: var(--warning);
-  font-weight: normal;
-  filter: none;
-}
+.tb-library:hover { color: var(--text); border-color: var(--border); background: var(--bg-surface); }
+#unifile-app[data-library] .tb-library { color: var(--accent); }
 /* Split commit pill — left action part (shown when dirty).
    Placed after .vcs-pill.dirty to win the border-color cascade. */
 .vcs-pill.commit-action-pill {
@@ -938,20 +934,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 /* Position the VCS dropdowns under their respective pill buttons.
    Right edge of topbar has 12px padding; commit pill is rightmost (~90px wide),
    branch pill is next (~110px wide). */
-#tb-branch-dd { right: 104px; }
 #tb-commit-dd { right: 12px; }
-
-/* Detached HEAD notice inside the branch dropdown */
-.dd-detached-notice {
-  margin: 6px 8px 2px;
-  padding: 8px 10px;
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
-  border-radius: var(--radius);
-  font-size: 12px;
-  color: var(--warning);
-  line-height: 1.4;
-}
 
 /* Legacy history dropdown — kept for any remaining references */
 .history-dropdown {
@@ -979,26 +962,11 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   letter-spacing: .08em;
   color: var(--text-muted);
 }
-.dd-branch-ctx { font-weight: 400; text-transform: none; margin-left: 4px; }
-
-.dd-branch-list, .dd-commit-list {
+.dd-commit-list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.dd-branch-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: background .1s;
-}
-.dd-branch-item:hover { background: var(--bg-surface); }
-.dd-branch-item.current { color: var(--accent); }
-.dd-branch-icon { width: 14px; text-align: center; font-size: 10px; }
-.dd-branch-name { flex: 1; font-size: 13px; }
-.dd-branch-hash { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
 
 .dd-commit-item {
   padding: 8px 12px;
@@ -1075,9 +1043,92 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
    desktop keeps the transport bar + top bar. */
 .uf-fab, .uf-fab-targets, .uf-fab-grid, .uf-fab-scrim, .uf-fab-tip { display: none; }
 
-/* Commit-log pane: a mobile-only far-left pane; hidden entirely on desktop
-   (where the commit history lives in the topbar dropdown instead). */
+/* History pane: a mobile-only pane; hidden entirely on desktop (where the
+   history lives in the topbar dropdown instead). */
 #uf-commit-log { display: none; }
+
+/* ==============================================================
+   THE DOCUMENT LIBRARY (library-pane.js)
+   Phone: the `library` pane (left circle = back arrow).  Desktop: a drawer
+   over the left of #uf-main (`#unifile-app[data-library]`).  Quines: empty.
+   ============================================================== */
+#uf-library { display: none; }
+#unifile-app[data-library] #uf-library {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: min(380px, 100%);
+  z-index: 65;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  box-shadow: 8px 0 24px rgba(0,0,0,.18);
+  overflow: hidden;
+  animation: uf-lib-in .16s ease;
+}
+@keyframes uf-lib-in { from { transform: translateX(-12px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.lib { display: flex; flex-direction: column; min-height: 0; flex: 1; font-family: var(--font-ui); }
+.lib-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.lib-back {
+  width: 34px; height: 34px; border-radius: 999px; border: none; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-surface); color: var(--text-sub); cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lib-back svg { width: 18px; height: 18px; }
+.lib-title { flex: 1; min-width: 0; font-weight: 600; font-size: 15px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.lib-mark { font-family: var(--font-mono); color: var(--text-sub); white-space: pre; font-weight: 500; }
+.lib-new {
+  border: 1px solid var(--accent); background: var(--accent); color: var(--bg);
+  border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer;
+  font-family: var(--font-ui);
+}
+.lib-new:active { filter: brightness(.92); }
+.lib-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; overscroll-behavior: contain; flex: 1; min-height: 0; }
+.lib-item { position: relative; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); }
+.lib-item.current { background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.lib-open {
+  flex: 1; min-width: 0; text-align: left; background: none; border: none; color: inherit;
+  padding: 10px 6px 10px 14px; cursor: pointer; display: flex; flex-direction: column; gap: 3px;
+  font-family: var(--font-ui); -webkit-tap-highlight-color: transparent;
+}
+.lib-open:active { background: var(--bg-surface); }
+.lib-item-title { font-size: 15px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+.lib-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 999px; background: var(--pending); }
+.lib-item-excerpt { font-size: 13px; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.lib-item-meta { display: flex; flex-wrap: wrap; gap: 5px; font-size: 11px; color: var(--text-muted); }
+.lib-device { display: inline-flex; align-items: center; gap: 3px; }
+.lib-device svg { width: 11px; height: 11px; }
+.lib-device.saved { color: var(--success); }
+.lib-device.stale { color: var(--warning); }
+.lib-more {
+  flex: 0 0 44px; border: none; background: none; color: var(--text-muted); font-size: 20px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.lib-more:hover, .lib-more[aria-expanded="true"] { color: var(--text); }
+.lib-item-menu {
+  position: absolute; right: 10px; top: 42px; z-index: 5;
+  display: flex; flex-direction: column; min-width: 160px;
+  background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 4px 0;
+}
+.lib-item-menu button {
+  text-align: left; background: none; border: none; color: var(--text); font-size: 13px;
+  padding: 8px 14px; cursor: pointer; font-family: var(--font-ui);
+}
+.lib-item-menu button:hover { background: var(--bg-surface); }
+.lib-item-menu button.danger { color: var(--error, #e5484d); }
+.lib-empty { padding: 24px 14px; color: var(--text-muted); font-style: italic; font-size: 13px; }
+.lib-foot { flex-shrink: 0; padding: 10px 14px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--border); }
+.lib-link { background: none; border: none; color: var(--accent); font-size: 13px; cursor: pointer; padding: 4px 0; font-family: var(--font-ui); }
+.lib-note { margin: 6px 0 0; font-size: 11px; line-height: 1.45; color: var(--text-muted); }
+.lib-note code { font-family: var(--font-mono); font-size: 10.5px; }
 
 /* ==============================================================
    MOBILE — SINGLE-PANE + SWITCHER (phone-width portrait, or landscape phone)
@@ -1098,6 +1149,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 
   /* All three panes share the same box; only the active one is displayed.  The
      !important overrides the inline display the desktop view-mode logic sets. */
+  #uf-library,
   #uf-commit-log,
   #uf-editor-wrap,
   #uf-preview-wrap {
@@ -1106,11 +1158,17 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
     width: 100%;
     min-width: 0;
   }
-  #unifile-app[data-mobile-pane="commit"] #uf-commit-log,
+  #unifile-app[data-mobile-pane="library"] #uf-library,
+  #unifile-app[data-mobile-pane="history"] #uf-commit-log,
   #unifile-app[data-mobile-pane="editor"] #uf-editor-wrap,
   #unifile-app[data-mobile-pane="render"] #uf-preview-wrap {
     display: flex !important;
   }
+  #uf-library {
+    position: static; flex-direction: column; border: none; box-shadow: none; animation: none;
+    overflow: hidden; background: var(--bg);
+  }
+  #uf-library .lib-back { display: none; }     /* the top bar's circle is the way back */
   #uf-commit-log {
     flex-direction: column;
     overflow-y: auto;
@@ -1121,7 +1179,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   /* The drag-to-resize divider has no meaning when a single pane is shown. */
   #uf-divider { display: none !important; }
 
-  /* ── Top bar: ( branch )  {mark} Title ⌄  ( eye ) ──────────────────────
+  /* ── Top bar: ( ‹ )  {mark} Title ● ⌄  ( eye ) ─────────────────────────
      The whole top chrome on phones, portrait AND landscape (the landscape dock
      is gone).  The circles switch panes and fill (accent) while their pane is
      up; the centre opens the one dropdown with every menu option.  Hidden
@@ -1163,15 +1221,13 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   .ps-circle svg { width: 20px; height: 20px; display: block; }
   .ps-circle:active { transform: scale(.94); }
   .ps-circle.active { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-  /* Uncommitted work: the dot rides the branch circle. */
+  /* Unsaved work: a dot after the title. */
   .ps-dirty-dot {
-    position: absolute; top: 0; right: 0;
-    width: 11px; height: 11px; border-radius: 999px;
+    flex: 0 0 auto;
+    width: 8px; height: 8px; border-radius: 999px;
     background: var(--pending);
-    box-shadow: 0 0 0 2px var(--bg);
   }
   .ps-dirty-dot[hidden] { display: none; }
-  .ps-dirty-dot.detached { background: var(--warning, #d20f39); }
 
   .ps-title-btn {
     flex: 1 1 auto;
@@ -1267,12 +1323,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   }
   .uf-fab-mark { white-space: pre; }
   .uf-fab[hidden] { display: none; }
-  /* History view: the bubble stretches into a pill naming the branch. */
-  .uf-fab.wide { width: auto; max-width: min(60%, 260px); padding: 0 16px 0 13px; gap: 8px; }
-  .uf-fab-text {
-    font-family: var(--font-ui); font-size: 14px; font-weight: 600; letter-spacing: 0;
-    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
   .uf-fab.pressed { transform: scale(.94); }
   .uf-fab.playing {
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent), 0 3px 12px rgba(0,0,0,.4);
@@ -1384,7 +1434,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
      (commit · middle/target · right/source).  On mobile the diff is three
      single-column panes driven by [data-mobile-pane], NOT the desktop 2-col. */
   #unifile-app[data-diff] #uf-diff { display: none !important; }
-  #unifile-app[data-diff][data-mobile-pane="commit"] #uf-commit-log,
+  #unifile-app[data-diff][data-mobile-pane="history"] #uf-commit-log,
   #unifile-app[data-diff][data-mobile-pane="editor"] #uf-diff-mid,
   #unifile-app[data-diff][data-mobile-pane="render"] #uf-diff-right {
     display: flex !important;
@@ -2788,7 +2838,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 #unifile-app[data-diff] #uf-editor-wrap,
 #unifile-app[data-diff] #uf-preview-wrap,
 #unifile-app[data-diff] #uf-divider,
-#unifile-app[data-diff] #uf-commit-log { display: none !important; }
+#unifile-app[data-diff] #uf-commit-log,
+#unifile-app[data-diff] #uf-library { display: none !important; }
 
 /* Bottom bar swaps to the diff picker. */
 #unifile-app[data-diff] #uf-diff-bar { display: block; }
@@ -2869,9 +2920,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   font-size: 13px; padding: 6px 14px; cursor: pointer; border: 1px solid var(--border);
   background: var(--bg); color: var(--text);
 }
-.db-btn.db-branch { border-color: var(--accent); color: var(--accent); }
-.db-btn.db-merge { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-.db-btn.db-merge[disabled] { opacity: .4; cursor: not-allowed; }
+.db-btn.db-restore { border-color: var(--accent); color: var(--accent); }
 .db-btn.db-exit { margin-left: auto; }
 
 /* ── Preview footer buttons (.pf-btn) ────────────────────────── */

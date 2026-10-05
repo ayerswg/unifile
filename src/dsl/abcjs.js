@@ -633,7 +633,6 @@ state.on('abc-voices-change', () => {
 // Loading a different document (checkout / branch switch) clears voice selections
 // so stale voice ids don't silence the new tune.
 state.on('checkout',      () => state.clearVoiceSelections());
-state.on('branch-switch', () => state.clearVoiceSelections());
 
 // ---------------------------------------------------------------------------
 // Note audition — sound a single note/chord when it is written or selected

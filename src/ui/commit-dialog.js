@@ -1,16 +1,14 @@
 /**
- * Commit dialog
+ * Save dialog — "Save with message…"
  *
- * Fields:
- *   Author / Email  – only shown on FIRST USE (no cached prefs). After that
- *                     the cached identity is shown as read-only info text and
- *                     the user changes it via the ⚙ Settings panel instead.
- *   Message         – required
+ * The plain Save (Ctrl+S, the Save pill, the phone bubble) snapshots with no
+ * message; this dialog is for the saves you want to label.  Fields:
+ *   Author / Email  – shown until an identity is cached (both optional: an
+ *                     unnamed save is still a save; Settings changes them later)
+ *   Message         – optional
  *   SemVer tag      – optional
- *   Branch name     – required ONLY when in detached HEAD state; the new
- *                     branch is automatically created on commit.
  *
- * On submit → calls handler with commit data.
+ * On submit → calls handler with the save data.
  */
 
 import { state, PANELS } from './state.js';
@@ -38,13 +36,12 @@ export class CommitDialog {
 
   show() {
     const prefs = loadUserPrefs();
-    const hasCachedIdentity = !!(prefs.name && prefs.email);
-    const isDetached = state.isDetached;
+    const hasCachedIdentity = !!(prefs.name || prefs.email);
     const head = state.vcs?.headCommit;
     const suggestedTag = head?.tag ? incrementPatch(head.tag) : '';
 
-    // Carry over a message/version typed in the mobile commit bar before this
-    // dialog was opened (e.g. because no identity was saved yet).
+    // Carry over a message/version typed in the history pane's pending node
+    // before this dialog was opened.
     const pending = state.pendingCommit;
     state.pendingCommit = null;
     const draftMsg = pending?.message ?? '';
@@ -55,48 +52,32 @@ export class CommitDialog {
       ? `<div class="commit-identity-row">
            <span class="commit-identity-avatar">${initials(prefs.name)}</span>
            <div class="commit-identity-info">
-             <strong>${escHtml(prefs.name)}</strong>
-             <span>${escHtml(prefs.email)}</span>
+             <strong>${escHtml(prefs.name || 'anonymous')}</strong>
+             <span>${escHtml(prefs.email || '')}</span>
            </div>
          </div>`
       : `<div class="form-row">
            <label class="form-label" for="commit-author">
-             Author name <span class="required">*</span>
+             Author name <span class="form-hint">(optional)</span>
            </label>
            <input class="form-input" id="commit-author" type="text"
              value="${escHtml(prefs.name ?? '')}"
-             placeholder="Your Name" required autocomplete="name">
+             placeholder="Your Name" autocomplete="name">
          </div>
          <div class="form-row">
            <label class="form-label" for="commit-email">
-             Email <span class="required">*</span>
+             Email <span class="form-hint">(optional)</span>
            </label>
            <input class="form-input" id="commit-email" type="email"
              value="${escHtml(prefs.email ?? '')}"
-             placeholder="you@example.com" required autocomplete="email">
+             placeholder="you@example.com" autocomplete="email">
          </div>`;
-
-    // ── Detached HEAD notice + branch name field ───────────────────────────
-    const detachedSection = isDetached
-      ? `<div class="detached-commit-notice">
-           <span class="detached-commit-icon">⚠</span>
-           <span>You're viewing a historical commit. This change will live on a new branch.</span>
-         </div>
-         <div class="form-row">
-           <label class="form-label" for="commit-branch">
-             New branch name <span class="required">*</span>
-           </label>
-           <input class="form-input" id="commit-branch" type="text"
-             placeholder="feature/my-changes"
-             required pattern="[A-Za-z0-9/_-]+" autocomplete="off">
-         </div>`
-      : '';
 
     this.el.innerHTML = `
       <div class="dialog-overlay" id="commit-overlay">
         <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="commit-title">
           <div class="dialog-header">
-            <h2 class="dialog-title" id="commit-title">Commit Changes</h2>
+            <h2 class="dialog-title" id="commit-title">Save with message</h2>
             <button class="dialog-close" id="commit-close" aria-label="Close">&times;</button>
           </div>
 
@@ -106,11 +87,10 @@ export class CommitDialog {
             </div>
 
             ${identitySection}
-            ${detachedSection}
 
             <div class="form-row">
               <label class="form-label" for="commit-message">
-                Commit message
+                Message
                 <span class="form-hint">(optional)</span>
               </label>
               <textarea class="form-input form-textarea" id="commit-message"
@@ -119,7 +99,7 @@ export class CommitDialog {
 
             <div class="form-row">
               <label class="form-label" for="commit-tag">
-                SemVer tag
+                Version
                 <span class="form-hint">(optional, e.g. 1.2.3)</span>
               </label>
               <input class="form-input" id="commit-tag" type="text"
@@ -133,7 +113,7 @@ export class CommitDialog {
           <div class="dialog-footer">
             <button class="btn btn-ghost" id="commit-cancel">Cancel</button>
             <button class="btn btn-primary" id="commit-submit">
-              ${iconCommit()} Commit
+              ${iconCommit()} Save
             </button>
           </div>
         </div>
@@ -142,15 +122,9 @@ export class CommitDialog {
 
     this.el.style.display = '';
 
-    // Focus branch name field (if detached) else message field
-    setTimeout(() => {
-      const focus = isDetached
-        ? this.el.querySelector('#commit-branch')
-        : this.el.querySelector('#commit-message');
-      if (focus) focus.focus();
-    }, 50);
+    setTimeout(() => this.el.querySelector('#commit-message')?.focus(), 50);
 
-    this._bindEvents(hasCachedIdentity, isDetached);
+    this._bindEvents(hasCachedIdentity);
   }
 
   hide() {
@@ -160,7 +134,7 @@ export class CommitDialog {
 
   _renderDiffSummary() {
     const vcs = state.vcs;
-    if (!vcs || !state.isDirty) return '<p class="diff-none">No staged changes.</p>';
+    if (!vcs || !state.isDirty) return '<p class="diff-none">Nothing changed since the last save.</p>';
 
     const oldContent = vcs.headContent;
     const newContent = state.currentContent;
@@ -179,7 +153,7 @@ export class CommitDialog {
     `;
   }
 
-  _bindEvents(hasCachedIdentity, isDetached) {
+  _bindEvents(hasCachedIdentity) {
     const closeBtn = this.el.querySelector('#commit-close');
     const cancelBtn = this.el.querySelector('#commit-cancel');
     const submitBtn = this.el.querySelector('#commit-submit');
@@ -198,19 +172,15 @@ export class CommitDialog {
       if (e.key === 'Escape') state.closePanel();
     }, { once: true });
 
-    submitBtn?.addEventListener('click', () => this._submit(hasCachedIdentity, isDetached));
+    submitBtn?.addEventListener('click', () => this._submit(hasCachedIdentity));
 
-    // Ctrl/Cmd+Enter in message or branch field to submit
-    ['#commit-message', '#commit-branch'].forEach(sel => {
-      this.el.querySelector(sel)?.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-          this._submit(hasCachedIdentity, isDetached);
-        }
-      });
+    // Ctrl/Cmd+Enter in the message field to submit
+    this.el.querySelector('#commit-message')?.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') this._submit(hasCachedIdentity);
     });
   }
 
-  async _submit(hasCachedIdentity, isDetached) {
+  async _submit(hasCachedIdentity) {
     const prefs = loadUserPrefs();
     const errEl = this.el.querySelector('#commit-error');
 
@@ -225,29 +195,14 @@ export class CommitDialog {
       author = prefs.name;
       email = prefs.email;
     } else {
-      author = this.el.querySelector('#commit-author')?.value.trim();
-      email = this.el.querySelector('#commit-email')?.value.trim();
-      if (!author) { setError('Author name is required.'); return; }
-      if (!email || !email.includes('@')) { setError('A valid email is required.'); return; }
-    }
-
-    // Branch name (detached only)
-    const branchName = isDetached
-      ? this.el.querySelector('#commit-branch')?.value.trim()
-      : undefined;
-    if (isDetached && !branchName) {
-      setError('A branch name is required when committing from a historical commit.');
-      return;
-    }
-    if (branchName && !/^[A-Za-z0-9/_-]+$/.test(branchName)) {
-      setError('Branch name may only contain letters, numbers, /, _ and -');
-      return;
+      author = this.el.querySelector('#commit-author')?.value.trim() || '';
+      email = this.el.querySelector('#commit-email')?.value.trim() || '';
+      if (email && !email.includes('@')) { setError('That email doesn’t look right.'); return; }
     }
 
     const message = this.el.querySelector('#commit-message')?.value.trim() || '';
     const tag = this.el.querySelector('#commit-tag')?.value.trim();
 
-    // Commit messages are optional now.
     if (tag && !/^\d+\.\d+\.\d+/.test(tag)) {
       setError('Tag must be a valid SemVer string (e.g. 1.2.3).');
       return;
@@ -256,10 +211,10 @@ export class CommitDialog {
     errEl.hidden = true;
     const submitBtn = this.el.querySelector('#commit-submit');
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Committing…';
+    submitBtn.textContent = 'Saving…';
 
     // Cache identity for next time (skip if already cached)
-    if (!hasCachedIdentity) {
+    if (!hasCachedIdentity && (author || email)) {
       saveUserPrefs({ name: author, email });
     }
 
@@ -269,13 +224,12 @@ export class CommitDialog {
         email,
         message,
         tag: tag || null,
-        branchName: branchName || undefined
       });
       state.closePanel();
     } catch (err) {
-      setError(`Commit failed: ${err.message}`);
+      setError(`Save failed: ${err.message}`);
       submitBtn.disabled = false;
-      submitBtn.innerHTML = `${iconCommit()} Commit`;
+      submitBtn.innerHTML = `${iconCommit()} Save`;
     }
   }
 }

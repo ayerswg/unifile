@@ -56,7 +56,6 @@ export const PANELS = {
   NONE: null,
   HISTORY: 'history',
   BLAME: 'blame',
-  MERGE: 'merge',
   EXPORT: 'export',
   COMMIT: 'commit',
   COMMENTS: 'comments',
@@ -95,20 +94,26 @@ class AppState extends EventBus {
     /** @type {{ name: string, email: string }} Cached user identity */
     this.user = { name: '', email: '' };
 
-    /** @type {{ content: string, fromHash: string }|null} Single-slot auto-stash */
-    this.stash = null;
-
     /** @type {{ left: string, right: string }|null} Active diff view (hash | 'WORKING') */
     this.diff = null;
 
     /** @type {{ message: string, tag?: string }|null} Draft carried into the commit dialog */
     this.pendingCommit = null;
 
-    /** @type {FileSystemFileHandle|null} PWA file handle */
-    this.fileHandle = null;
+    /** @type {import('../core/library.js').Library|null} The document library (PWA; null in a quine) */
+    this.library = null;
 
-    /** @type {string|null} PWA document ID for IDB */
+    /** @type {string|null} The open document's library record id (PWA) */
     this.docId = null;
+
+    /**
+     * The open document's device-file link, mirrored from its library record:
+     * `fileName` (what it was written as), `savedAt`, `savedHead` (the head
+     * commit that write carried) and `saved` (the current state IS what the
+     * device holds).  Null until the document has been written out once.
+     * @type {{ fileName: string|null, savedAt: number|null, savedHead: string|null, saved: boolean, linked: boolean }|null}
+     */
+    this.deviceFile = null;
 
     /** @type {boolean} Whether the DSL libs are ready */
     this.dslReady = false;
@@ -178,8 +183,9 @@ class AppState extends EventBus {
     return this.isDirty ? '*' : '';
   }
 
+  /** Always false now — history is one linear line (kept for older callers). */
   get isDetached() {
-    return this.vcs?.isDetached ?? false;
+    return false;
   }
 
   get title() {

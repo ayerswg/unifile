@@ -87,7 +87,6 @@ export class PianoRoll {
     // A different document arriving (checkout / branch switch) re-fits the view;
     // ordinary edits must NOT — the user's scroll/zoom position stays put.
     state.on('checkout',      () => { this._viewInited = false; });
-    state.on('branch-switch', () => { this._viewInited = false; });
 
     // Leaving the ABC DSL closes the roll (the toggle only exists for ABC).
     state.on('change', () => {
