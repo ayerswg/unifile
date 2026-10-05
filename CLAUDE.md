@@ -272,6 +272,59 @@ Three things landed in 2026-10 — all offline, nothing fetched:
 - `exp.export(content, { title })` — the export dialog now passes the document title (window title
   / HTML `<title>`); other DSL exporters ignore the second argument.
 
+## {diagram} — Mermaid 12 (`src/dsl/mermaid.js`, upgraded 2026-10)
+
+The {diagram} app bundles **mermaid 12** whole (was 10.9 — the `@{ shape: … }` node syntax
+arrived in 11.3 and simply didn't parse). Everything mermaid ships works offline: every diagram
+type (flowchart, sequence, class, state, ER, gantt, pie, journey, gitGraph, mindmap, timeline,
+quadrant, requirement, C4, kanban, architecture-beta, packet-beta, xychart-beta, sankey-beta,
+radar-beta, treemap-beta, block-beta, …), `look: handDrawn` (roughjs), and BOTH layout engines.
+
+- **ELK is bundled now — do not re-add the elkjs stub.** mermaid 12 made `layout: elk` the
+  DEFAULT for flowcharts/class/state/ER (elkjs ships inside mermaid itself, no separate
+  `@mermaid-js/layout-elk`), so the old esbuild plugin that stubbed `elkjs/` out of the bundle
+  turned EVERY flowchart into "ELK layout is not included in this build" (the stub was worth
+  ~1.4 MB unminified; the quine went 1.6 → 2.8 MB with the whole upgrade). `layout: dagre` still
+  selects dagre per document.
+- **Mermaid's own front matter (`config:` / `displayMode:`) is forwarded from the DOCUMENT's
+  front matter** (`src/core/mermaid-front-matter.js`, pure, `test/mermaid-front-matter.test.mjs`).
+  Since mermaid 11 `look`, `layout`, `theme` and per-diagram config are set ONLY in a YAML
+  front matter — which in unifile is the document's block and is stripped by the layout before
+  the body reaches `render()`. `prepareMermaidSource(text, docFrontMatterYaml)` re-prepends the
+  RAW `config:`/`displayMode:` lines as a mermaid front matter block (raw, so mermaid's YAML
+  parser types numbers/booleans itself); `title:` is deliberately NOT forwarded (it is the
+  document title and would be drawn into every diagram). The live preview reads the document
+  from `state.currentContent` (`_docFrontMatterYaml`); exports receive the full document and
+  strip+forward the same way, so preview = export. The linter parses the same forwarded source
+  and maps line numbers back (`prefixLines`); a bad `config:` lands on the front matter's
+  `config:` line (js-yaml's `(line:col)` message). `%%{init: …}%%` directives still work.
+- **Node ids changed**: mermaid 12 svg node groups are `mermaid-<n>-flowchart-<id>-<k>` (the
+  svg id first, then the diagram type) and `look: handDrawn` draws them as `g.rough-node`, not
+  `g.node` — `_annotateFlowNodes` handles both (click-back → source line); its node-id word
+  boundary accepts `@` (`A@{…}`), `:` (`A:::class`) and `&`.
+- **The preview's spinner timer must not wipe a render in progress** (`preview.js
+  _armSpinner`). Layout renderers clear the pane and append parts synchronously, then await each
+  DSL render IN PLACE; the old 300 ms `innerHTML = spinner` detached the part the first mermaid
+  12 render (ELK warm-up, >300 ms minified) was still drawing into — the svg landed in a
+  disconnected element and the pane kept the spinner (real bug, found on upgrade). The timer now
+  snapshots `content.firstElementChild` and stands down when the renderer has already replaced it.
+- **Editor intelligence**: `@{` + attribute names are highlighted (`MERMAID_NODE_ATTRS`);
+  inside `@{ … }` the completion offers the attribute keys and, after `shape:`, every shape
+  short name + alias (`MERMAID_SHAPES`, scraped from mermaid's shape table — regenerate the list
+  when upgrading); diagram-type completion/hover covers the 12.x types; `detect()` too. The DSL
+  help modal (`topbar.js DSL_HELP.mermaid`) has "Node shapes @{ }", "Look, layout & theme" and the
+  newer diagram types.
+- **Icons are the one gap**: `@{ icon: … }` / architecture `(logos:…)` need an iconify pack via
+  `mermaid.registerIconPacks` (mermaid fetches nothing itself). No pack is bundled — only the
+  architecture built-ins (cloud/database/disk/internet/server) draw. Bundling a pack is a size
+  decision, not a code one.
+- mermaid 12 leaves its scratch container `#d<id>` in `<body>` after a parse error — `render()`'s
+  catch removes `#<id>` AND `#d<id>`.
+- esbuild's IIFE build inlines mermaid's lazy `import()` chunks (no warnings); `npm test` is pure
+  Node and never loads mermaid. Verify with Playwright against the built quine
+  (`__unifile._components.editor.setValue(src)`, then wait for a NEW `.preview-pane svg` id —
+  renders are debounced, a stale svg is still there).
+
 ## Mermaid zoom & pan (`src/dsl/mermaid-zoom.js`, 2026-09)
 
 Every live-preview Mermaid diagram is wrapped in a `.uf-mmd-stage` that zooms and pans **by rewriting the svg `viewBox`** (crisp at any depth; a CSS transform rasterizes and blurs — uDraft's plan trick). Print layouts (`.uf-slide-frame`/`.uf-doc-page`) keep the plain svg; exports are untouched.

@@ -940,6 +940,7 @@ Content on page 2.</code></pre>
     docsLabel: 'Mermaid Docs',
     sections: [
       {
+        group: 'Flowcharts',
         title: 'Flowchart',
         content: `<pre><code>flowchart TD
     A[Start] --> B{Decision}
@@ -947,6 +948,34 @@ Content on page 2.</code></pre>
     B -->|No| D[Skip]
     C --> E[End]</code></pre>
 <p class="help-note">Directions: <code>TD</code> top-down, <code>LR</code> left-right, <code>BT</code>, <code>RL</code>. Node shapes: <code>[rect]</code> <code>(rounded)</code> <code>{diamond}</code> <code>((circle))</code> <code>[/parallelogram/]</code></p>`
+      },
+      {
+        group: 'Flowcharts',
+        title: 'Node shapes @{ }',
+        content: `<pre><code>flowchart TD
+    A@{ shape: manual-file, label: "File Handling" }
+    B@{ shape: manual-input, label: "User Input" }
+    C@{ shape: docs, label: "Multiple Documents" }
+    D@{ shape: procs, label: "Process Automation" }
+    E@{ shape: paper-tape, label: "Paper Records" }
+    A --> B --> C --> D --> E</code></pre>
+<p class="help-note"><code>id@{ shape: …, label: "…" }</code> picks any of mermaid's ~30 shapes by name: <code>rect</code> <code>rounded</code> <code>stadium</code> <code>subproc</code> <code>cyl</code> <code>circle</code> <code>diamond</code> <code>hex</code> <code>lean-r</code> <code>lean-l</code> <code>trap-t</code> <code>trap-b</code> <code>dbl-circ</code> <code>text</code> <code>notch-rect</code> <code>lin-rect</code> <code>sm-circ</code> <code>fr-circ</code> <code>fork</code> <code>hourglass</code> <code>brace</code> <code>bolt</code> <code>doc</code> <code>docs</code> <code>lin-doc</code> <code>tag-doc</code> <code>delay</code> <code>h-cyl</code> <code>lin-cyl</code> <code>disk</code> <code>das</code> <code>curv-trap</code> <code>div-rect</code> <code>tri</code> <code>flip-tri</code> <code>win-pane</code> <code>f-circ</code> <code>cross-circ</code> <code>notch-pent</code> <code>sl-rect</code> <code>st-rect</code> <code>procs</code> <code>bow-rect</code> <code>tag-rect</code> <code>paper-tape</code> <code>flag</code> <code>odd</code>. Type <code>shape:</code> for the full list with autocomplete.</p>`
+      },
+      {
+        group: 'Flowcharts',
+        title: 'Look, layout & theme',
+        content: `<pre><code>---
+title: Order flow
+config:
+  look: handDrawn
+  layout: elk
+  theme: forest
+---
+flowchart LR
+    A[Order] --> B{In stock?}
+    B -- yes --> C[Ship]
+    B -- no  --> D[Back-order]</code></pre>
+<p class="help-note">Mermaid's <code>config:</code> lives in the document's front matter and applies to every diagram: <code>look</code> = <code>classic</code> · <code>handDrawn</code> · <code>neo</code>; <code>layout</code> = <code>elk</code> (default, best with many edges) · <code>dagre</code>; <code>theme</code> = <code>default</code> · <code>dark</code> · <code>forest</code> · <code>neutral</code> · <code>base</code>; plus per-diagram keys such as <code>flowchart: { curve: basis }</code>. A <code>%%{init: {…}}%%</code> directive in the body still works too.</p>`
       },
       {
         title: 'Sequence Diagram',
@@ -1028,6 +1057,69 @@ Content on page 2.</code></pre>
       Subtopic 2
     Topic B
       Subtopic 3</code></pre>`
+      },
+      {
+        title: 'Timeline',
+        content: `<pre><code>timeline
+    title History of unifile
+    2026-07 : Dedicated apps
+    2026-09 : {slides} : Site plans
+    2026-10 : Inline comments</code></pre>`
+      },
+      {
+        title: 'Kanban',
+        content: `<pre><code>kanban
+  Todo
+    [Write the docs]
+    [Fix the lint]@{ assigned: 'me', priority: 'High' }
+  In progress
+    [Ship mermaid 12]
+  Done
+    [Zoom &amp; pan]</code></pre>`
+      },
+      {
+        title: 'XY Chart',
+        content: `<pre><code>xychart-beta
+    title "Monthly revenue"
+    x-axis [jan, feb, mar, apr]
+    y-axis "Revenue (k)" 0 --> 100
+    bar  [30, 55, 70, 90]
+    line [25, 50, 65, 85]</code></pre>`
+      },
+      {
+        title: 'Architecture',
+        content: `<pre><code>architecture-beta
+    group api(cloud)[API]
+    service db(database)[Database] in api
+    service disk(disk)[Storage] in api
+    service server(server)[Server] in api
+    db:L -- R:server
+    disk:T -- B:server</code></pre>
+<p class="help-note">Built-in icons: <code>cloud</code> <code>database</code> <code>disk</code> <code>internet</code> <code>server</code>. Other icon sets (<code>logos:…</code>, <code>@{ icon: … }</code>) need an icon pack, which this offline build does not ship.</p>`
+      },
+      {
+        title: 'Packet',
+        content: `<pre><code>packet-beta
+0-15: "Source Port"
+16-31: "Destination Port"
+32-63: "Sequence Number"
+64-95: "Acknowledgment Number"</code></pre>`
+      },
+      {
+        title: 'Block Diagram',
+        content: `<pre><code>block-beta
+columns 3
+  a["Frontend"] b["API"] c[("DB")]
+  a --> b
+  b --> c</code></pre>`
+      },
+      {
+        title: 'Sankey',
+        content: `<pre><code>sankey-beta
+Solar,Electricity,60
+Wind,Electricity,40
+Electricity,Homes,70
+Electricity,Industry,30</code></pre>`
       },
       {
         title: 'Comments',

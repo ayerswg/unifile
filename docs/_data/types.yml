@@ -27,7 +27,7 @@
     that works with no server and no account, and keeps its own version history.
   features:
     - Works 100% offline — no server, no account, no sync
-    - Live Mermaid preview (flowcharts, sequence, gantt, …)
+    - Live preview of every Mermaid 12 diagram — `@{ shape }` nodes, hand-drawn look, ELK layout
     - Built-in git-style branches, commits, and history
   pwa: /pwa-mer/
   download: /dl/unifile.mer.html
