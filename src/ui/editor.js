@@ -1015,6 +1015,19 @@ export class Editor {
   focus() { this._view?.focus(); }
   hasFocus() { return !!this._view?.hasFocus; }
 
+  /**
+   * Put the selection on a range (a search hit from the library) and scroll it
+   * into view; focuses on desktop (phones keep the keyboard down).
+   */
+  goTo(from, to = from) {
+    if (!this._view) return;
+    const len = this._view.state.doc.length;
+    const a = Math.max(0, Math.min(from ?? 0, len)), h = Math.max(a, Math.min(to ?? a, len));
+    const mobile = window.matchMedia('(max-width: 640px)').matches;
+    this._view.dispatch({ selection: { anchor: a, head: h }, scrollIntoView: true });
+    if (!mobile) this._view.focus();
+  }
+
   /** Undo / redo through CM's history (the phone action button's Undo/Redo). */
   undo() { return this._view ? undo(this._view) : false; }
   redo() { return this._view ? redo(this._view) : false; }

@@ -49,7 +49,7 @@ export class PaneSwitch {
     this._menuOpen = false;
     this._mode = null;             // 'normal' | 'diff' — which skeleton is built
 
-    for (const ev of ['change', 'content-change', 'checkout', 'active-section-change']) {
+    for (const ev of ['change', 'content-change', 'checkout', 'active-section-change', 'device-change']) {
       state.on(ev, () => this.render());
     }
     state.on('diff-change', () => { this._menuOpen = false; this.render(); });
@@ -154,7 +154,7 @@ export class PaneSwitch {
     n.eye.setAttribute('aria-pressed', String(renderActive));
     n.eye.setAttribute('aria-label', renderActive ? 'Back to the editor' : 'Show the rendered document');
 
-    n.dot.hidden = !state.isDirty;
+    n.dot.hidden = !state.needsSave;
 
     if (mode === 'diff') {
       const d = state.diff;

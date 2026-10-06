@@ -17,13 +17,15 @@ import {
   loadDraft,
   clearDraft,
   requestPersistentStorage,
-  markBackedUp,
   idbLibraryStore,
   loadFromIDB,
 } from '../core/storage.js';
-import { Library, localPrefs, emptyData, isSavedToDevice } from '../core/library.js';
 import {
-  saveDocumentToDevice, writeLinkedFile, pickDocumentFromDevice, adoptDeviceDocument,
+  Library, localPrefs, emptyData, isSavedToDevice, nextVersion, isValidApiName, suggestApiName,
+  versionFileName, LAST_VERSION,
+} from '../core/library.js';
+import {
+  saveVersionToDevice, pickDocumentFromDevice, adoptDeviceDocument, dataFromPickedFile,
 } from '../core/device-file.js';
 import { pruneAssets } from '../core/assets.js';
 import { isEncrypted, decryptData } from '../core/crypto.js';
@@ -41,7 +43,6 @@ import { checkForUpdate, initServiceWorker } from './update-check.js';
 import { PaneSwitch } from './pane-switch.js';
 import { ActionFab } from './action-fab.js';
 import { DiffView, DiffBar, DiffPanes } from './diff-view.js';
-import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
 import { migrateCommentThreads } from './comments.js';
 import { ExportDialog } from './export-dialog.js';
@@ -164,10 +165,10 @@ export class App {
     window.addEventListener('pagehide', () => this._persistNow());
 
     // 5d. The file-level verbs (title dropdown, hamburger menu, shortcuts):
-    //     Save (a history snapshot), Save to device (the .unifile.json written
-    //     out of the sandbox), Open from device, the library.
-    state.on('save-document',    () => this.saveDocument());
-    state.on('save-to-device',   () => this._saveToDevice());
+    //     Save (the next version written to the device + its snapshot in
+    //     history), Save as a new major version, Open from device, the library.
+    state.on('save-document',    (o) => this.saveDocument(o && typeof o === 'object' && ('major' in o || 'message' in o) ? o : {}));
+    state.on('save-major',       () => this.saveDocument({ major: true }));
     state.on('open-from-device', () => this._openFromDevice());
     state.on('new-document',     () => this._newDocument());
     state.on('restore-version',  (hash) => this._restoreVersion(hash));
@@ -263,7 +264,6 @@ export class App {
         <div id="uf-diff-bar"></div>
       </div>
       <div id="uf-panels">
-        <div id="uf-commit-panel"   style="display:none"></div>
         <div id="uf-blame-panel"    style="display:none"></div>
         <div id="uf-export-panel"   style="display:none"></div>
         <div id="uf-settings-panel" style="display:none"></div>
@@ -338,7 +338,7 @@ export class App {
     // The document library — the list behind the back arrow (phone pane /
     // desktop drawer).  Quines have no library; the element stays empty.
     this._components.library = new LibraryPane(document.getElementById('uf-library'), {
-      open:           (id) => this._openRecord(id),
+      open:           (id, hit) => this._openRecord(id, hit),
       create:         ()   => this._newDocument(),
       remove:         (id) => this._removeRecord(id),
       duplicate:      (id) => this._duplicateRecord(id),
@@ -346,11 +346,6 @@ export class App {
       openFromDevice: ()   => this._openFromDevice(),
       close:          ()   => this._showLibrary(false),
     });
-
-    this._components.commit = new CommitDialog(
-      document.getElementById('uf-commit-panel'),
-      { onCommit: handlers.onCommit }
-    );
 
     this._components.blame = new BlameView(
       document.getElementById('uf-blame-panel')
@@ -375,27 +370,11 @@ export class App {
   _makeHandlers() {
     return {
       /**
-       * Save handler — a snapshot on the document's single line of history.
-       * Reached from the Save pill / Cmd+S (no message), the pending node in
-       * the history list and the full Save dialog (message + version).
+       * Save handler — the next version written to the device and the same
+       * snapshot in history.  Reached from the Save pill / Cmd+S (no message)
+       * and the pending node in the history list (message + major switch).
        */
-      onCommit: async ({ author, email, message, tag }) => {
-        if (!state.isDirty) return;
-        await state.vcs.commit({
-          content: state.currentContent,
-          message: message || '',
-          author: author || 'anonymous',
-          email: email || '',
-          tag,
-        });
-        const newData = { ...state.data, ...state.vcs.serialize() };
-        state.update({ data: newData, isDirty: false });
-        clearDraft();
-        // The record carries the new head; a linked device file follows it.
-        await this._persistNow();
-        await this._writeLinkedFile({ request: true });
-        this._refreshPersistenceBanner();
-      },
+      onSave: ({ message, major } = {}) => this.saveDocument({ message, major }),
 
       renderPreview: async () => {
         const preview = this._components.preview;
@@ -411,27 +390,112 @@ export class App {
         return this._components.preview?.exportSlidesPptx();
       },
 
-      onSaveToDevice: () => this._saveToDevice(),
       onNewDocument:  () => this._newDocument(),
     };
   }
 
   // ---------------------------------------------------------------------------
-  // Saving — three layers, all on the device (see core/library.js):
-  //   remember  → every edit lands in the library record (debounced)
-  //   save      → a history snapshot (onCommit above)
-  //   to device → the .unifile.json written out of the browser sandbox
+  // Saving — two layers, both on the device (see core/library.js):
+  //   remember → every edit lands in the library record (debounced); the app
+  //              remembering, not a save
+  //   SAVE     → the one save verb: the text written to the device as
+  //              `<name>-<version>.uni` (A00, A01 … a major bump → B00) and the
+  //              same snapshot tagged in history.  The device write comes
+  //              first: a cancelled save burns no version, leaves no snapshot.
   // ---------------------------------------------------------------------------
 
+  /** Whether there is anything to save (see state.needsSave). */
+  get needsSave() { return state.needsSave; }
+
   /**
-   * Save now: snapshot the working text into history with no message (the
-   * iA-style save).  A message / version can be added from the history pane's
-   * pending node or the Save dialog instead.
+   * Save: the next version to the device (+ its snapshot in history).
+   * @param {object} [o]
+   * @param {string}  [o.message]  an optional note on this version
+   * @param {boolean} [o.major]    bump the letter (A07 → B00) instead of the number
    */
-  async saveDocument() {
-    if (!state.isDirty) { await this._writeLinkedFile({ request: true }); return; }
-    const prefs = loadUserPrefs();
-    await this._makeHandlers().onCommit({ author: prefs.name, email: prefs.email, message: '' });
+  async saveDocument({ message = '', major = false } = {}) {
+    if (this._saving) return 'busy';
+    if (!this.needsSave && !major) return 'clean';
+    this._saving = true;
+    try {
+      const apiName = await this._ensureApiName();
+      if (!apiName) return 'cancelled';
+      const version = nextVersion(state.data?.savedVersion, { major });
+      if (!version) {
+        window.alert(`This document is at ${LAST_VERSION}, the last version the scheme allows. Duplicate it to keep going.`);
+        return 'exhausted';
+      }
+      const text = state.currentContent;
+      const { result, fileName, handle, error } = await saveVersionToDevice({
+        library: state.library, docId: state.docId, text, apiName, version, mark: false,
+      });
+      if (result === 'failed') { window.alert('Could not write the file: ' + (error?.message ?? error)); return result; }
+      if (result === 'cancelled') return result;
+
+      // The file is on the device: now the matching snapshot in history.
+      const prefs = loadUserPrefs();
+      await state.vcs.commit({
+        content: text,
+        message: message || '',
+        author: (prefs.name || '').trim() || 'anonymous',
+        email: (prefs.email || '').trim() || '',
+        tag: version,
+      });
+      state.update({ data: { ...state.data, ...state.vcs.serialize(), apiName, savedVersion: version }, isDirty: false });
+      clearDraft();
+      if (state.library && state.docId) {
+        await this._persistNow();
+        const rec = await state.library.markSaved(state.docId, { fileName, version, ...(handle ? { handle } : {}) });
+        this._setDeviceFile(_deviceFileOf(rec));
+      } else {
+        // A quine has no record: the save is remembered on the data object.
+        this._setDeviceFile({ fileName, savedAt: Date.now(), savedHead: state.headHash, saved: true, linked: false, version });
+      }
+      this._refreshPersistenceBanner();
+      state.emit('saved', { version, fileName, result });
+      return result;
+    } finally {
+      this._saving = false;
+    }
+  }
+
+  /**
+   * The document's name — fixed at genesis, carried by its file names
+   * (`<name>-<version>.uni`).  A document created before names existed (or
+   * migrated) is asked once, at its first save.  Null when the user declines.
+   */
+  async _ensureApiName() {
+    if (state.data?.apiName) return state.data.apiName;
+    const apiName = await this._promptApiName(suggestApiName(state.title), { title: state.title, exceptId: state.docId });
+    if (!apiName) return null;
+    // A document still called "Untitled" takes its name as its title too.
+    const title = (!state.title || state.title === 'Untitled') ? apiName : state.title;
+    state.update({ data: { ...state.data, apiName, title } });
+    await this._persistNow();
+    return apiName;
+  }
+
+  /**
+   * Ask for a document name until it is valid and free (or cancelled).
+   * Letters, digits, `_`, `.` and `-`; it becomes the file name's stem.
+   * `exceptId` = the document being named (its own record doesn't clash);
+   * a NEW document excepts nothing.
+   */
+  async _promptApiName(suggested = '', { title, exceptId = null } = {}) {
+    let hint = '';
+    for (;;) {
+      const raw = window.prompt(
+        `${hint}Name this document${title && title !== 'Untitled' ? ` (“${title}”)` : ''}.\n` +
+        `It names its files — ${versionFileName(suggested || 'name', 'A00')} — and can't be changed later.\n` +
+        `Letters, digits, _ . and - only.`, suggested);
+      if (raw == null) return null;
+      const name = raw.trim();
+      if (!isValidApiName(name)) { hint = `“${name}” isn't a valid name. `; suggested = suggestApiName(name) || suggested; continue; }
+      if (state.library && !(await state.library.isApiNameFree(name, { exceptId }))) {
+        hint = `“${name}” is already a document here. `; suggested = name; continue;
+      }
+      return name;
+    }
   }
 
   /** Debounced persist of the whole document state (library record or draft). */
@@ -444,6 +508,10 @@ export class App {
     clearTimeout(this._persistTimer);
     if (IS_QUINE || !state.library || !state.docId) {
       if (state.isDirty) saveDraft(state.currentContent, state.headHash);
+      // No record to compare against: the device holds the last save until
+      // the text moves off it.
+      const dev = state.deviceFile;
+      if (dev) this._setDeviceFile({ ...dev, saved: !state.isDirty && state.headHash === dev.savedHead });
       return;
     }
     const docId = state.docId;
@@ -465,50 +533,14 @@ export class App {
   _setDeviceFile(next) {
     const prev = state.deviceFile;
     state.deviceFile = next;
-    const key = (d) => d ? `${d.saved}|${d.linked}|${d.fileName}|${d.savedHead}` : '';
+    const key = (d) => d ? `${d.saved}|${d.linked}|${d.fileName}|${d.savedHead}|${d.version}` : '';
     if (key(prev) !== key(next)) state.emit('device-change', next);
   }
 
   /**
-   * Write the document through its linked File System Access handle, if it has
-   * one (after a Save, so the device file follows the history).  `request`
-   * lets the permission prompt show (only inside a gesture).
-   */
-  async _writeLinkedFile({ request = false } = {}) {
-    const saved = await writeLinkedFile({
-      library: state.library, docId: state.docId, data: this._currentDataObject(), request,
-    });
-    if (!saved) return false;
-    this._setDeviceFile(_deviceFileOf(saved));
-    this._refreshPersistenceBanner();
-    return true;
-  }
-
-  /**
-   * Save to device: the document + full history as a small plain-text
-   * `.unifile.json`, out of the browser sandbox (core/device-file.js: a linked
-   * file on Chromium, the share sheet on iOS, else a download).  Must run from
-   * a user gesture.
-   */
-  async _saveToDevice() {
-    const { result, record, error } = await saveDocumentToDevice({
-      library: state.library, docId: state.docId, data: this._currentDataObject(), title: state.title,
-    });
-    if (result === 'failed') { window.alert('Could not write the file: ' + (error?.message ?? error)); return result; }
-    if (result === 'cancelled') return result;
-    if (record) {
-      this._setDeviceFile(_deviceFileOf(record));
-    } else if (!state.library && state.headHash && !state.isDirty) {
-      markBackedUp(location.href, state.headHash);     // quine: the old watermark
-    }
-    this._refreshPersistenceBanner();
-    return result;
-  }
-
-  /**
-   * Open from device: a `.unifile.json` picked from the device becomes a new
-   * library document (linked to its file on Chromium, so Save writes back to
-   * it).  In a quine it replaces the document in memory.
+   * Open from device: a `<name>-<version>.uni` (or an older `.unifile.json`)
+   * picked from the device becomes a new library document, named after the
+   * file and starting at its version.  In a quine it replaces the document.
    */
   async _openFromDevice() {
     let picked;
@@ -519,13 +551,17 @@ export class App {
       return;
     }
     if (!picked) return;
+    const prefs = loadUserPrefs();
+    const identity = { author: (prefs.name || '').trim() || 'anonymous', email: (prefs.email || '').trim() || '' };
     if (!state.library) {
-      if (state.isDirty && !confirm('Open this file and discard your unsaved changes?')) return;
-      this._loadDataObject(picked.data);
+      if (this.needsSave && state.currentContent && !confirm('Open this file and discard your unsaved changes?')) return;
+      this._loadDataObject(await dataFromPickedFile(state.data?.dslType ?? 'markdown', picked, identity));
+      const d = state.data;
+      this._setDeviceFile(d.savedVersion ? { fileName: picked.fileName, savedAt: Date.now(), savedHead: state.headHash, saved: true, linked: false, version: d.savedVersion } : null);
       return;
     }
     await this._persistNow();
-    const rec = await adoptDeviceDocument(state.library, picked);
+    const rec = await adoptDeviceDocument(state.library, picked, identity);
     await this._openRecord(rec.id);
   }
 
@@ -533,7 +569,11 @@ export class App {
   // The library — many documents per app
   // ---------------------------------------------------------------------------
 
-  /** Show / hide the document list (phone: a pane; desktop: a left drawer). */
+  /**
+   * Show / hide the document list (phone: a pane; desktop: a collapsible
+   * sidebar on the left — it stays open while you work, and whether it was
+   * open is remembered).
+   */
   _showLibrary(open) {
     if (!state.library) return;
     const root = document.getElementById('unifile-app');
@@ -542,37 +582,57 @@ export class App {
       return;
     }
     root.toggleAttribute('data-library', open);
+    try { localStorage.setItem('uf_library_open', open ? '1' : '0'); } catch { /* private mode */ }
     if (open) this._components.library?.refresh();
     state.emit('library-change', { open });
+    requestAnimationFrame(() => this._components.editor?.refresh());
   }
 
-  /** Switch the open document to a library record. */
-  async _openRecord(id) {
+  /**
+   * Switch the open document to a library record; with `hit` ({from, to},
+   * a search hit) the editor lands on that text.  On desktop the sidebar
+   * stays open (it is a panel, not a drawer); phones go to the editor.
+   */
+  async _openRecord(id, hit = null) {
     if (!state.library || !id) return;
-    if (id === state.docId) { this._showLibrary(false); return; }
-    await this._persistNow();                      // the outgoing document's last edits
-    const rec = await state.library.get(id);
-    if (!rec) return;
-    state.closeDiff?.();
-    state.docId = rec.id;
-    state.library.currentId = rec.id;
-    this._setDeviceFile(_deviceFileOf(rec));
-    this._loadDataObject(rec.data);
-    this._showLibrary(false);
+    if (id !== state.docId) {
+      await this._persistNow();                      // the outgoing document's last edits
+      const rec = await state.library.get(id);
+      if (!rec) return;
+      state.closeDiff?.();
+      state.docId = rec.id;
+      state.library.currentId = rec.id;
+      this._setDeviceFile(_deviceFileOf(rec));
+      this._loadDataObject(rec.data);
+    }
+    if (_isMobile()) this._showLibrary(false);
+    if (hit) this._components.editor?.goTo(hit.from, hit.to);
+    else if (!_isMobile()) this._components.editor?.focus?.();
   }
 
-  /** A fresh, empty document in the library (quine: replaces the document). */
+  /**
+   * A fresh, empty document in the library (quine: replaces the document).
+   * Its name is asked for here, at genesis — it is fixed for good and names
+   * every file the document is saved as.
+   */
   async _newDocument() {
+    if (!state.library && this.needsSave && state.currentContent
+        && !confirm('Start a new document? Unsaved changes will be lost.')) return;
+    const apiName = await this._promptApiName('');
+    if (!apiName) return;
     const data = emptyData(state.data?.dslType ?? 'markdown', {
-      title: 'Untitled',
+      title: apiName,
       version: state.data?.version,
       // Keep the user's configured extension slots (e.g. abc soundfont).
-      extra: state.data?.pluginExtensions ? { pluginExtensions: { ...state.data.pluginExtensions } } : {},
+      extra: {
+        apiName,
+        ...(state.data?.pluginExtensions ? { pluginExtensions: { ...state.data.pluginExtensions } } : {}),
+      },
     });
     if (!state.library) {
-      if (state.isDirty && !confirm('Start a new document? Unsaved changes will be lost.')) return;
       state.closeDiff?.();
       this._loadDataObject(data);
+      this._setDeviceFile(null);
       return;
     }
     await this._persistNow();
@@ -586,7 +646,7 @@ export class App {
     if (!state.library) return;
     const rec = await state.library.get(id);
     if (!rec) return;
-    const where = rec.fileName ? ` The file on your device (${rec.fileName}) is not touched.` : '';
+    const where = rec.fileName ? ` The files on your device (${rec.apiName ? rec.apiName + '-…' : rec.fileName}) are not touched.` : '';
     if (!confirm(`Delete “${rec.title}” and its history from this app?${where}`)) return;
     await state.library.remove(id);
     if (id === state.docId) {
@@ -821,6 +881,12 @@ export class App {
 
     this._bindEditingChrome(root);
 
+    // Desktop: the document list is a collapsible sidebar — reopen it if it
+    // was open last time.
+    let libOpen = false;
+    try { libOpen = localStorage.getItem('uf_library_open') === '1'; } catch { /* private mode */ }
+    if (!_isMobile() && libOpen) this._showLibrary(true);
+
     // Open on the editor; re-assert a valid pane whenever we (re)enter mobile.
     if (_isMobile()) setPane('editor'); else root.removeAttribute('data-mobile-pane');
     _mql.addEventListener('change', (e) => {
@@ -946,10 +1012,10 @@ export class App {
         e.preventDefault();
         state.emit('save-document');
       }
-      // Ctrl+Shift+S → save to device
+      // Ctrl+Shift+S → save as a new major version (A07 → B00)
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
         e.preventDefault();
-        state.emit('save-to-device');
+        state.emit('save-major');
       }
       // Ctrl+Shift+O → open from device
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'O') {
@@ -1178,7 +1244,8 @@ function _deviceFileOf(rec) {
     savedAt:   rec.savedAt ?? null,
     savedHead: rec.savedKey ? (rec.savedKey.split(':')[0] || null) : null,
     saved:     isSavedToDevice(rec),
-    linked:    !!rec.handle,
+    linked:    rec.handle?.kind === 'directory',
+    version:   rec.version ?? null,
   };
 }
 

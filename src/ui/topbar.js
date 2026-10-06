@@ -1,19 +1,25 @@
 /**
  * Desktop top bar
  *
- *   [‹ documents]  [menu ▾]  [editable title]          [Save ●][hash ▾]
+ *   [‹ documents]  [menu ▾]  [editable title]          [Save A04 ●][▾]
  *
- *   - ‹ opens the document library (the drawer on the left; see library-pane.js)
- *   - Menu       → file-level verbs (new, save, save to device, open from
+ *   - ‹ toggles the document list (the sidebar on the left; see library-pane.js)
+ *   - Menu       → file-level verbs (new, save, save as major, open from
  *                  device…), help, blame, export, comments, settings
- *   - Save pill  → appears while there are unsaved changes; a click saves a
- *                  snapshot into history (Ctrl+S).  The ▾ half lists history.
- *   - hash pill  → the current save; its dropdown is the history list — click
- *                  a save to open the read-only diff against the working text.
+ *   - Save pill  → appears while the device is behind (changes since the last
+ *                  save, or never saved); a click writes the NEXT VERSION to
+ *                  the device — `<name>-A04.uni` — and snapshots it into
+ *                  history (Ctrl+S; Shift-click = a new major, B00).  The ▾
+ *                  half opens the history.
+ *   - version pill → the saved version (A03); its dropdown is the history —
+ *                  the pending node (note + major switch + Save) while there
+ *                  is something to save, then every version: click one to
+ *                  open the read-only diff against the working text.
  *
- * History is ONE linear line now (no branches, no detached head): a save is a
- * snapshot, a restore brings an old text back as an unsaved change.  The
- * history list is also mounted into the phone's history pane (mountCommitLog).
+ * There is ONE save — to the device — and ONE linear line of history (no
+ * branches, no detached head): each version is a snapshot, a restore brings
+ * an old text back as an unsaved change.  The history list is also mounted
+ * into the phone's history pane (mountCommitLog).
  */
 
 import { state, PANELS } from './state.js';
@@ -23,7 +29,7 @@ function dslActions(dslId) {
   try { return getDSL(dslId)?.actions ?? []; } catch { return []; }
 }
 import { shortHash } from '../core/hash.js';
-import { loadUserPrefs } from '../core/storage.js';
+import { nextVersion } from '../core/library.js';
 import { showArchivedCommentsModal } from './comments.js';
 import { listDSLs, getDSL } from '../dsl/registry.js';
 import {
@@ -64,12 +70,16 @@ export class TopBar {
   // ---------------------------------------------------------------------------
 
   render() {
-    const { isDirty } = state;
-    const hash = state.shortHeadHash;
+    const needsSave = state.needsSave;
+    const version = state.data?.savedVersion ?? null;
+    const next = state.nextSaveVersion;
     const dev = state.deviceFile;
-    const devTitle = !dev ? 'Not saved to the device yet — click to save a .unifile.json you keep'
-      : dev.saved ? `On the device${dev.fileName ? ' as ' + dev.fileName : ''}${dev.linked ? ' (linked — Save writes to it)' : ''}`
-      : `Changed since it was saved to the device${dev.fileName ? ' (' + dev.fileName + ')' : ''} — click to save again`;
+    const saveTitle = next
+      ? `Save ${next} to the device${dev?.linked ? ' (into its folder)' : ''} — Ctrl+S · Shift-click = new major version`
+      : 'Version limit reached (Z99)';
+    const versionTitle = version
+      ? `Saved as ${dev?.fileName ?? version}${dev?.savedAt ? ' ' + formatRelative(dev.savedAt) : ''} — history`
+      : 'Not saved to the device yet — history';
 
     this.el.innerHTML = `
       <div class="topbar">
@@ -91,30 +101,25 @@ export class TopBar {
 
         <div class="topbar-right">
           <div class="vcs-pill-group">
-            ${isDirty ? `
+            ${needsSave ? `
               <button class="vcs-pill commit-pill dirty commit-action-pill" id="tb-commit-action"
-                title="Save a snapshot into history (Ctrl+S)">
-                <span class="vcs-pill-text">Save</span>
-                <span class="dirty-dot" title="Unsaved changes">●</span>
+                title="${escHtml(saveTitle)}">
+                <span class="vcs-pill-text">Save${next ? ` <span class="vcs-pill-mono">${escHtml(next)}</span>` : ''}</span>
+                <span class="dirty-dot" title="Not saved to the device">●</span>
               </button>
               <button class="vcs-pill commit-pill dirty commit-caret-pill" id="tb-commit-toggle"
                 title="History">
                 <span class="vcs-pill-caret">▾</span>
               </button>
             ` : `
-              <button class="vcs-pill commit-pill" id="tb-commit-toggle"
-                title="History — current save ${escHtml(hash)}">
-                <span class="vcs-pill-text vcs-pill-mono">${escHtml(hash)}</span>
+              <button class="vcs-pill commit-pill saved" id="tb-commit-toggle"
+                title="${escHtml(versionTitle)}">
+                ${iconCheck()}
+                <span class="vcs-pill-text vcs-pill-mono">${escHtml(version ?? '—')}</span>
                 <span class="vcs-pill-caret">▾</span>
               </button>
             `}
           </div>
-          ${state.library ? `
-          <button class="vcs-pill device-pill${!dev ? ' none' : dev.saved ? ' saved' : ' stale'}" id="tb-device"
-            title="${escHtml(devTitle)} (Ctrl+Shift+S)">
-            ${dev?.saved ? iconCheck() : iconDevice()}
-            <span class="vcs-pill-text">${!dev ? 'Save to device' : dev.saved ? 'On device' : 'Save to device'}</span>
-          </button>` : ''}
         </div>
 
       </div>
@@ -123,11 +128,12 @@ export class TopBar {
         ${this._renderDslMenuList()}
       </div>
       <div class="vcs-dropdown${this._commitOpen ? ' open' : ''}" id="tb-commit-dd">
-        ${this._commitOpen ? this._renderCommitList() : ''}
+        ${this._commitOpen ? this._renderHistory() : ''}
       </div>
     `;
 
     this._bindEvents();
+    this._bindPending(this.el.querySelector('#tb-commit-dd'));
     // Keep the mobile commit-log pane (if mounted) in sync with every re-render
     // — render() fires on state 'change', which covers save/restore/open.
     this._refreshCommitLog();
@@ -145,18 +151,30 @@ export class TopBar {
 
   _refreshCommitLog() {
     if (!this._commitLogEl) return;
-    this._commitLogEl.innerHTML =
-      `<div class="commit-log-pane">${this._renderPendingNode()}${this._renderCommitList()}</div>`;
+    this._commitLogEl.innerHTML = `<div class="commit-log-pane">${this._renderHistory()}</div>`;
+    this._bindPending(this._commitLogEl);
+  }
 
-    this._commitLogEl.querySelectorAll('.dd-commit-item').forEach(item => {
+  /** The pending node (while there is something to save) + the version list. */
+  _renderHistory() {
+    return this._renderPendingNode() + this._renderCommitList();
+  }
+
+  /**
+   * Wire a rendered history (the phone pane or the desktop dropdown): version
+   * clicks → the diff, and the pending node's note / major switch / Save.
+   * Everything is class-scoped to the container, since both can be mounted
+   * at once.
+   */
+  _bindPending(root) {
+    if (!root) return;
+    root.querySelectorAll('.dd-commit-item').forEach(item => {
       item.addEventListener('click', () => {
         const hash = item.dataset.hash;
         if (hash) this._onCommitClick(hash);
       });
     });
-
-    // Pending (uncommitted) node: inline optional message + version, commit here.
-    const msg = this._commitLogEl.querySelector('#clp-msg');
+    const msg = root.querySelector('.clp-msg');
     if (msg) {
       const grow = () => {
         if (!msg.value) { msg.style.height = ''; return; }
@@ -167,61 +185,71 @@ export class TopBar {
       requestAnimationFrame(grow);
       msg.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey && (e.metaKey || e.ctrlKey)) {
-          e.preventDefault(); this._commitPending();
+          e.preventDefault(); this._savePending(root);
         }
       });
+      // Typing a note must not close the desktop dropdown.
+      msg.addEventListener('click', (e) => e.stopPropagation());
     }
-    this._commitLogEl.querySelector('#clp-commit')
-      ?.addEventListener('click', () => this._commitPending());
+    const major = root.querySelector('.clp-major');
+    const next = root.querySelector('.clp-next');
+    if (major && next) {
+      major.addEventListener('change', () => {
+        next.textContent = nextVersion(state.data?.savedVersion ?? null, { major: major.checked }) ?? '—';
+      });
+    }
+    root.querySelector('.clp-commit')?.addEventListener('click', (e) => { e.stopPropagation(); this._savePending(root); });
+    root.querySelector('.commit-log-pending')?.addEventListener('click', (e) => e.stopPropagation());
   }
 
   /**
-   * The pending node shown at the top of the history while there are unsaved
-   * changes.  It's styled distinctly from real saves (a hollow, dashed node)
-   * and carries the message field + Save inline, so a save is composed right
-   * where it will land.  Message and version are both optional.
+   * The pending node shown at the top of the history while the device is
+   * behind.  Styled distinctly from real versions (a hollow, dashed node), it
+   * carries an optional note, the version the save will write (with a switch
+   * to make it a new major) and the Save button — so a save is composed right
+   * where it will land.
    */
   _renderPendingNode() {
-    if (!state.isDirty) return '';
-    const head = state.vcs?.log?.()?.[0];
-    const suggested = head?.tag ? _incPatch(head.tag) : '';
+    if (!state.needsSave) return '';
+    const cur = state.data?.savedVersion ?? null;
+    const minor = state.nextSaveVersion, major = state.nextMajorVersion;
+    const label = !cur ? 'Never saved to the device'
+      : state.isDirty ? `Changed since ${escHtml(cur)}` : `${escHtml(cur)} not on the device`;
     return `
-      <div class="commit-log-pending" aria-label="Unsaved changes">
+      <div class="commit-log-pending" aria-label="Not saved to the device">
         <div class="clp-graph"><span class="clp-node"></span></div>
         <div class="clp-body">
-          <div class="clp-label">Unsaved changes</div>
-          <textarea class="clp-msg" id="clp-msg" rows="1" autocomplete="off"
-            placeholder="Describe this change (optional)"></textarea>
+          <div class="clp-label">${label}</div>
+          <textarea class="clp-msg" rows="1" autocomplete="off"
+            placeholder="Note on this version (optional)"></textarea>
           <div class="clp-row">
-            <input class="clp-ver" id="clp-ver" type="text" autocomplete="off"
-              placeholder="v ${escHtml(suggested || '0.0.0')}" value="${escHtml(suggested)}"
-              aria-label="Version (optional)">
-            <button class="clp-commit" id="clp-commit" type="button">Save</button>
+            <span class="clp-version">Save as <b class="clp-next">${escHtml(minor ?? '—')}</b></span>
+            ${major ? `<label class="clp-major-label" title="Start a new major version (${escHtml(major)})">
+              <input type="checkbox" class="clp-major"> major</label>` : ''}
+            <button class="clp-commit" type="button"${minor ? '' : ' disabled'}>Save</button>
           </div>
         </div>
       </div>`;
   }
 
-  _commitPending() {
-    if (this._committing || !state.isDirty || !this.handlers?.onCommit) return;
-    const message = this._commitLogEl?.querySelector('#clp-msg')?.value.trim() || '';
-    const tag     = this._commitLogEl?.querySelector('#clp-ver')?.value.trim() || undefined;
-    // Identity is optional (Settings); an unnamed save is still a save.
-    const prefs = loadUserPrefs();
-    this._committing = true;
-    Promise.resolve(this.handlers.onCommit({ author: prefs?.name, email: prefs?.email, message, tag }))
-      .catch(err => console.warn('[commit-log] commit failed:', err?.message))
-      .finally(() => { this._committing = false; this._refreshCommitLog(); });
+  _savePending(root) {
+    if (this._saving || !state.needsSave || !this.handlers?.onSave) return;
+    const message = root?.querySelector('.clp-msg')?.value.trim() || '';
+    const major   = !!root?.querySelector('.clp-major')?.checked;
+    this._saving = true;
+    Promise.resolve(this.handlers.onSave({ message, major }))
+      .catch(err => console.warn('[history] save failed:', err?.message))
+      .finally(() => { this._saving = false; this._refreshCommitLog(); });
   }
 
   _updateDirty() {
-    // Desktop: the commit pill structure changes fundamentally when dirty flips
-    // (single button ↔ split button), so that path needs a full re-render.
+    // Desktop: the save pill structure changes fundamentally when needsSave
+    // flips (single button ↔ split button), so that path needs a full re-render.
     const hasSplitBtn = !!this.el.querySelector('#tb-commit-action');
-    if (hasSplitBtn !== state.isDirty) {
+    if (hasSplitBtn !== state.needsSave) {
       this.render();
     }
-    // Keep the mobile commit-log pane's pending node in sync as edits land.
+    // Keep the mobile history pane's pending node in sync as edits land.
     this._refreshCommitLog();
   }
 
@@ -231,6 +259,8 @@ export class TopBar {
 
   _renderDslMenuList() {
     const hasCommits = (state.vcs?.log()?.length ?? 0) > 0;
+    const next = state.nextSaveVersion;
+    const major = state.nextMajorVersion;
     const activeDslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
     const dslName = DSL_HELP[activeDslId]?.name ?? activeDslId;
     return `
@@ -244,18 +274,17 @@ export class TopBar {
           <kbd>⌃⇧L</kbd>
         </li>` : ''}
         <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item${state.isDirty ? '' : ' disabled'}" id="tb-save" title="Save a snapshot into history (Ctrl+S)">
-          ${iconCommit()} Save
+        <li class="tools-menu-item${state.needsSave && next ? '' : ' disabled'}" id="tb-save"
+          title="Write the text to the device as ${escHtml(next ? `<name>-${next}.uni` : '…')} and keep the snapshot in history (Ctrl+S)">
+          ${iconCommit()} Save${next ? ` <span class="tools-menu-ver">${escHtml(next)}</span>` : ''}
           <kbd>⌃S</kbd>
         </li>
-        <li class="tools-menu-item${state.isDirty ? '' : ' disabled'}" id="tb-save-msg" title="Save with a message and an optional version">
-          ${iconCommit()} Save with message…
-        </li>
-        <li class="tools-menu-item" id="tb-save-device" title="Write the document + full history as a .unifile.json you keep (Ctrl+Shift+S)">
-          ${iconExport()} Save to device…
+        <li class="tools-menu-item${major ? '' : ' disabled'}" id="tb-save-major"
+          title="Start a new major version: the next save is ${escHtml(major ?? '—')} (Ctrl+Shift+S)">
+          ${iconCommit()} Save as new major${major ? ` <span class="tools-menu-ver">${escHtml(major)}</span>` : ''}
           <kbd>⌃⇧S</kbd>
         </li>
-        <li class="tools-menu-item" id="tb-open-device" title="Open a .unifile.json from the device (Ctrl+Shift+O)">
+        <li class="tools-menu-item" id="tb-open-device" title="Open a <name>-<version>.uni from the device (Ctrl+Shift+O)">
           ${iconImport()} Open from device…
           <kbd>⌃⇧O</kbd>
         </li>
@@ -306,9 +335,8 @@ export class TopBar {
     const log = vcs.log();
     const currentHash = state.headHash;
 
-    // Device marker: the save the device file carries (the last Save to device
-    // / linked-file write) — "saved here" is visibly distinct from "the device
-    // holds a copy".
+    // Device marker: the version the device file carries (the last save) —
+    // changed-since shows on the pending node above.
     const dev = state.deviceFile;
     const exportedHash = dev?.savedHead ?? null;
     const exportedWhen = dev?.savedAt ? formatRelative(dev.savedAt) : '';
@@ -324,10 +352,9 @@ export class TopBar {
           <li class="dd-commit-item${c.hash === currentHash ? ' current' : ''}${c.hash === exportedHash ? ' exported' : ''}${c.hash === selectedHash ? ' selected' : ''}"
             data-hash="${c.hash}">
             <div class="dd-commit-meta">
-              <span class="dd-commit-hash">${shortHash(c.hash)}</span>
-              ${c.tag ? `<span class="dd-commit-tag">${escHtml(c.tag)}</span>` : ''}
+              ${c.tag ? `<span class="dd-commit-tag">${escHtml(c.tag)}</span>` : `<span class="dd-commit-hash">${shortHash(c.hash)}</span>`}
               ${c.hash === exportedHash
-                ? `<span class="dd-commit-exported" title="Saved to the device${dev?.fileName ? ' as ' + escHtml(dev.fileName) : ''}${exportedWhen ? ' ' + escHtml(exportedWhen) : ''}${dev?.saved ? '' : ' — changed since'}">${_iconExported()} on device</span>`
+                ? `<span class="dd-commit-exported" title="On the device${dev?.fileName ? ' as ' + escHtml(dev.fileName) : ''}${exportedWhen ? ' (' + escHtml(exportedWhen) + ')' : ''}${dev?.saved ? '' : ' — changed since'}">${_iconExported()} on device</span>`
                 : ''}
               <span class="dd-commit-date">${formatRelative(c.timestamp)}</span>
             </div>
@@ -359,18 +386,19 @@ export class TopBar {
       });
     }
 
-    // Save — the primary part of the split pill while dirty (a plain snapshot;
-    // Shift-click opens the dialog for a message / version).
+    // Save — the primary part of the split pill while the device is behind:
+    // the next version to the device (Shift-click = a new major version).
     const commitActionBtn = this.el.querySelector('#tb-commit-action');
     if (commitActionBtn) {
       commitActionBtn.addEventListener('click', (e) => {
-        if (e.shiftKey) state.openPanel(PANELS.COMMIT); else state.emit('save-document');
+        state.emit(e.shiftKey ? 'save-major' : 'save-document');
       });
     }
-    // Save to device / on-device status
-    this.el.querySelector('#tb-device')?.addEventListener('click', () => state.emit('save-to-device'));
-    // The library drawer
-    this.el.querySelector('#tb-library')?.addEventListener('click', () => state.emit('open-library'));
+    // The document list (a collapsible sidebar on desktop)
+    this.el.querySelector('#tb-library')?.addEventListener('click', () => {
+      const open = document.getElementById('unifile-app')?.hasAttribute('data-library');
+      state.emit(open ? 'close-library' : 'open-library');
+    });
 
     // DSL menu toggle (far-left icon button)
     const dslMenuBtn = this.el.querySelector('#tb-dsl-menu-toggle');
@@ -413,11 +441,11 @@ export class TopBar {
       dslMenuDd.classList.toggle('open', this._dslMenuOpen);
       if (this._dslMenuOpen) dslMenuDd.innerHTML = this._renderDslMenuList();
     }
-    // Commit dropdown
+    // History dropdown (the pending node + every version)
     const commitDd = this.el.querySelector('#tb-commit-dd');
     if (commitDd) {
       commitDd.classList.toggle('open', this._commitOpen);
-      if (this._commitOpen) commitDd.innerHTML = this._renderCommitList();
+      if (this._commitOpen) { commitDd.innerHTML = this._renderHistory(); this._bindPending(commitDd); }
     }
     // Sync the DSL menu button active state
     const dslMenuBtn = this.el.querySelector('#tb-dsl-menu-toggle');
@@ -436,8 +464,7 @@ export class TopBar {
     item('#tb-new-doc',      () => state.emit('new-document'));
     item('#tb-library-item', () => state.emit('open-library'));
     item('#tb-save',         () => state.emit('save-document'));
-    item('#tb-save-msg',     () => state.openPanel(PANELS.COMMIT));
-    item('#tb-save-device',  () => state.emit('save-to-device'));
+    item('#tb-save-major',   () => state.emit('save-major'));
     item('#tb-open-device',  () => state.emit('open-from-device'));
 
     // DSL help modal — uses active section DSL or document default
@@ -564,12 +591,6 @@ function iconLibrary() {
   return `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <rect x="2" y="2" width="4" height="12" rx="1"/><rect x="7" y="2" width="4" height="12" rx="1"/><path d="M12 3l2.5 10.5"/></svg>`;
-}
-
-function iconDevice() {
-  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
-      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 11v2a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2"/></svg>`;
 }
 
 function iconCheck() {
@@ -1607,13 +1628,6 @@ function escHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/** Bump the patch of a `major.minor.patch` string (mirrors commit-bar). */
-function _incPatch(semver) {
-  const m = String(semver).match(/^(\d+)\.(\d+)\.(\d+)/);
-  if (!m) return '';
-  return `${m[1]}.${m[2]}.${+m[3] + 1}`;
 }
 
 function _iconExported() {

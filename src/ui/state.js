@@ -6,6 +6,7 @@
  */
 
 import { shortHash } from '../core/hash.js';
+import { nextVersion } from '../core/library.js';
 
 // ---------------------------------------------------------------------------
 // Event bus
@@ -109,9 +110,11 @@ class AppState extends EventBus {
     /**
      * The open document's device-file link, mirrored from its library record:
      * `fileName` (what it was written as), `savedAt`, `savedHead` (the head
-     * commit that write carried) and `saved` (the current state IS what the
-     * device holds).  Null until the document has been written out once.
-     * @type {{ fileName: string|null, savedAt: number|null, savedHead: string|null, saved: boolean, linked: boolean }|null}
+     * commit that write carried), `version` (the last version written) and
+     * `saved` (the current state IS what the device holds); `linked` = a
+     * folder is kept, later saves land in it silently.  Null until the
+     * document has been written out once.
+     * @type {{ fileName: string|null, savedAt: number|null, savedHead: string|null, saved: boolean, linked: boolean, version: string|null }|null}
      */
     this.deviceFile = null;
 
@@ -186,6 +189,30 @@ class AppState extends EventBus {
   /** Always false now — history is one linear line (kept for older callers). */
   get isDetached() {
     return false;
+  }
+
+  /**
+   * Whether a Save has something to write: the text moved since the last
+   * save, the document was never saved, or the device copy is behind (a
+   * title change, a record that lost its device state).  There is ONE save —
+   * to the device — so this is the dirty dot, the Save pill and the pending
+   * node's one condition.
+   */
+  get needsSave() {
+    if (this.isDirty) return true;
+    if (!this.data?.savedVersion) return true;
+    return this.deviceFile ? !this.deviceFile.saved : false;
+  }
+
+  /** The version the next Save writes ('A00' first; null once the scheme is exhausted). */
+  get nextSaveVersion() {
+    return nextVersion(this.data?.savedVersion ?? null);
+  }
+
+  /** The version a "new major" save writes (A07 → B00); null before the first save or past Z. */
+  get nextMajorVersion() {
+    const cur = this.data?.savedVersion ?? null;
+    return cur ? nextVersion(cur, { major: true }) : null;
   }
 
   get title() {

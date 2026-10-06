@@ -248,7 +248,7 @@ export class UPubApp {
         <button id="wr-back" class="wr-icon-btn" title="Documents" aria-label="Documents"${this.lib?.enabled ? '' : ' hidden'}>${ICONS.back}</button>
         <input id="wr-title" type="text" value="${esc(this.title)}" aria-label="Document title"
                autocomplete="off" autocorrect="on" spellcheck="false" enterkeyhint="done">
-        <span id="wr-dirty" title="Unsaved changes" hidden></span>
+        <span id="wr-dirty" title="Not saved to the device" hidden></span>
         <div id="wr-top-actions">
           <button id="wr-count" title="Word count" aria-label="Word count"></button>
           <button id="wr-btn-preview" class="wr-icon-btn" title="Preview" aria-label="Toggle preview">${ICONS.eye}</button>
@@ -401,7 +401,8 @@ export class UPubApp {
 
   _refreshDirty() {
     const el = document.getElementById('wr-dirty');
-    if (el) el.hidden = !this.isDirty;
+    // The dot = the device is behind (changed since the last save, or never saved).
+    if (el) el.hidden = !(this.lib ? this.lib.needsSave : this.isDirty);
   }
 
   _refreshCount() {
@@ -441,15 +442,18 @@ export class UPubApp {
     }
   }
 
-  async commit(message) {
+  /**
+   * The history snapshot of a save, tagged with its version — the device
+   * write is the library's (`lib.save`), which calls this once the file is on
+   * the device.
+   */
+  async commit(message, tag) {
     const author = (this.prefs.name || '').trim() || 'anonymous';
     const email = (this.prefs.email || '').trim() || '';
-    await this.vcs.commit({ content: this.content, message: message || '', author, email });
+    await this.vcs.commit({ content: this.content, message: message || '', author, email, tag });
     clearDraft();
     this._refreshDirty();
     await this._persistNow();
-    // A linked device file follows the history (Chromium; silent after the first grant).
-    await this.lib.afterSave(this._currentData());
   }
 
   /** Replace the open document (the library opened / created one, or a file). */
@@ -544,9 +548,9 @@ export class UPubApp {
         <button data-act="preview">Preview</button>
         <button data-act="focus">${focusOn ? '✓ ' : ''}Focus mode</button>
         ${this.lib?.enabled ? '<button data-act="documents">Documents</button>' : ''}
-        <button data-act="save"${this.isDirty ? '' : ' disabled'}>Save${this.isDirty ? ' <span class="wr-menu-dot"></span>' : ''}</button>
-        <button data-act="history">History</button>
-        <button data-act="save-device">${this.lib?.device?.saved ? 'Saved to device ✓ — save again' : 'Save to device…'}</button>
+        <button data-act="save"${this.lib.needsSave && this.lib.nextVersion ? '' : ' disabled'}>Save${this.lib.nextVersion ? ` <span class="wr-menu-ver">${this.lib.nextVersion}</span>` : ''} to device${this.lib.needsSave ? ' <span class="wr-menu-dot"></span>' : ''}</button>
+        ${this.lib.nextMajor ? `<button data-act="save-major">Save as new major <span class="wr-menu-ver">${this.lib.nextMajor}</span></button>` : ''}
+        <button data-act="history">History${this.lib.savedVersion ? ` <span class="wr-menu-ver">${this.lib.savedVersion}</span>` : ''}</button>
         <button data-act="open-device">Open from device…</button>
         <button data-act="comments">Comments…</button>
         <button data-act="export">Export…</button>
@@ -565,8 +569,8 @@ export class UPubApp {
         focus: () => this.editor.setFocusMode(!focusOn),
         documents: () => this.lib.openSheet(),
         save: () => this._quickSave(),
+        'save-major': () => this.lib.save({ major: true }),
         history: () => this._openHistory(),
-        'save-device': () => this.lib.saveToDevice(),
         'open-device': () => this.lib.openFromDevice(),
         comments: () => this.comments.showSheet(),
         export: () => this._openExport(),
@@ -587,23 +591,26 @@ export class UPubApp {
     const fmtDate = (t) => new Date(t).toLocaleString(undefined,
       { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-    const pending = this.isDirty ? `
+    const cur = this.lib.savedVersion, next = this.lib.nextVersion, major = this.lib.nextMajor;
+    const label = !cur ? 'Never saved to the device' : this.isDirty ? `Changed since ${esc(cur)}` : `${esc(cur)} not on the device`;
+    const pending = this.lib.needsSave ? `
       <div class="wr-pending">
-        <div class="wr-pending-head"><span class="wr-node"></span>Unsaved changes</div>
+        <div class="wr-pending-head"><span class="wr-node"></span>${label}</div>
         <div class="wr-pending-row">
-          <input id="wr-commit-msg" type="text" placeholder="Message (optional)" autocomplete="off">
-          <button id="wr-commit-btn" class="wr-primary">Save</button>
+          <input id="wr-commit-msg" type="text" placeholder="A note on this version (optional)" autocomplete="off">
+          <button id="wr-commit-btn" class="wr-primary"${next ? '' : ' disabled'}>Save <b id="wr-commit-next">${esc(next ?? '—')}</b></button>
         </div>
-      </div>` : '<div class="wr-clean">Everything saved.</div>';
+        ${major ? `<label class="wr-pending-major"><input type="checkbox" id="wr-commit-major"> new major version (${esc(major)})</label>` : ''}
+      </div>` : `<div class="wr-clean">On the device as ${esc(dev?.fileName ?? cur ?? '')}.</div>`;
 
     const list = commits.length ? commits.map(c => `
       <div class="wr-commit" data-hash="${c.hash}">
         <div class="wr-commit-line">
           <span class="wr-commit-msg">${esc(c.message || '(no message)')}</span>
-          ${c.tag ? `<span class="wr-tag">${esc(c.tag)}</span>` : ''}
-          ${dev && dev.savedHead === c.hash ? `<span class="wr-tag wr-exported" title="${dev.saved ? 'The device file holds this save' : 'Saved to the device, changed since'}">on device</span>` : ''}
+          ${c.tag ? `<span class="wr-tag">${esc(c.tag)}</span>` : `<span class="wr-tag">${esc(shortHash(c.hash))}</span>`}
+          ${dev && dev.savedHead === c.hash ? `<span class="wr-tag wr-exported" title="${dev.saved ? 'The device holds this version' : 'On the device, changed since'}">on device</span>` : ''}
         </div>
-        <div class="wr-commit-meta">${esc(shortHash(c.hash))} · ${esc(c.author || '')} · ${fmtDate(c.timestamp)}</div>
+        <div class="wr-commit-meta">${esc(c.author || '')} · ${fmtDate(c.timestamp)}</div>
         <button class="wr-restore" data-hash="${c.hash}">Restore</button>
       </div>`).join('') : '<div class="wr-clean">No saves yet.</div>';
 
@@ -611,11 +618,15 @@ export class UPubApp {
       <div class="wr-sheet-head">History</div>
       <div class="wr-sheet-body">${pending}<div class="wr-log">${list}</div></div>`, 'tall');
 
+    modal.querySelector('#wr-commit-major')?.addEventListener('change', (e) => {
+      const el = modal.querySelector('#wr-commit-next');
+      if (el) el.textContent = e.target.checked ? (major ?? '—') : (next ?? '—');
+    });
     modal.querySelector('#wr-commit-btn')?.addEventListener('click', async () => {
       const msg = modal.querySelector('#wr-commit-msg').value.trim();
-      await this.commit(msg);
+      const isMajor = !!modal.querySelector('#wr-commit-major')?.checked;
       this._closeSheet();
-      this._toast('Saved');
+      await this.lib.save({ message: msg, major: isMajor });
     });
     modal.addEventListener('click', (e) => {
       const btn = e.target.closest('.wr-restore');
@@ -629,11 +640,9 @@ export class UPubApp {
     });
   }
 
-  /** Save now, no message (the menu's Save). */
+  /** Save now, no note (the menu's Save): the next version to the device. */
   async _quickSave() {
-    if (!this.isDirty) return;
-    await this.commit('');
-    this._toast('Saved');
+    await this.lib.save();
   }
 
   // ── Export ────────────────────────────────────────────────────────────────
