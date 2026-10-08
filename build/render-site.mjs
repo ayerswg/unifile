@@ -34,7 +34,7 @@ const rel = (p) => SITE.baseurl + p;
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // types.yml ids → icons.mjs keys (which are DSL ids).
-const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs', udraft: 'udraft', slides: 'slides' };
+const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs', udraft: 'udraft', slides: 'slides', sheet: 'sheet' };
 
 // Site favicon: the bare `{}`, black on white.
 const FAVICON = 'data:image/svg+xml,' + encodeURIComponent(faviconSvg());
@@ -315,7 +315,7 @@ async function main() {
 
   // Static passthrough: assets + downloads + PWAs + CNAME.
   await cp(join(DOCS, 'assets'), join(OUT, 'assets'), { recursive: true });
-  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-upub', 'pwa-dft', 'pwa-sld']) {
+  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-upub', 'pwa-dft', 'pwa-sld', 'pwa-sht']) {
     if (await exists(join(DOCS, d))) await cp(join(DOCS, d), join(OUT, d), { recursive: true });
   }
   if (await exists(join(DOCS, 'CNAME'))) await cp(join(DOCS, 'CNAME'), join(OUT, 'CNAME'));

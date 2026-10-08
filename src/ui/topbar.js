@@ -1278,6 +1278,84 @@ clef=none          % no clef / percussion</code></pre>`
     ]
   },
 
+  sheet: {
+    name: 'Sheet',
+    docsUrl: 'https://github.github.com/gfm/#tables-extension-',
+    docsLabel: 'GFM tables',
+    sections: [
+      {
+        group: 'Workbook',
+        title: 'Sheets',
+        content: `<pre><code># Budget
+
+| Item   | Qty | Price | Total |
+|--------|----:|------:|------:|
+| Apples |   3 |  1.20 | =B*C  |
+| Pears  |   2 |  0.80 | =B*C  |</code></pre>
+<p class="help-note">Every Markdown table is a <strong>sheet</strong>; the heading above it is the sheet's name (no heading → Sheet1, Sheet2…). Rows above the <code>|---|</code> line are the header row(s). Prose between tables is kept as notes. Columns are A, B, C… and rows count from 1 at the first row (the header is row 1, as in Excel).</p>`
+      },
+      {
+        group: 'Workbook',
+        title: 'Keys & Tools',
+        content: `<pre><code>Tab / Shift-Tab    next / previous cell (past the last cell: a new row)
+Alt-Shift-F        align the pipes (⋯ menu → Align columns)
+⋯ → Insert table   a blank 3×3 table at the caret
+Paste              a block copied from a spreadsheet lands as a table</code></pre>
+<p class="help-note">The preview shows the cell under the caret with its address, formula and value; click any rendered cell to jump to its text.</p>`
+      },
+      {
+        group: 'Formulas',
+        title: 'Formulas',
+        content: `<pre><code>| =B2*C2        |  cell references
+| =B*C          |  a bare column letter = this row
+| =SUM(D2:D9)   |  ranges
+| =SUM(B:B)     |  a whole column
+| =Budget!D4    |  another sheet ('Q1 Sales'!A1 with spaces)
+| =IF(B2>10, "big", "small") |
+| '=not a formula |  an apostrophe forces text</code></pre>
+<p class="help-note">A cell that starts with <code>=</code> is a formula. Operators: <code>+ - * / ^</code>, <code>&amp;</code> joins text, <code>= &lt;&gt; &lt; &gt; &lt;= &gt;=</code> compare, <code>%</code> is a percentage. The text is the source of truth — results are shown, never written back. Errors read as in Excel: <code>#DIV/0!</code>, <code>#NAME?</code>, <code>#VALUE!</code>, <code>#REF!</code>, <code>#N/A</code>, <code>#CIRC!</code> for a circular reference.</p>`
+      },
+      {
+        group: 'Formulas',
+        title: 'Functions',
+        content: `<pre><code>SUM AVERAGE MIN MAX COUNT COUNTA COUNTBLANK PRODUCT MEDIAN STDEV
+SUMIF COUNTIF AVERAGEIF SUMPRODUCT LARGE SMALL RANK
+IF IFERROR AND OR NOT ISBLANK ISNUMBER ISTEXT ISERROR
+ROUND ROUNDUP ROUNDDOWN INT TRUNC CEILING FLOOR ABS MOD POWER SQRT
+EXP LN LOG LOG10 PI
+LEN UPPER LOWER PROPER TRIM LEFT RIGHT MID FIND SEARCH SUBSTITUTE
+CONCAT TEXTJOIN REPT TEXT VALUE N
+VLOOKUP HLOOKUP INDEX MATCH ROW COLUMN ROWS COLUMNS</code></pre>
+<p class="help-note">Type a few letters after <code>=</code> for the completion menu. <code>TEXT(x, "#,##0.00")</code>, <code>"0%"</code>, <code>"$#,##0"</code> format a number; <code>decimals: 2</code> in the front matter rounds every non-integer result for display.</p>`
+      },
+      {
+        group: 'Cells',
+        title: 'Merged Cells',
+        content: `<pre><code>| Region   | Q1 | Q2 |
+|----------|---:|---:|
+| North    ||  5 |        North spans TWO columns
+| Total    |  8 ||       the 8 spans Q1 and Q2
+| ^^       |  1 |  2 |   ^^ merges with the cell above</code></pre>
+<p class="help-note"><code>||</code> (nothing between the pipes) extends the cell before it across the next column — a cell with a space, <code>| |</code>, is an empty cell. <code>^^</code> as a cell's whole content merges it into the cell above. Merges survive the .xlsx export.</p>`
+      },
+      {
+        group: 'Cells',
+        title: 'Values & Formatting',
+        content: `<pre><code>| 1,200 | $3.50 | 12% | TRUE | (5) |     numbers: 1200 · 3.5 · 0.12 · TRUE · -5
+| **bold** | *italic* | \`code\` | [link](https://…) |
+| a \\| b |     a literal pipe</code></pre>
+<p class="help-note">A literal cell shows exactly what you typed; its <em>value</em> in a formula is the number it reads as. Markdown inline formatting works inside a cell. <code>:---</code>, <code>:---:</code>, <code>---:</code> in the separator row align a column; by default numbers sit right and text left.</p>`
+      },
+      {
+        group: 'Export',
+        title: 'Exports',
+        content: `<pre><code>Excel workbook (.xlsx)   every sheet; formulas kept, cells merged
+CSV                      one sheet → .csv, several → a .zip of CSVs
+HTML / PDF               the computed grid, one sheet per page</code></pre>
+<p class="help-note">The .xlsx opens in Excel, Numbers, LibreOffice and Google Sheets with live formulas. Column formulas (<code>=B*C</code>) are written out per row (<code>=B2*C2</code>).</p>`
+      },
+    ]
+  },
   slides: {
     name: 'Slides',
     docsUrl: 'https://marpit.marp.app/markdown',

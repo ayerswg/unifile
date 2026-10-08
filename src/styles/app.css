@@ -310,48 +310,6 @@
 .cm-fm-key     { color: var(--accent-2); }      /* property key */
 .cm-fm-comment { color: var(--text-muted); font-style: italic; }
 
-/* Collapsible section header bars (front matter / ABC tune header).
-   Expanded = a thin bar above the section; collapsed = a bar replacing it. */
-/* Padding (not margin) so CodeMirror's block-widget height measurement includes
-   the gap — an outer margin would desync the gutter markers (see toDOM note). */
-.cm-section-header-wrap { padding: 2px 0; }
-.cm-section-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  font-family: var(--font-ui);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  color: var(--text-sub);
-  background: var(--bg-alt);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  user-select: none;
-  transition: background .1s, color .1s;
-}
-.cm-section-header:hover { background: var(--bg-surface); color: var(--text); }
-.cm-section-header .cm-sh-caret {
-  flex-shrink: 0;
-  transition: transform .12s ease;
-}
-/* Collapsed → caret points right (rotated from the down-pointing default). */
-.cm-section-header.collapsed .cm-sh-caret { transform: rotate(-90deg); }
-.cm-section-header .cm-sh-label { flex: 0 0 auto; }
-.cm-section-header .cm-sh-count {
-  margin-left: auto;
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
 /* #! shebang line decoration — marks DSL section headers as muted/italic */
 .cm-shebang-line { color: var(--accent) !important; opacity: .55; font-style: italic; }
 [data-theme="light"] .cm-shebang-line { color: var(--accent) !important; opacity: .6; }
@@ -4946,3 +4904,78 @@ noscript .noscript-wrap {
   text-align: center;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
+
+/* ── {sheet}: the workbook preview (src/dsl/sheet.js) ──────────────────────
+   One Excel-style grid per Markdown table: column letters, row numbers,
+   merged cells as colspan/rowspan, formulas computed.  Like the ABC score and
+   the deck, a sheet breaks out of the 800px prose column (wide tables scroll
+   inside their own box, never the page). */
+.preview-content .uf-sheet-book {
+  width: clamp(100%, 100cqw - 64px, 1400px);
+  margin-left: calc((100% - clamp(100%, 100cqw - 64px, 1400px)) / 2);
+}
+.uf-sheet-status {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; gap: 14px; align-items: baseline;
+  padding: 6px 10px; margin: -8px 0 12px;
+  font-family: var(--font-mono); font-size: 12.5px;
+  background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.uf-sheet-status[hidden] { display: none; }
+.uf-sheet-status-addr { font-weight: 600; color: var(--accent); min-width: 3ch; }
+.uf-sheet-status-formula { color: var(--text-sub); }
+.uf-sheet-status-value { margin-left: auto; color: var(--text); }
+.uf-sheet-status-value.is-error { color: var(--error); }
+.uf-sheet-block { margin: 0 0 28px; }
+/* The sheet's name is the user's own heading — it keeps the prose heading look. */
+.uf-sheet-name { cursor: pointer; }
+.uf-sheet-scroll { overflow: auto; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.uf-sheet-notes { max-width: 800px; margin: 0 auto 20px; }
+.preview-content table.uf-sheet {
+  width: auto; min-width: 100%;
+  border-collapse: separate; border-spacing: 0;
+  font-family: var(--font-mono); font-size: 13.5px; line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+.preview-content .uf-sheet th, .preview-content .uf-sheet td {
+  border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  padding: 4px 10px; vertical-align: top; white-space: pre-wrap; min-width: 4ch; max-width: 40ch;
+  background: var(--bg);
+}
+.preview-content .uf-sheet .uf-sheet-corner, .preview-content .uf-sheet .uf-sheet-col, .preview-content .uf-sheet .uf-sheet-row {
+  background: var(--bg-alt); color: var(--text-muted); font-weight: 500; font-size: 11px; text-align: center;
+  user-select: none; -webkit-user-select: none; padding: 3px 8px; min-width: 0;
+}
+.preview-content .uf-sheet .uf-sheet-col { position: sticky; top: 0; z-index: 1; }
+.preview-content .uf-sheet .uf-sheet-row { position: sticky; left: 0; z-index: 1; text-align: right; }
+.preview-content .uf-sheet .uf-sheet-corner { position: sticky; top: 0; left: 0; z-index: 2; }
+.preview-content .uf-sheet .uf-sheet-col.is-active, .preview-content .uf-sheet .uf-sheet-row.is-active { color: var(--accent); background: var(--bg-surface); }
+.preview-content .uf-sheet tr.uf-sheet-header th.uf-cell { background: var(--bg-surface); font-weight: 600; text-align: left; }
+.preview-content .uf-sheet .al-right { text-align: right; }
+.preview-content .uf-sheet .al-center { text-align: center; }
+.preview-content .uf-sheet .al-left { text-align: left; }
+.preview-content .uf-sheet .uf-cell { cursor: pointer; }
+.preview-content .uf-sheet .uf-cell.is-formula { color: var(--text); }
+.preview-content .uf-sheet .uf-cell.is-error { color: var(--error); }
+.preview-content .uf-sheet .uf-cell.is-bool { color: var(--accent-2); }
+.preview-content .uf-sheet .uf-cell.is-active { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+.preview-content .uf-sheet .uf-cell[colspan], .preview-content .uf-sheet .uf-cell[rowspan] { background: color-mix(in srgb, var(--text) 3%, var(--bg)); }
+.preview-content .uf-sheet .uf-cell p { margin: 0; }
+.preview-content .uf-sheet .uf-cell code { font-size: .92em; }
+@media (max-width: 640px) {
+  .preview-content table.uf-sheet { font-size: 12.5px; }
+  .preview-content .uf-sheet th, .preview-content .uf-sheet td { padding: 3px 7px; }
+  .uf-sheet-status { font-size: 12px; margin-top: 0; }
+}
+
+/* Editor: formulas and spans in a table row.  `|` recedes like a Markdown
+   mark; the `=` and the references are tinted; `||` / `^^` spans stand out. */
+.cm-sheet-pipe    { color: var(--hl-meta); }
+.cm-sheet-formula { color: var(--accent); font-weight: 600; }
+.cm-sheet-ref     { color: var(--hl-property); }
+.cm-sheet-fn      { color: var(--hl-keyword); }
+.cm-sheet-str     { color: var(--hl-string); }
+.cm-sheet-span    { color: var(--accent-2); font-weight: 600; }
+.cm-sheet-hover { padding: 6px 9px; font-family: var(--font-mono); font-size: 12.5px; }
+.cm-sheet-hover b { color: var(--accent); margin-right: 8px; }
+.cm-sheet-hover-detail { color: var(--text-muted); font-size: 11.5px; margin-top: 2px; }
