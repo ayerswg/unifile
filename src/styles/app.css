@@ -4949,3 +4949,169 @@ noscript .noscript-wrap {
 .cm-sheet-hover { padding: 6px 9px; font-family: var(--font-mono); font-size: 12.5px; }
 .cm-sheet-hover b { color: var(--accent); margin-right: 8px; }
 .cm-sheet-hover-detail { color: var(--text-muted); font-size: 11.5px; margin-top: 2px; }
+
+/* ── {spreadsheet}: the grid (src/ui/sheet-grid.js + core/sheet/render.js) ──
+   The render pane IS the spreadsheet: a toolbar, the formula bar, the grid
+   (rulers + sticky frozen rows/columns), sheet tabs.  Like the deck and the
+   score it breaks out of the 800px prose column, and it fills the pane
+   (container-query units — the pane is flex-sized, never content-sized). */
+.preview-content .uf-ss {
+  width: 100cqw;
+  height: 100cqh;
+  margin: -24px 0 -24px calc((100% - 100cqw) / 2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.uf-ss-bar {
+  display: flex; align-items: center; gap: 2px; flex: none;
+  padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--bg);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; white-space: nowrap;
+}
+.uf-ss-bar::-webkit-scrollbar { display: none; }
+.uf-ss-bar button {
+  flex: none; min-width: 28px; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 5px;
+  background: transparent; color: var(--text); font: inherit; font-size: 13px; line-height: 1; cursor: pointer;
+  font-family: var(--font-mono);
+}
+.uf-ss-bar button:hover { background: var(--bg-surface); }
+.uf-ss-bar button.is-on { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); }
+.uf-ss-sep { flex: none; width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
+.uf-ss-ico-a { text-decoration: underline; text-decoration-thickness: 3px; text-decoration-color: #c0392b; }
+.uf-ss-fx {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  padding: 3px 8px; border-bottom: 1px solid var(--border); background: var(--bg);
+}
+.uf-ss-name {
+  flex: none; min-width: 64px; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 12px; cursor: pointer; text-align: left;
+}
+.uf-ss-fxlabel { color: var(--text-muted); font-style: italic; font-family: var(--font-mono); font-size: 12px; }
+.uf-ss-fxinput {
+  flex: 1; min-width: 0; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 13px;
+}
+.uf-ss-fxinput:focus { outline: none; border-color: var(--accent); }
+.uf-ss-scroll { flex: 1; min-height: 0; overflow: auto; position: relative; overscroll-behavior: contain; }
+.uf-ss-tablewrap { position: relative; display: inline-block; min-width: 100%; }
+.uf-ss-grid {
+  border-collapse: separate; border-spacing: 0; table-layout: fixed;
+  font-variant-numeric: tabular-nums; font-size: 13px; width: max-content;
+}
+.uf-ss-grid col.uf-ss-rulercol { width: 40px; }
+.uf-ss-grid th, .uf-ss-grid td {
+  box-sizing: border-box; height: 26px; padding: 2px 6px;
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; vertical-align: middle; background: var(--bg);
+}
+.uf-ss-grid .uf-ss-corner, .uf-ss-grid .uf-ss-col, .uf-ss-grid .uf-ss-row {
+  position: sticky; z-index: 3; background: var(--bg-alt); color: var(--text-muted); font-family: var(--font-mono);
+  font-weight: 500; font-size: 11px; text-align: center; cursor: pointer;
+}
+.uf-ss-grid .uf-ss-corner { top: 0; left: 0; z-index: 5; }
+.uf-ss-grid .uf-ss-col { top: 0; }
+.uf-ss-grid .uf-ss-row { left: 0; text-align: right; }
+.uf-ss-grid .uf-ss-col.is-sel, .uf-ss-grid .uf-ss-row.is-sel { background: color-mix(in srgb, var(--accent) 22%, var(--bg-alt)); color: var(--accent); }
+.uf-ss-grid .uf-ss-col.is-frozen-col, .uf-ss-grid td.is-frozen-col { position: sticky; z-index: 2; }
+.uf-ss-grid .uf-ss-col.is-frozen-col { z-index: 4; }
+.uf-ss-grid tr.is-frozen-row th, .uf-ss-grid tr.is-frozen-row td { position: sticky; z-index: 2; }
+.uf-ss-grid tr.is-frozen-row th.uf-ss-row { z-index: 4; }
+.uf-ss-grid tr.is-frozen-row td.is-frozen-col { z-index: 3; }
+.uf-ss-grid tr.is-frozen-row td { box-shadow: 0 1px 0 var(--border); }
+.uf-ss-grid .uf-ss-cell { cursor: cell; }
+.uf-ss-grid .al-right { text-align: right; } .uf-ss-grid .al-center { text-align: center; } .uf-ss-grid .al-left { text-align: left; }
+.uf-ss-grid .is-error { color: var(--error); }
+.uf-ss-grid .is-bool { color: var(--accent-2); }
+.uf-ss-grid tr.uf-ss-header td { font-weight: 600; background: var(--bg-surface); }
+.uf-ss-grid td.is-sel { background-image: linear-gradient(color-mix(in srgb, var(--accent) 14%, transparent), color-mix(in srgb, var(--accent) 14%, transparent)); }
+.uf-ss-grid td.is-active { box-shadow: inset 0 0 0 2px var(--accent); background-image: none; }
+.uf-ss-grid td.has-comment { background-image: linear-gradient(225deg, #e67e22 0 5px, transparent 5px); }
+.uf-ss-grid td.has-comment.is-sel { background-image: linear-gradient(225deg, #e67e22 0 5px, transparent 5px), linear-gradient(color-mix(in srgb, var(--accent) 14%, transparent), color-mix(in srgb, var(--accent) 14%, transparent)); }
+.uf-ss-colgrip { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 1; }
+.uf-ss-grid th.uf-ss-col { position: sticky; }
+.uf-ss-rowgrip { display: none; }
+.uf-ss-editor {
+  position: absolute; z-index: 6; display: none; box-sizing: border-box; margin: 0; padding: 2px 6px; resize: none;
+  border: 2px solid var(--accent); border-radius: 0; background: var(--bg); color: var(--text);
+  font: inherit; font-size: 13px; line-height: 20px; outline: none; white-space: pre; overflow: hidden;
+}
+.uf-ss-editor.is-open { display: block; }
+.uf-ss-tabs {
+  display: flex; align-items: center; gap: 2px; flex: none; padding: 3px 8px;
+  border-top: 1px solid var(--border); background: var(--bg-alt); overflow-x: auto; scrollbar-width: none;
+}
+.uf-ss-tabs::-webkit-scrollbar { display: none; }
+.uf-ss-tab, .uf-ss-addtab {
+  flex: none; height: 24px; padding: 0 12px; border: 1px solid transparent; border-radius: 5px; background: transparent;
+  color: var(--text-muted); font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.uf-ss-tab.is-active { background: var(--bg); color: var(--text); border-color: var(--border); font-weight: 600; }
+.uf-ss-tab:hover, .uf-ss-addtab:hover { color: var(--text); }
+.uf-ss-addtab { font-family: var(--font-mono); padding: 0 8px; }
+
+/* Popovers: menus and the small forms (format, colours, filter, comment, rules). */
+.uf-ss-pop {
+  position: absolute; z-index: 40; min-width: 160px; max-width: min(420px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow: auto;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .28); padding: 6px; font-size: 13px; user-select: text; -webkit-user-select: text;
+}
+.uf-ss-menu { display: flex; flex-direction: column; }
+.uf-ss-menu button { text-align: left; padding: 6px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font: inherit; cursor: pointer; white-space: nowrap; }
+.uf-ss-menu button:hover { background: var(--bg-surface); }
+.uf-ss-menu button:disabled { opacity: .45; cursor: default; }
+.uf-ss-menu button.is-on { color: var(--accent); font-weight: 600; }
+.uf-ss-menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.uf-ss-form { display: flex; flex-direction: column; gap: 8px; padding: 4px; }
+.uf-ss-form.uf-ss-inline { flex-direction: row; align-items: center; padding: 4px 6px; }
+.uf-ss-form-title { font-weight: 600; font-size: 12.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.uf-ss-form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.uf-ss-form label { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
+.uf-ss-form input[type=text], .uf-ss-form input:not([type]), .uf-ss-form select, .uf-ss-form textarea {
+  padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; min-width: 0;
+}
+.uf-ss-form input:not([type]) { width: 110px; }
+.uf-ss-form textarea { width: 240px; max-width: 100%; resize: vertical; }
+.uf-ss-form input[type=color] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: none; }
+.uf-ss-form button { padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-surface); color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; }
+.uf-ss-form button[type=submit] { background: var(--accent); color: #fff; border-color: transparent; }
+.uf-ss-cond [hidden] { display: none; }
+.uf-ss-rules { min-width: 300px; }
+.uf-ss-rule-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
+.uf-ss-rule { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 3px 4px; border-radius: 4px; background: var(--bg-surface); }
+.uf-ss-rule code { font-family: var(--font-mono); font-size: 11.5px; }
+.uf-ss-rule button { margin-left: auto; padding: 0 6px; border: 0; background: none; color: var(--text-muted); cursor: pointer; font-size: 14px; }
+.uf-ss-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border); }
+.uf-ss-muted { color: var(--text-muted); font-size: 12.5px; }
+.uf-ss-swatches { display: grid; grid-template-columns: repeat(7, 24px); gap: 4px; padding: 2px; }
+.uf-ss-swatch { width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; padding: 0; font: inherit; }
+.uf-ss-swatch.is-on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.uf-ss-swatch.is-none { background: var(--bg); color: var(--text-muted); }
+.uf-ss-swatch.is-custom { display: inline-flex; align-items: center; justify-content: center; background: var(--bg-surface); color: var(--text-muted); position: relative; overflow: hidden; }
+.uf-ss-swatch.is-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+/* The static table (the quine preview / the HTML export inside the app). */
+.uf-ss-static .uf-ss-sheet { margin: 0 0 24px; }
+.uf-ss-static .uf-ss-name { position: static; display: block; min-width: 0; height: auto; border: 0; padding: 0; margin: 0 0 8px; font: inherit; font-weight: 600; font-size: 15px; cursor: default; }
+.uf-ss-static .uf-ss-scroll { overflow: auto; }
+.uf-ss-static .uf-ss-notes { color: var(--text-muted); font-size: 14px; }
+
+@media (max-width: 640px) {
+  .preview-content .uf-ss { font-size: 14px; }
+  .uf-ss-bar button { min-width: 34px; height: 32px; font-size: 15px; }
+  .uf-ss-grid th, .uf-ss-grid td { height: 32px; font-size: 14px; }
+  .uf-ss-editor { font-size: 16px; line-height: 24px; }   /* 16px stops Safari's focus zoom */
+  .uf-ss-fxinput { font-size: 16px; }
+  .uf-ss-pop { max-width: calc(100% - 8px); }
+}
+
+/* Editor: the DSL's tokens (StreamLanguage in src/dsl/spreadsheet.js) ride
+   the shared highlight tags; directive keywords, ranges and properties get
+   the keyword / property / atom colours; pipes recede like Markdown marks. */

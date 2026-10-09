@@ -1422,6 +1422,87 @@ h1 { color: crimson; }   /* this slide only */
         content: `<p class="help-note"><strong>Export → PDF</strong> opens the print dialog with one slide per page at the deck's own size — choose "Save as PDF". <strong>Export → HTML</strong> writes one self-contained file: the slides stacked for reading, and a click (or <kbd>F</kbd>) starts a full-screen presentation — <kbd>←</kbd> <kbd>→</kbd> to move, <kbd>Esc</kbd> to leave. It prints one slide per page too. Images travel inside both.</p>`
       }
     ]
+  },
+  spreadsheet: {
+    name: 'Spreadsheet',
+    docsUrl: 'https://unifile.app/spreadsheet/',
+    docsLabel: '{spreadsheet} on unifile.app',
+    sections: [
+      {
+        group: 'The file',
+        title: 'Sheets & Rows',
+        content: `<pre><code># Budget
+
+| Item   | Qty | Price | Total       |
+|--------|----:|------:|------------:|
+| Apples |   3 |  1.20 | =B*C        |
+| Pears  |   2 |  0.80 | =B*C        |
+| Total  |     |       | =SUM(D2:D3) |</code></pre>
+<p class="help-note">A <code># Heading</code> starts a sheet (no heading = one sheet, <code>Sheet1</code>). Every <code>| … |</code> line is a row; cells are text, numbers (<code>1,200</code>, <code>$3.50</code>, <code>12%</code>), or a formula starting with <code>=</code>. An optional <code>|---|</code> line marks the rows above it as the header (bold, frozen, left out of sort and filter). Addresses are Excel's — <code>A1</code>, <code>B2:D9</code>, <code>A:A</code>, <code>3:5</code> — and rows count the pipe rows from 1 (the <code>|---|</code> line is not a row). Write <code>\\|</code> for a pipe inside a cell, <code>'=x</code> to force text.</p>
+<p class="help-note">Most editing happens in the <strong>grid</strong> (the eye / render pane): type to replace a cell, <kbd>Enter</kbd> / <kbd>Tab</kbd> to move, <kbd>F2</kbd> to edit in place, click a letter or number for a whole column or row, right-click (long-press on a phone) for the menu. Every change there rewrites the text and lands in the same undo history.</p>`
+      },
+      {
+        group: 'The file',
+        title: 'Formulas',
+        content: `<pre><code>=B*C              this row's B times this row's C
+=SUM(D2:D9)       a range
+=SUM(B:B)         a whole column
+=Costs!B2         another sheet (='Q1 Sales'!A1 when the name has spaces)
+=IF(D2>10, "big", "small")
+=ROUND(AVERAGE(C2:C9), 2) & " avg"</code></pre>
+<p class="help-note">Excel's grammar: <code>+ - * / ^ &amp;</code>, comparisons, <code>%</code>, <code>$A$1</code> accepted. <strong>A bare column letter is the cell in this row</strong> — the one addition — so a column formula is written once per row and survives sorting and inserted rows. ~70 functions: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, COUNTIF, SUMIF, AVERAGEIF, IF, IFERROR, AND, OR, NOT, ROUND, INT, MOD, ABS, SQRT, POWER, LEN, LEFT, RIGHT, MID, UPPER, LOWER, TRIM, CONCAT, TEXTJOIN, FIND, SUBSTITUTE, TEXT, VLOOKUP, HLOOKUP, INDEX, MATCH, LARGE, SMALL, MEDIAN, STDEV, RANK, SUMPRODUCT, ROW, COLUMN… Type <code>=</code> then a letter in the text for the list. Errors are Excel's (<code>#DIV/0!</code>, <code>#NAME?</code>, <code>#REF!</code>, <code>#CIRC!</code>).</p>`
+      },
+      {
+        group: 'Rules',
+        title: 'Merges, Widths & Freeze',
+        content: `<pre><code>merge A5:C5
+width A 18          width B:D 10
+height 3 40
+freeze rows:1 cols:1
+hide C:D            hide 5:7</code></pre>
+<p class="help-note">Everything that is not a row is a one-line rule after the rows: a keyword, then an A1 range, then its arguments. <code>merge</code> spans the top-left cell over the range (the <code>||</code> / <code>^^</code> spans of {document} tables are read too). <code>width</code> is in characters, <code>height</code> in pixels. <code>freeze</code> keeps rows and columns in view while scrolling (the <code>|---|</code> header rows are frozen already). <code>hide</code> hides whole rows or columns.</p>`
+      },
+      {
+        group: 'Rules',
+        title: 'Formatting (style)',
+        content: `<pre><code>style A1:D1 bold bg:#eef align:center
+style D format:$#,##0.00
+style B2:B9 italic color:#888 size:12 font:mono
+style A2:A9 wrap valign:top border:bottom
+style C3 bold:off color:none</code></pre>
+<p class="help-note">Flags: <code>bold italic underline strike wrap</code>. Keys: <code>color</code>, <code>bg</code> (a CSS name or <code>#hex</code>), <code>size</code> (px), <code>font</code> (<code>mono</code> / <code>serif</code> / <code>sans</code>), <code>align</code> (<code>left</code> / <code>center</code> / <code>right</code>), <code>valign</code> (<code>top</code> / <code>middle</code> / <code>bottom</code>), <code>border</code> (<code>top</code>, <code>bottom</code>, <code>left</code>, <code>right</code>, a list, or none for all sides), <code>format</code> (below). Later lines win per property; <code>bold:off</code> / <code>color:none</code> clear one inside a wider range.</p>
+<p class="help-note">Number formats: <code>0</code>, <code>0.00</code>, <code>#,##0</code>, <code>#,##0.00</code>, <code>0%</code>, <code>0.0%</code>, <code>$#,##0.00</code> (any currency sign), <code>0.00E+00</code>, <code>text</code>, <code>general</code>. Quote a pattern with spaces: <code>format:"#,##0 kg"</code>. A literal cell with a format shows the formatted number (<code>1200</code> → <code>1,200</code>).</p>`
+      },
+      {
+        group: 'Rules',
+        title: 'Conditional Formatting (if, scale)',
+        content: `<pre><code>if D2:D9 > 100 then bold color:green
+if D2:D9 between 10 and 20 then bg:#ffe
+if A2:A9 contains "urgent" then bg:#fdd
+if B2:B9 blank then bg:#eee
+if C2:C9 top 3 then bold
+if D2:D9 =D>C then color:red       ← a formula, per row
+if A2:A9 duplicate then color:#c00
+scale E2:E9 #fff #1a8cf5           ← 2 or 3 colours</code></pre>
+<p class="help-note">Conditions: <code>&gt; &gt;= &lt; &lt;= = &lt;&gt;</code> a value (any expression — <code>&gt; B1*2</code>), <code>between a and b</code>, <code>contains</code> / <code>starts</code> / <code>ends "text"</code>, <code>blank</code>, <code>filled</code>, <code>error</code>, <code>duplicate</code>, <code>unique</code>, <code>top n</code>, <code>bottom n</code>, or <code>=formula</code> evaluated for each cell with the row's bare-column refs. The <code>then</code> part takes the same properties as <code>style</code>. Rules apply in order, after the styles; a colour <code>scale</code> shades numbers from the lowest to the highest value.</p>`
+      },
+      {
+        group: 'Rules',
+        title: 'Comments, Sort & Filter',
+        content: `<pre><code>comment B3 "Market price, October"
+sort D desc
+sort B asc, C desc
+filter B > 0
+filter A contains "apple"
+filter =D>C</code></pre>
+<p class="help-note"><code>comment</code> attaches a note to one cell (an orange corner in the grid; exported as an Excel note). <code>sort</code> and <code>filter</code> are a <em>view</em>: the rows stay where they are in the text (addresses never change), the grid just shows them sorted and filtered — like Excel's autofilter. The toolbar's A↓ / Z↓ buttons instead <em>reorder the rows in the text</em> once (a data sort). Header rows are never sorted or filtered.</p>`
+      },
+      {
+        group: 'Export',
+        title: 'Excel, CSV, HTML, PDF',
+        content: `<p class="help-note"><strong>Export → Excel</strong> writes a real .xlsx: formulas (with their values cached, so they show at once and recalculate on edit), merges, number formats, fonts, fills, borders, alignment, conditional-format rules and colour scales, column widths, row heights, frozen panes, hidden rows / columns and cell comments. <strong>CSV</strong> exports the sheet the grid shows (values). <strong>HTML</strong> is one self-contained file of every sheet with its formatting; <strong>PDF</strong> prints it landscape.</p>`
+      }
+    ]
   }
 };
 

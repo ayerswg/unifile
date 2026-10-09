@@ -11,11 +11,11 @@ time to find. Keep it up to date as the design evolves.
 **The brand is `{…}` — curly braces in a monospaced font.** Every app has two
 spellings, both from the single source `src/core/brand.js` (`APPS`, `appName()`,
 `appMark()`): a *name* in braces (`{document}`, `{diagram}`, `{compose}`,
-`{write}`, `{draft}`, `{slides}`) and a *mark* — one UTF-8 TEXT glyph (never an emoji) in
-braces (`{¶}`, `{◇}`, `{♪}`, `{✎}`, `{⌂}`, `{▭}`). The mark IS the app icon
+`{write}`, `{draft}`, `{slides}`, `{spreadsheet}`) and a *mark* — one UTF-8 TEXT glyph (never an emoji) in
+braces (`{¶}`, `{◇}`, `{♪}`, `{✎}`, `{⌂}`, `{▭}`, `{▦}`). The mark IS the app icon
 (`build/icons.mjs` renders it as SVG text; `gen-icons.mjs` rasterizes the PNGs),
 heads the phone title bar, and sits beside the name on the site. Build ids stay
-`markdown` / `mermaid` / `abcjs` / `upub` / `udraft` / `slides`; "uPub"/"uDraft"/"uDoc"/
+`markdown` / `mermaid` / `abcjs` / `upub` / `udraft` / `slides` / `spreadsheet`; "uPub"/"uDraft"/"uDoc"/
 "uDraw"/"uNote" in older comments and plans are the retired u-codenames of the
 same apps. Glyphs were picked for having no emoji presentation; action glyphs
 that do (▶ ⏸ ⚙) get U+FE0E appended (`actions.js`).
@@ -72,6 +72,10 @@ src/
     tables/          {document} TABLE FORMULAS engine (pure, Node-tested `test/tables.test.mjs`): grid.js (Markdown
                      tables → sheets, `||`/`^^` merges, A1 addresses, `alignTables`), formula.js (Excel grammar +
                      ~70 functions, `evaluateWorkbook`), render.js (the grid HTML, CSV, a real .xlsx, HTML/print)
+    sheet/           THE {spreadsheet} ENGINE (pure, Node-tested `test/sheet.test.mjs`): parse.js (the DSL → sheets with
+                     rows/cells/grid + directives), style.js (props, conditions, number formats, per-cell resolution),
+                     book.js (computed workbook + the sort/filter VIEW), edit.js (every grid gesture as text → text, the
+                     canonical serializer), render.js (static table, CSV, HTML/print), xlsx.js (styled .xlsx + notes)
     zip.js           Stored-only ZIP writer (EPUB, the .xlsx, the multi-sheet CSV export)
     hash.js, crypto.js
     brand.js         `{name}` / `{glyph}` per app — THE naming source (site, manifests, icons, title bar)
@@ -79,7 +83,7 @@ src/
                      "is that build newer?" rule shared by every shell's update check (Node-tested)
     (assets/piano-soundfont.js — committed FluidR3 acoustic grand, ~2.5MB, note→dataURI)
   dsl/               One module per format; self-registers via registry.js
-    markdown.js, abcjs.js, mermaid.js, slides.js, fountain.js
+    markdown.js, abcjs.js, mermaid.js, slides.js, spreadsheet.js, fountain.js
     markdown-tables.js  Tables with formulas inside {document}: the marked block extension, DOCX/XLSX, editor pieces
     registry.js      registerDSL / getDSL / listDSLs
     abcjs-piano-loader.js  CommonJS drop-in for abcjs's ./load-note (offline soundfont)
@@ -110,6 +114,8 @@ src/
     action-fab.js    The draggable `{glyph}` action bubble, contextual per pane: tap = primary · hold = grid · drag = snap to a corner
     library-pane.js  The document list (phone pane `library` / desktop SIDEBAR `[data-library]`): search bar (names + text,
                      contextual hits), flat list, + New (asks the name), ⋯ rename title/duplicate/delete
+    sheet-grid.js    {spreadsheet}'s GRID — the render pane as a spreadsheet editor (selection, in-cell editing, formula
+                     bar, toolbar, popovers, context menu, clipboard, sheet tabs; every gesture → core/sheet/edit.js → `dsl-edit`)
     diff-view.js     DiffView overlay + DiffBar (read-only commit diff)
     dsl-footer.js    ABC transport (play/scrub/time)
     settings-panel.js  Identity, theme, updates (check button), audio output (MIDI)
@@ -143,12 +149,12 @@ dist/                Build output (gitignored)
 esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 - **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
-- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft), `slides`(sld). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft), `slides`(sld), `spreadsheet`(sht). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
 - A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `upub` and `udraft` variants use this (see below) — no CodeMirror, no DSL registry, their own CSS.
 - `npm test` → `node --test test/**` — pure Node, no browser: the uDraft core, the library (`test/library.test.mjs`), page config, emoji, etc.
 - `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
-- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model. The exception is `slides`, whose deck IS Markdown (Marpit) — it bundles only `slides.js` (no marked/docx).
+- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model. The exceptions are `slides`, whose deck IS Markdown (Marpit) — it bundles only `slides.js` (no marked/docx) — and `spreadsheet`, which bundles only `spreadsheet.js`.
 
 **Compile-time defines** (esbuild `define`, referenced as globals; guard with `typeof … !== 'undefined'`):
 - `UNIFILE_MODE` = `"quine"` | `"pwa"` → `IS_QUINE` in storage.js.
@@ -832,6 +838,102 @@ unchanged:
 - **Not done / ideas**: no date functions, no number-format row (use `TEXT()` or `decimals:`),
   no CSV import, no charts.
 
+## {spreadsheet} (`src/dsl/spreadsheet.js` + `src/core/sheet/` + `src/ui/sheet-grid.js`, 2026-10)
+
+A dedicated **spreadsheet** app (abbrev `sht`, dslType `spreadsheet`, mark `{▦}`) on the STANDARD
+shell, `wholeDocument: true` like {slides}. It is NOT the {document} table feature (`core/tables/`,
+which stays as it is — a table syntax inside prose); it REUSES that engine's formula evaluator
+(`core/tables/formula.js`: Excel grammar, ~70 functions, bare-column refs `=B*C`) and row splitting
+(`grid.js splitRow/parseSeparator/literalValue`). **The render pane is the editor**: the user mostly
+works in the grid; the text is a compact readable file that every gesture rewrites.
+
+- **The DSL (`core/sheet/parse.js`).** `# Heading` starts a sheet (none → `Sheet1`; duplicate names get
+  ` 2`). Inside a sheet a line is a ROW (`| a | b |`, `\|` escapes; one optional `|---|` line = the rows
+  above are HEADER rows: bold, frozen, exempt from sort/filter; its `:--:` colons are column aligns), a
+  DIRECTIVE (`width A:B 12` · `height 3 40` · `freeze rows:1 cols:1` · `merge A5:C5` · `style <range>
+  <props>` · `if <range> <cond> then <props>` · `scale <range> <c1> <c2> [c3]` · `comment B3 "…"` ·
+  `sort B desc[, C asc]` · `filter B > 0` / `filter =D>C` · `hide C:D` / `hide 3:5`), or a NOTE (any
+  other line — free text, rendered under the sheet). Rows count pipe rows from 1 (the separator is not a
+  row); addresses are Excel's (`parseRange`: `A1`, `A1:C3`, `A`, `A:C`, `3`, `3:5` — open ends are
+  `Infinity`). The inline `||`/`^^` spans of {document} tables are parsed too (a pasted table keeps its
+  merges) but the canonical form is `merge`. Directive args are tokenised by `tokenizeArgs` (quoted
+  strings with `\"` are one token, `format:"$#,##0 kg"` included). Problems are collected, never thrown
+  (`sheet.problems` → the editor's lint).
+- **Styles (`style.js`).** Flags `bold italic underline strike wrap` (`bold:off` clears), keyed
+  `color bg size font align valign format border` (`key:none` clears; `border` alone = all sides).
+  `format` = a pattern subset (`0.00`, `#,##0`, `0%`, `$#,##0.00`, any prefix/suffix, `0.00E+00`, `@`
+  = text) or a name (`general number integer percent currency text`). Conditions: `cmp` (`> 100`,
+  the right side is ANY formula expression), `between a and b`, `contains/starts/ends "x"`, `blank`,
+  `filled`, `error`, `duplicate`, `unique`, `top n`, `bottom n`, `=formula` (evaluated per cell with the
+  row's bare-column refs — `compileCondition` builds the predicate on formula.js's `evaluate`).
+  `styleResolver` layers per cell: `style` lines in order (later wins per key) → `if` rules whose
+  condition holds → `scale` (bg); `{ conditional: false }` gives the static style alone (what the .xlsx
+  writes as cell styles — the rules go out as real conditional formats, NEVER baked in).
+- **Computed workbook (`book.js`).** `computeWorkbook(text)` = parse + `evaluateWorkbook` + resolvers;
+  `display(cell)` = the typed text (a literal with a `format` and a numeric value shows the formatted
+  number), a formula result through its format / `decimals:` / General. **`sort` and `filter` are a
+  VIEW** (`viewRows`: header rows first, body filtered, stably sorted, blanks last, hidden rows removed —
+  the text's rows never move; addresses never change — Excel's autofilter). The toolbar's A↓/Z↓ are a
+  DATA sort (`edit.js sortRows`: reorders the row lines below the header; comments, heights, hidden
+  flags and single-row styles ride along; formulas are not rewritten, same as Excel — bare-column
+  formulas survive, `=SUM(D2:D3)` can end up self-referencing, also same as Excel).
+- **Edits (`edit.js`) are text → text.** Every op: parse → `toModel(sheet)` (cell texts + directives as
+  plain data) → mutate → `serializeModel` (canonical: pipes aligned per column, numbers right-padded
+  below row 1, the separator, then directives in a FIXED order width·height·freeze·merge·style·if·scale·
+  comment·sort·filter·hide, then notes; trailing empty rows/cols trimmed) → replace exactly that sheet's
+  block. A canonical file re-serializes byte-identically (= Alt-Shift-F `alignSpreadsheet`), so one cell
+  edit is a one-row diff; a hand-written file is normalised by its first grid edit. `insertRows/Cols`,
+  `deleteRows/Cols` shift every directive range (`shiftRange`) AND every formula reference to the sheet,
+  in THIS sheet (unqualified refs) and in OTHER sheets (`Sheet!A1` refs) — `shiftFormula` rewrites via
+  the formula tokenizer; a reference entirely deleted becomes `#REF!`, a partly deleted range clips.
+  `setStyle` keeps the directive list tidy (strips the keys from lines inside the range, merges into a
+  same-range line, writes `bold:off`/`color:none` only against a wider line that still sets it).
+  `addSheet` names the unnamed first sheet; `renameSheet` rewrites the other sheets' `Name!` refs;
+  `deleteSheet` keeps ≥ 1 sheet. An empty document's first edit creates `# Sheet1`. Changes come back
+  in ORIGINAL coordinates for CM (`{ text, changes }`), dispatched through `dsl-edit` so they land in the
+  editor's undo history — **the grid has no history of its own** (`editor-undo`/`editor-redo` events).
+- **The grid (`ui/sheet-grid.js`).** ONE instance per preview host (WeakMap), `update(book)` re-renders
+  the table from `render.js renderSheetHtml` (same markup as the HTML export + the quine's static
+  preview, + `extraRows/extraCols` blank room to grow) and keeps only VIEW state: active sheet,
+  selection (`{r1,c1,r2,c2, anchor, head, mode: cells|rows|cols|all}`), scroll, an edit in progress.
+  Every op reads `state.currentContent` fresh (never a cached model — the preview's 300 ms debounce
+  would make a cached one stale between quick commits) and redraws immediately from the result; the
+  preview's own render follows and finds the same text. Gestures: type = replace, Enter/Tab move,
+  F2/dbl-click edit in place, Delete clears, Shift+arrows/click extend, Ctrl+arrows jump, letters/numbers
+  = whole col/row, corner = all, right-click / touch long-press = context menu, drag a column edge =
+  `width`, dbl-click the edge = default, copy/cut/paste = TSV of the cells' TEXT (formulas travel as
+  formulas; the `copy/cut/paste` DOM events, so no clipboard permission), Ctrl+B/I/U, Ctrl+Z/Y → the
+  editor. Popovers (`.uf-ss-pop`, one element): format list + custom, colour swatches + `<input
+  type=color>`, borders, filter form, comment, conditional-format rules (list + delete + new rule),
+  colour scale, the ⋯ menu (freeze, header rows, view sort, hide/unhide, widths/heights, sheets, tidy).
+  Sheet tabs: click / dbl-click rename / right-click / `+`. **Editor ↔ grid sync**: selecting a cell
+  emits `dsl-select` with `focus: false` (editor.js: the editor mirrors the selection WITHOUT taking
+  focus — the grid keeps the keyboard); the editor caret moving (`editor-select`) selects that cell in
+  the grid silently. The grid root `stopPropagation`s clicks so preview.js's generic click-back never
+  fires. Frozen rows/cols = `position: sticky` with offsets measured after render (`_applyFrozen`;
+  header rows count as frozen). Phones: the grid fills the render pane, the bubble's render-view verbs
+  come from `dsl.renderActions` (`actions.js` hook, `sheet-grid-action` event: undo/redo/bold/insert/
+  delete/merge/comment/clear), tap = `undo` by default.
+- **CSS**: `.uf-ss*` in app.css; the grid breaks out of the prose column and fills the pane
+  (`100cqw`/`100cqh` + negative margins against `.preview-content`'s padding). Rules, scales and
+  `style` land as INLINE styles on the cells (user colours apply in either theme).
+- **Editor (text side)**: a `StreamLanguage` tokenizer (rows: pipes recede, formulas tinted; directives:
+  keyword / range / props / strings / colours); lint = `book.problems` + formula errors on their cells;
+  completion = function names after `=`, directive keywords at line start, props after `style`/`then`,
+  condition words after `if`/`filter`. `alignSource` = `alignSpreadsheet`.
+- **Exports**: `.xlsx` (`xlsx.js`: a `StyleTable` of fonts/fills/borders/numFmts/alignment → one xf per
+  distinct static style, `dxfs` for rules, `<conditionalFormatting>` cellIs/containsText/beginsWith/
+  endsWith/containsBlanks/top10/duplicateValues/expression/colorScale, merges, widths, heights, hidden
+  rows/cols, frozen panes, autoFilter, and cell NOTES as legacy VML `comments<n>.xml` +
+  `vmlDrawing<n>.vml` — every reader shows them), CSV (the grid's active sheet), HTML (every sheet,
+  static), PDF (print window, landscape). Tests in `test/sheet.test.mjs` cover parse, styles,
+  conditions, formats, the computed view, every edit op (incl. reference shifting), rendering and the
+  .xlsx parts.
+- **Not done / ideas**: no dates/times (no serial numbers, no DATE functions), no data bars, no
+  multi-line cells, no drag-fill handle, no column-letter-based move/reorder, no charts, no .xlsx IMPORT
+  (Open from device reads `.uni` text only), virtualisation (a sheet of thousands of rows re-renders the
+  whole table per edit).
+
 ## Mobile / iOS (hard-won — read before touching layout)
 
 The app is a `100dvh`-ish flex column. On phones (`@media max-width:640px`, OR landscape `(orientation: landscape) and (max-height: 500px) and (pointer: coarse)`) **the desktop top bar is hidden entirely** (`#uf-topbar { display:none }`) and the **phone top bar (`#uf-pane-switch`, `src/ui/pane-switch.js`) is the sole top chrome**, sitting directly below the site-nav (if present) under the safe-area inset (which lives on `#unifile-app` padding-top). Only the active one of three panes (**commit-log · editor · render**) is displayed; `App._setupMobilePanes()` tracks the pane into `#unifile-app[data-mobile-pane]`.
@@ -900,7 +1002,7 @@ Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`
 
 ## Conventions & workflows
 
-- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site; add the app to `src/core/brand.js` + `npm run gen:icons` (commit only the new `templates/icons/<abbrev>/` — the run regenerates every app's PNGs byte-differently, `git checkout` the others); list the new `pwa-<abbrev>` in `sync-site.mjs` and `render-site.mjs` (`TYPE_TO_ICON` + the copy list); a help entry in `topbar.js DSL_HELP`. Before adding an app, ask whether it is really a FEATURE of an existing one — the table formulas (2026-10) were built as a {sheet} app first and folded into {document}. A DSL that owns the whole document sets `wholeDocument: true` (see {slides}); `actions: [{id,label,glyph,run}]` puts verbs on the ⋯ menu and the phone bubble.
+- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site; add the app to `src/core/brand.js` + `npm run gen:icons` (commit only the new `templates/icons/<abbrev>/` — the run regenerates every app's PNGs byte-differently, `git checkout` the others); list the new `pwa-<abbrev>` in `sync-site.mjs` and `render-site.mjs` (`TYPE_TO_ICON` + the copy list); a help entry in `topbar.js DSL_HELP`. Before adding an app, ask whether it is really a FEATURE of an existing one — the table formulas (2026-10) were built as a {sheet} app first and folded into {document}; the later {spreadsheet} app (also 2026-10) is the user's explicit call for a grid-first editor and reuses that formula engine rather than duplicating it. A DSL whose render view is itself an editing surface puts the phone bubble's verbs on `renderActions: [{id,label,glyph,run}]`. A DSL that owns the whole document sets `wholeDocument: true` (see {slides}); `actions: [{id,label,glyph,run}]` puts verbs on the ⋯ menu and the phone bubble.
 - **Verifying UI changes:** use the preview tools against a build (`node build/build.mjs --dsl=abcjs --no-pwa`, serve `dist/` — see `.claude/launch.json`, port 8765). Resize to 375px for mobile. **Always build the variant you're testing.** In the PWA build the app object is NOT on `window.__unifile` (quines only); drive it through `globalThis.__uf.state` (`state.emit('checkout', {content})` sets the editor text). Playwright lives in `/opt/node-tools/node_modules/playwright` (not a project dependency); the pre-install banner (`#uf-install-banner`) covers the phone title bar in a browser tab — remove it before tapping.
 - **Deploying is automatic on push:** Cloudflare Pages rebuilds from source (`build:site && site:preview`) on every push to `main`, so a source-only commit deploys correctly — no need to pre-run `build:site` for the deployed site to be current (that old footgun is gone). You still build the specific variant locally to *test* UI changes in the preview.
 - **Branches — `dev` is the working branch; `main` only ever receives `dev`.** Every change is
