@@ -33,6 +33,7 @@ import { FORMAT_CHOICES, parseCondition, describeCondition, formatStyleProps } f
 import { parseStep } from '../core/sheet/seq.js';
 import { chartData, renderChartSvg, CHART_DEFAULT_SIZE } from '../core/sheet/chart.js';
 import { CHART_TYPES } from '../core/sheet/parse.js';
+import { isFormula, operandSlotAt, completionAt, signatureAt, acceptCompletion, insertRef, refText, formulaRefs } from '../core/sheet/formula-edit.js';
 
 const EXTRA_ROWS = 40;
 const EXTRA_COLS = 6;
@@ -41,6 +42,8 @@ const EXTRA_COLS = 6;
 const VIRTUAL_FROM = 150;
 const WINDOW_BUFFER = 20;
 const LONG_PRESS_MS = 480;
+// The range finder's outline colours (Excel's blue / red / purple / green … per distinct reference).
+const REF_COLOURS = ['#1a8cf5', '#e03c3c', '#8e44ad', '#27ae60', '#e67e22', '#17a2b8', '#d63384'];
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const mobile = () => window.matchMedia('(max-width: 640px)').matches;
@@ -112,10 +115,12 @@ export class SheetGrid {
         <div class="uf-ss-tablewrap"></div>
         <div class="uf-ss-charts-layer"></div>
         <div class="uf-ss-fill" hidden title="Drag to fill"></div>
+        <div class="uf-ss-refs"></div>
         <textarea class="uf-ss-editor" rows="1" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Edit cell"></textarea>
       </div>
       <div class="uf-ss-tabs"></div>
       <div class="uf-ss-pop" hidden></div>
+      <div class="uf-ss-ac" hidden></div>
     `;
     this.host.appendChild(root);
     this.root = root;
@@ -127,6 +132,8 @@ export class SheetGrid {
     this.editor = root.querySelector('.uf-ss-editor');
     this.chartsLayer = root.querySelector('.uf-ss-charts-layer');
     this.fillHandle = root.querySelector('.uf-ss-fill');
+    this.refsLayer = root.querySelector('.uf-ss-refs');
+    this.ac = root.querySelector('.uf-ss-ac');
     this.tabs = root.querySelector('.uf-ss-tabs');
     this.pop = root.querySelector('.uf-ss-pop');
   }
@@ -202,7 +209,7 @@ export class SheetGrid {
     this._measureRowHeight();
     this.scroll.scrollTop = top;
     this.scroll.scrollLeft = left;
-    if (this.editing) this._placeEditor();
+    if (this.editing) { this._placeEditor(); this._paintRefs(); }
     this._renderCharts();
   }
 
@@ -456,18 +463,31 @@ export class SheetGrid {
   // Editing
   // ---------------------------------------------------------------------------
 
-  _startEdit(r, c, initial = null) {
+  /**
+   * Begin editing (r, c).  `initial` = the typed character that started it.
+   * Excel's two modes: typing into a cell is ENTER mode (an arrow key commits
+   * and moves — or, at an operand position of a formula, POINTS at a cell);
+   * F2 / double-click / the formula bar is EDIT mode (arrows move the caret).
+   * `surface` = which field holds the caret: the in-cell editor, or the
+   * formula bar (`fx`) when the edit began by clicking into it.
+   */
+  _startEdit(r, c, initial = null, { surface = 'cell' } = {}) {
     const cell = this._cell(r, c);
     if (cell) { r = cell.r; c = cell.c; }
-    this.editing = { r, c };
+    this.editing = { r, c, mode: initial != null ? 'enter' : 'edit', surface, pointed: null, point: null };
     this.editor.value = initial != null ? initial : this._cellText(r, c);
+    this.fxInput.value = this.editor.value;
     this.editor.hidden = false;
     this.editor.classList.add('is-open');
     this._placeEditor();
-    this.editor.focus();
-    const n = this.editor.value.length;
-    this.editor.setSelectionRange(n, n);
-    this.fxInput.value = this.editor.value;
+    if (!this.editing) return;   // nothing to anchor the editor to
+    if (surface === 'cell') {
+      this.editor.focus();
+      const n = this.editor.value.length;
+      this.editor.setSelectionRange(n, n);
+    }
+    this._paintRefs();
+    this._updateAssist();
   }
 
   _placeEditor() {
@@ -484,6 +504,12 @@ export class SheetGrid {
     st.height = 'auto';
     st.height = Math.max(this.editor.scrollHeight, this._editorMinH) + 'px';
     st.textAlign = getComputedStyle(td).textAlign;
+    if (!this.ac.hidden) this._placeAssist();
+  }
+
+  _growEditor() {
+    this.editor.style.height = 'auto';
+    this.editor.style.height = Math.max(this.editor.scrollHeight, this._editorMinH ?? 26) + 'px';
   }
 
   _commitEdit({ move = null } = {}) {
@@ -500,8 +526,202 @@ export class SheetGrid {
     this.editing = null;
     this.editor.classList.remove('is-open');
     this.editor.hidden = true;
+    this._hideAssist();
+    this.refsLayer.innerHTML = '';
     if (!keepFocus) this.root.focus({ preventScroll: true });
     this._paint();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Formula assist: completion, the signature tip, pointing, the range finder
+  // (the pure logic is core/sheet/formula-edit.js)
+  // ---------------------------------------------------------------------------
+
+  /** The field holding the caret: the formula bar when it has focus, else the in-cell editor. */
+  _field() { return document.activeElement === this.fxInput ? this.fxInput : this.editor; }
+
+  /** Focus moving between the two fields (or into the assist popup) keeps the edit alive. */
+  _staysInEdit(target) { return target === this.editor || target === this.fxInput || (!!target && this.ac.contains(target)); }
+
+  /** Set both fields' text, the caret in the active one, and refresh everything drawn from it. */
+  _setFieldValue(value, caret = value.length, { field = this._field() } = {}) {
+    this.editor.value = value;
+    this.fxInput.value = value;
+    try { field.setSelectionRange(caret, caret); } catch { /* not focusable */ }
+    this._growEditor();
+    this._paintRefs();
+    this._updateAssist();
+  }
+
+  /** Keys in either field: the completion list, commit / cancel, F2, arrows (point, commit, or move the caret). */
+  _onFieldKey(e) {
+    const field = e.currentTarget;
+    const ac = this._ac;
+    if (ac) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); ac.index = (ac.index + (e.key === 'ArrowDown' ? 1 : -1) + ac.items.length) % ac.items.length; this._renderAc(); return; }
+      if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); this._acceptAc(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); this._acSuppressed = ac.query; this._ac = null; this._updateAssist(); return; }
+    }
+    const ed = this.editing;
+    if (!ed) return;
+    if (e.key === 'Enter' && (e.altKey || e.ctrlKey || e.metaKey)) {
+      // A line break inside the cell (Excel's Alt+Enter).
+      e.preventDefault();
+      const a = field.selectionStart, b = field.selectionEnd;
+      const v = field.value.slice(0, a) + '\n' + field.value.slice(b);
+      ed.pointed = null;
+      this._setFieldValue(v, a + 1, { field });
+      return;
+    }
+    if (e.key === 'Enter') { e.preventDefault(); this._commitEdit({ move: e.shiftKey ? [-1, 0] : [1, 0] }); return; }
+    if (e.key === 'Tab') { e.preventDefault(); this._commitEdit({ move: e.shiftKey ? [0, -1] : [0, 1] }); return; }
+    if (e.key === 'Escape') { e.preventDefault(); this._cancelEdit(); return; }
+    if (e.key === 'F2') { e.preventDefault(); ed.mode = ed.mode === 'enter' ? 'edit' : 'enter'; return; }
+    const arrow = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+    if (arrow && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const live = !!ed.pointed && field.selectionStart === ed.pointed.to && field.selectionEnd === ed.pointed.to;
+      if (live || (ed.mode === 'enter' && this._canPoint(field))) { e.preventDefault(); this._pointByKey(arrow[0], arrow[1], e.shiftKey); return; }
+      if (ed.mode === 'enter') { e.preventDefault(); this._commitEdit({ move: arrow }); return; }
+      // Edit mode: the caret moves.
+    }
+  }
+
+  /** Would a click on a cell put a reference into the formula (vs end the edit)? */
+  _canPoint(field = this._field()) {
+    const ed = this.editing;
+    if (!ed) return false;
+    const v = field.value;
+    return isFormula(v) && operandSlotAt(v, field.selectionStart, { pointed: ed.pointed, selEnd: field.selectionEnd }) != null;
+  }
+
+  /** The range a point gesture covers: anchor…head, whole columns / rows when it began on a header. */
+  _pointRange(p) {
+    const a = p.anchor, h = p.head;
+    if (p.mode === 'cols') return { r1: 0, c1: Math.min(a.c, h.c), r2: Infinity, c2: Math.max(a.c, h.c) };
+    if (p.mode === 'rows') return { r1: Math.min(a.r, h.r), c1: 0, r2: Math.max(a.r, h.r), c2: Infinity };
+    return { r1: Math.min(a.r, h.r), c1: Math.min(a.c, h.c), r2: Math.max(a.r, h.r), c2: Math.max(a.c, h.c) };
+  }
+
+  /** Put (or replace) the pointed reference in the formula at the operand slot. */
+  _insertPointedRef(R) {
+    const ed = this.editing;
+    if (!ed) return false;
+    const field = this._field();
+    const v = field.value;
+    const slot = operandSlotAt(v, field.selectionStart, { pointed: ed.pointed, selEnd: field.selectionEnd });
+    if (!slot) return false;
+    const { text, slot: next } = insertRef(v, slot, refText(R));
+    ed.pointed = next;
+    this._setFieldValue(text, next.to, { field });
+    return true;
+  }
+
+  /** Arrow keys while pointing: move (Shift: extend) the pointed reference, starting from the edited cell. */
+  _pointByKey(dr, dc, extend) {
+    const ed = this.editing;
+    const field = this._field();
+    const live = !!ed.point && !!ed.pointed && field.selectionStart === ed.pointed.to;
+    const base = live ? ed.point : { anchor: { r: ed.r, c: ed.c }, head: { r: ed.r, c: ed.c }, mode: 'cells' };
+    const head = { r: Math.max(0, base.head.r + dr), c: Math.max(0, base.head.c + dc) };
+    const anchor = extend ? base.anchor : head;
+    ed.point = { anchor, head, mode: 'cells' };
+    if (this._insertPointedRef(this._pointRange(ed.point))) this._scrollCellIntoView(head.r, head.c);
+  }
+
+  /** Recompute the popup under the field: the function list while a name is typed, else the signature tip. */
+  _updateAssist() {
+    const ed = this.editing;
+    if (!ed) { this._hideAssist(); return; }
+    const field = this._field();
+    const v = field.value, caret = field.selectionStart;
+    const collapsed = field.selectionEnd === caret;
+    const pointing = !!ed.pointed && caret === ed.pointed.to && collapsed;
+    const comp = collapsed && !pointing ? completionAt(v, caret) : null;
+    if (comp && comp.query !== this._acSuppressed) {
+      this._acSuppressed = null;
+      const same = this._ac && this._ac.query === comp.query && this._ac.from === comp.from;
+      this._ac = { ...comp, items: comp.options, index: same ? Math.min(this._ac.index, comp.options.length - 1) : 0 };
+      this._renderAc();
+      return;
+    }
+    if (!comp) this._acSuppressed = null;
+    this._ac = null;
+    const sig = signatureAt(v, caret);
+    if (sig) this._renderSig(sig); else this._hideAssist();
+  }
+
+  _renderAc() {
+    const ac = this._ac;
+    this.ac.innerHTML = `<div class="uf-ss-ac-list" role="listbox">${ac.items.map((o, i) =>
+      `<button type="button" class="uf-ss-ac-item${i === ac.index ? ' is-on' : ''}" role="option" data-i="${i}" title="${esc(o.signature)}"><b>${esc(o.name)}</b><span>${esc(o.detail)}</span></button>`).join('')}</div>`;
+    this.ac.hidden = false;
+    this._placeAssist();
+    this.ac.querySelector('.is-on')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  _renderSig(sig) {
+    const params = sig.params
+      ? sig.params.map((p, i) => `<span class="uf-ss-ac-param${i === sig.current ? ' is-on' : ''}">${esc(p)}</span>`).join(', ')
+      : '…';
+    this.ac.innerHTML = `<div class="uf-ss-ac-sig"><b>${esc(sig.name)}</b>(${params})</div>`;
+    this.ac.hidden = false;
+    this._placeAssist();
+  }
+
+  /** Under the active field, inside the grid root; above it when there is no room below. */
+  _placeAssist() {
+    const field = this._field();
+    const rr = this.root.getBoundingClientRect();
+    const fr = field.getBoundingClientRect();
+    const el = this.ac;
+    el.style.left = '0px'; el.style.top = '0px';
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let x = fr.left - rr.left, y = fr.bottom - rr.top + 2;
+    if (y + h > rr.height - 4 && fr.top - rr.top - h - 2 >= 0) y = fr.top - rr.top - h - 2;
+    x = Math.max(4, Math.min(x, rr.width - w - 4));
+    y = Math.max(4, Math.min(y, rr.height - h - 4));
+    el.style.left = x + 'px'; el.style.top = y + 'px';
+  }
+
+  _hideAssist() { this._ac = null; if (!this.ac.hidden) { this.ac.hidden = true; this.ac.innerHTML = ''; } }
+
+  _acceptAc() {
+    const ac = this._ac;
+    if (!ac || !this.editing) return;
+    const name = ac.items[ac.index].name;
+    const field = this._field();
+    const { text, caret } = acceptCompletion(field.value, ac, name);
+    this.editing.pointed = null;
+    this._ac = null;
+    this._setFieldValue(text, caret, { field });
+  }
+
+  /** Excel's range finder: a coloured outline on every range the formula names; the one being pointed is dashed. */
+  _paintRefs() {
+    const layer = this.refsLayer;
+    layer.innerHTML = '';
+    const ed = this.editing;
+    if (!ed || !this.table) return;
+    const v = this.editor.value;
+    if (!isFormula(v)) return;
+    const wr = this.tableWrap.getBoundingClientRect();
+    const shown = this._shown ?? [];
+    const lastRow = shown.length ? shown[shown.length - 1] : 0;
+    const lastCol = (this.sheet?.cols ?? 1) + EXTRA_COLS - 1;
+    const colours = new Map();
+    let html = '';
+    for (const ref of formulaRefs(v)) {
+      if (ref.kind === 'sheet') continue;
+      if (!colours.has(ref.key)) colours.set(ref.key, REF_COLOURS[colours.size % REF_COLOURS.length]);
+      const R = ref.kind === 'col' ? { r1: ed.r, c1: ref.R.c, r2: ed.r, c2: ref.R.c } : ref.R;
+      const a = this._anchorTd(R.r1, R.c1), b = this._anchorTd(Math.min(R.r2, lastRow), Math.min(R.c2, lastCol));
+      if (!a || !b) continue;   // off the rendered window
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      if (rb.right <= ra.left || rb.bottom <= ra.top) continue;
+      const live = !!ed.pointed && ref.from === ed.pointed.from && ref.to === ed.pointed.to;
+      html += `<div class="uf-ss-ref${live ? ' is-live' : ''}" style="left:${ra.left - wr.left}px;top:${ra.top - wr.top}px;width:${rb.right - ra.left}px;height:${rb.bottom - ra.top}px;--ref:${colours.get(ref.key)}"></div>`;
+    }
+    layer.innerHTML = html;
   }
 
   // ---------------------------------------------------------------------------
@@ -737,37 +957,34 @@ export class SheetGrid {
       this._paint(); this._scrollCellIntoView(R.r1, R.c1);
     });
 
-    // Formula bar
-    this.fxInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); const { r, c } = this.sel.head; const v = this.fxInput.value; if (v !== this._cellText(r, c)) this._apply(ops.setCell(this.text, this.sheetIndex, r, c, v, this.book), { select: { r, c } }); this._move(1, 0); this.root.focus(); }
-      else if (e.key === 'Escape') { this.fxInput.value = this._cellText(this.sel.head.r, this.sel.head.c); this.root.focus(); }
-      else if (e.key === 'Tab') { e.preventDefault(); const { r, c } = this.sel.head; const v = this.fxInput.value; if (v !== this._cellText(r, c)) this._apply(ops.setCell(this.text, this.sheetIndex, r, c, v, this.book), { select: { r, c } }); this._move(0, 1); this.root.focus(); }
+    // Formula bar and in-cell editor: two fields, ONE edit.  Clicking into the
+    // formula bar begins an edit of the active cell (Excel's Edit mode); typing
+    // in either mirrors into the other; focus moving between them keeps the
+    // edit alive; leaving both commits.
+    this.fxInput.addEventListener('focus', () => {
+      if (!this.editing) { const { r, c } = this.sel.head; this._startEdit(r, c, null, { surface: 'fx' }); }
+      else this.editing.mode = 'edit';
     });
-
-    // In-cell editor
-    this.editor.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.altKey || e.ctrlKey || e.metaKey)) {
-        // A line break inside the cell (Excel's Alt+Enter).
-        e.preventDefault();
-        const ta = this.editor, a = ta.selectionStart, b = ta.selectionEnd;
-        ta.value = ta.value.slice(0, a) + '\n' + ta.value.slice(b);
-        ta.setSelectionRange(a + 1, a + 1);
-        ta.dispatchEvent(new Event('input'));
-      } else if (e.key === 'Enter') { e.preventDefault(); this._commitEdit({ move: e.shiftKey ? [-1, 0] : [1, 0] }); }
-      else if (e.key === 'Tab') { e.preventDefault(); this._commitEdit({ move: e.shiftKey ? [0, -1] : [0, 1] }); }
-      else if (e.key === 'Escape') { e.preventDefault(); this._cancelEdit(); }
-      e.stopPropagation();
-    });
-    this.editor.addEventListener('input', () => {
-      this.fxInput.value = this.editor.value;
-      // Grow with the text (Alt+Enter adds a line).
-      this.editor.style.height = 'auto';
-      this.editor.style.height = Math.max(this.editor.scrollHeight, this._editorMinH ?? 26) + 'px';
-    });
-    this.editor.addEventListener('blur', () => { if (this.editing && !this._suppressBlurCommit) this._commitEdit(); });
+    for (const field of [this.fxInput, this.editor]) {
+      const other = field === this.editor ? this.fxInput : this.editor;
+      field.addEventListener('keydown', e => { this._onFieldKey(e); e.stopPropagation(); });
+      field.addEventListener('keyup', () => this._updateAssist());
+      field.addEventListener('mouseup', () => this._updateAssist());
+      field.addEventListener('input', () => {
+        other.value = field.value;
+        if (this.editing) this.editing.pointed = null;   // typing ends Point mode
+        this._growEditor();
+        this._paintRefs();
+        this._updateAssist();
+      });
+      field.addEventListener('blur', e => { if (this.editing && !this._staysInEdit(e.relatedTarget)) this._commitEdit(); });
+    }
+    // The assist popup: keep the field's focus; a click picks the function.
+    this.ac.addEventListener('pointerdown', e => e.preventDefault());
+    this.ac.addEventListener('click', e => { const b = e.target.closest('[data-i]'); if (!b || !this._ac) return; this._ac.index = +b.dataset.i; this._acceptAc(); });
 
     // Virtual window follows the scroll.
-    this.scroll.addEventListener('scroll', () => { if (this._scrollRaf) return; this._scrollRaf = requestAnimationFrame(() => { this._scrollRaf = 0; this._onScroll(); }); }, { passive: true });
+    this.scroll.addEventListener('scroll', () => { if (this._scrollRaf) return; this._scrollRaf = requestAnimationFrame(() => { this._scrollRaf = 0; this._onScroll(); if (this.editing) this._paintRefs(); }); }, { passive: true });
 
     // Fill handle: drag to extend the selection's pattern.
     this.fillHandle.addEventListener('pointerdown', e => {
@@ -877,7 +1094,24 @@ export class SheetGrid {
     const th = target.closest('th[data-col], th[data-row], th[data-corner]');
     if (!td && !th) return;
     if (this.editing) {
-      if (td && +td.dataset.r === this.editing.r && +td.dataset.c === this.editing.c) return;
+      const ed = this.editing;
+      if (td && +td.dataset.r === ed.r && +td.dataset.c === ed.c) return;
+      if (th?.dataset.corner == null && this._canPoint()) {
+        // Point mode: the click puts this cell's reference into the formula
+        // (a header: the whole column / row); dragging widens it to a range.
+        e.preventDefault();
+        let point;
+        if (td) {
+          const cell = this._cell(+td.dataset.r, +td.dataset.c);
+          const r = cell ? cell.r : +td.dataset.r, c = cell ? cell.c : +td.dataset.c;
+          point = { anchor: { r, c }, head: { r, c }, mode: 'cells' };
+        } else if (th.dataset.col != null) { const c = +th.dataset.col; point = { anchor: { r: 0, c }, head: { r: 0, c }, mode: 'cols' }; }
+        else { const r = +th.dataset.row; point = { anchor: { r, c: 0 }, head: { r, c: 0 }, mode: 'rows' }; }
+        ed.point = point;
+        this._insertPointedRef(this._pointRange(point));
+        this._drag = { kind: 'point', pointerId: e.pointerId, moved: false, startX: e.clientX, startY: e.clientY };
+        return;
+      }
       this._commitEdit();
     }
     e.preventDefault();
@@ -899,7 +1133,7 @@ export class SheetGrid {
       this._drag = { kind: 'rows', pointerId: e.pointerId, moved: false, startX: e.clientX, startY: e.clientY };
     }
     // Long-press (touch) → the context menu.
-    if (e.pointerType === 'touch' && this._drag) {
+    if (e.pointerType === 'touch' && this._drag && this._drag.kind !== 'point') {
       clearTimeout(this._pressTimer);
       const at = { x: e.clientX, y: e.clientY };
       this._pressTimer = setTimeout(() => { if (this._drag && !this._drag.moved) { this._drag = null; this._openContextMenu(at); } }, LONG_PRESS_MS);
@@ -952,6 +1186,17 @@ export class SheetGrid {
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const td = el?.closest?.('td[data-r]');
     const th = el?.closest?.('th[data-col], th[data-row]');
+    if (d.kind === 'point') {
+      // Dragging while pointing widens the reference to a range.
+      const p = this.editing?.point;
+      if (!p) return;
+      if (p.mode === 'cells' && td) p.head = { r: +td.dataset.r, c: +td.dataset.c };
+      else if (p.mode === 'cols' && th?.dataset.col != null) p.head = { r: 0, c: +th.dataset.col };
+      else if (p.mode === 'rows' && th?.dataset.row != null) p.head = { r: +th.dataset.row, c: 0 };
+      else return;
+      this._insertPointedRef(this._pointRange(p));
+      return;
+    }
     if (d.kind === 'cells' && td) this._select(+td.dataset.r, +td.dataset.c, { extend: true, silent: true });
     else if (d.kind === 'cols' && th?.dataset.col != null) this._select(0, +th.dataset.col, { extend: true, mode: 'cols', silent: true });
     else if (d.kind === 'rows' && th?.dataset.row != null) this._select(+th.dataset.row, 0, { extend: true, mode: 'rows', silent: true });
@@ -973,6 +1218,7 @@ export class SheetGrid {
       if (d.w) this._apply(ops.setWidth(this.text, this.sheetIndex, d.c, d.c, Math.max(2, Math.round((d.w - 12) / 8)), this.book), { select: { range: this._range(), mode: this.sel.mode } });
       return;
     }
+    if (d.kind === 'point') return;   // the edit goes on; the next click or drag re-points
     if (d.moved) this._mirrorToEditor();
   }
 

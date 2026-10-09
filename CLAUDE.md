@@ -921,7 +921,23 @@ sparse and large): it is a per-sheet YAML front matter + one LINE PER CELL OR RA
   emits `dsl-select` with `focus: false` (editor.js mirrors the selection WITHOUT taking focus);
   the editor caret moving (`editor-select`) selects that cell in the grid silently (a fill line's
   caret → its first cell). The grid root `stopPropagation`s clicks so preview.js's click-back never
-  fires. Frozen rows/cols = `position: sticky` with offsets measured after render (`_applyFrozen`;
+  fires. **Formula entry is Excel's (2026-10, `core/sheet/formula-edit.js`, pure, `test/formula-edit.test.mjs`;
+  the function descriptions + signatures in `core/tables/formula-help.js`, shared with the {document}
+  tables' completion):** the in-cell textarea and the formula bar are TWO FIELDS OF ONE EDIT
+  (`editing.surface`; focus moving between them or into the assist popup keeps the edit —
+  `_staysInEdit(relatedTarget)` on blur; clicking into the bar starts an edit of the active cell).
+  `editing.mode` = Excel's ENTER (typing started it: arrows commit and move) vs EDIT (F2 / double-click /
+  the bar: arrows move the caret; F2 toggles). `_updateAssist` after every key/caret move draws ONE
+  popup `.uf-ss-ac` under the active field: the function list while a name is typed at an operand
+  position (`completionAt`; ↑↓, Tab/Enter insert `NAME(`, Esc hides it for that query), else the
+  signature tip with the current argument bold (`signatureAt`). POINTING: where a reference is
+  expected (`operandSlotAt`: after `=` `(` `,` an operator or `:`, a selected run, or the reference
+  just pointed while the caret sits at its end — `editing.pointed`) a click on a cell inserts its
+  reference instead of committing, a drag widens it to a range (`_drag.kind 'point'`), a column/row
+  header gives `B:B`/`3:3`, arrows (Shift extends) point from the edited cell (`_pointByKey`), and the
+  next gesture REPLACES the pointed reference; typing clears `pointed`; anywhere else a click commits
+  as before. `_paintRefs` = the range finder: `.uf-ss-refs` outlines (one colour per distinct reference,
+  `REF_COLOURS`; the live one dashed) in tableWrap coords, redrawn on input, scroll and re-render. Frozen rows/cols = `position: sticky` with offsets measured after render (`_applyFrozen`;
   header rows count as frozen). Phones: the grid fills the render pane, the bubble's render-view
   verbs come from `dsl.renderActions` (`actions.js` hook, `sheet-grid-action` event), tap = `undo`.
 - **CSS**: `.uf-ss*` in app.css; the grid breaks out of the prose column and fills the pane

@@ -5060,6 +5060,34 @@ noscript .noscript-wrap {
 .uf-ss-tab:hover, .uf-ss-addtab:hover { color: var(--text); }
 .uf-ss-addtab { font-family: var(--font-mono); padding: 0 8px; }
 
+/* Formula assist (Excel-style): the function list / signature tip under the
+   field being edited, and the range finder — one coloured outline per
+   reference in the formula, dashed while a click / drag is pointing it. */
+.uf-ss-ac {
+  position: absolute; z-index: 41; max-width: min(360px, calc(100% - 16px)); max-height: 220px; overflow: auto;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .24); padding: 3px; font-size: 12.5px; user-select: none; -webkit-user-select: none;
+}
+.uf-ss-ac-list { display: flex; flex-direction: column; min-width: 220px; }
+.uf-ss-ac-item {
+  display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; border: 0; border-radius: 4px; background: transparent;
+  color: var(--text); font: inherit; text-align: left; cursor: pointer; white-space: nowrap;
+}
+.uf-ss-ac-item b { font-family: var(--font-mono); font-weight: 600; }
+.uf-ss-ac-item span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+.uf-ss-ac-item:hover { background: var(--bg-surface); }
+.uf-ss-ac-item.is-on { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); }
+.uf-ss-ac-sig { padding: 4px 8px; font-family: var(--font-mono); white-space: nowrap; color: var(--text-muted); }
+.uf-ss-ac-sig b { color: var(--text); font-weight: 600; }
+.uf-ss-ac-param.is-on { color: var(--text); font-weight: 700; }
+.uf-ss-refs { position: absolute; left: 0; top: 0; z-index: 5; pointer-events: none; }
+.uf-ss-ref {
+  position: absolute; box-sizing: border-box; border: 2px solid var(--ref, var(--accent));
+  background: color-mix(in srgb, var(--ref, var(--accent)) 8%, transparent);
+}
+.uf-ss-ref.is-live { border-style: dashed; animation: uf-ss-ants .6s linear infinite; }
+@keyframes uf-ss-ants { to { outline-offset: 0; border-color: color-mix(in srgb, var(--ref, var(--accent)) 60%, transparent); } }
+
 /* Popovers: menus and the small forms (format, colours, filter, comment, rules). */
 .uf-ss-pop {
   position: absolute; z-index: 40; min-width: 160px; max-width: min(420px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow: auto;
@@ -5113,6 +5141,7 @@ noscript .noscript-wrap {
   .uf-ss-editor { font-size: 16px; line-height: 24px; }   /* 16px stops Safari's focus zoom */
   .uf-ss-fxinput { font-size: 16px; }
   .uf-ss-pop { max-width: calc(100% - 8px); }
+  .uf-ss-ac { max-width: calc(100% - 8px); }
 }
 
 /* Editor: the DSL's tokens (StreamLanguage in src/dsl/spreadsheet.js) ride
