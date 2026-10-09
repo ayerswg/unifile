@@ -13,7 +13,7 @@
  */
 
 import { parseSpreadsheet } from './parse.js';
-import { evaluateWorkbook, isError, formatNumber } from '../tables/formula.js';
+import { evaluateWorkbook, isError, isDate, formatNumber } from '../tables/formula.js';
 import { literalValue } from '../tables/grid.js';
 import { styleResolver, compileCondition, compareValues, formatValue } from './style.js';
 
@@ -65,6 +65,7 @@ export function valueKind(cell, value) {
   if (!cell || cell.merged) return 'empty';
   if (isError(value)) return 'error';
   if (value == null || value === '') return 'empty';
+  if (isDate(value)) return 'date';
   if (typeof value === 'number') return 'num';
   if (typeof value === 'boolean') return 'bool';
   return 'text';
@@ -81,12 +82,13 @@ export function cellDisplay(cell, value, style = {}, decimals = null) {
   const fmt = style.format ?? null;
   if (cell.formula == null) {
     const t = cell.text.startsWith("'") ? cell.text.slice(1) : cell.text;
-    if (fmt && fmt !== '@') { const v = literalValue(cell.text); if (typeof v === 'number') return formatValue(v, fmt); }
+    if (fmt && fmt !== '@') { const v = literalValue(cell.text); if (typeof v === 'number' || isDate(v)) return formatValue(v, fmt); }
     return t;
   }
   if (isError(value)) return value.code;
   if (value == null) return '';
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  if (isDate(value)) return formatValue(value, fmt);
   if (typeof value === 'number') {
     if (fmt && fmt !== '@') return formatValue(value, fmt);
     if (decimals != null && !Number.isInteger(value)) return formatValue(value, '0.' + '0'.repeat(decimals));

@@ -17,6 +17,7 @@
 import { colLetter } from '../tables/grid.js';
 import { viewRows, viewCols } from './book.js';
 import { styleToCss } from './style.js';
+import { chartData, renderChartSvg, CHART_DEFAULT_SIZE } from './chart.js';
 
 export function escHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -38,7 +39,21 @@ export function renderSheetHtml(book, sheet, opts = {}) {
   const totalCols = sheet.cols + (opts.extraCols ?? 0);
   const colsShown = opts.view === false ? Array.from({ length: totalCols }, (_, i) => i) : viewCols(sheet, totalCols);
   const rowsData = opts.view === false ? sheet.rows.map((_, r) => r) : viewRows(book, sheet);
-  const rowsShown = rowsData.concat(Array.from({ length: opts.extraRows ?? 0 }, (_, i) => sheet.rows.length + i));
+  let rowsShown = rowsData.concat(Array.from({ length: opts.extraRows ?? 0 }, (_, i) => sheet.rows.length + i));
+  // Windowing (the live grid on tall sheets): rows outside [from, to) become
+  // spacer rows of their summed height; frozen rows always render.
+  let spacerBefore = 0, spacerAfter = 0;
+  if (opts.window) {
+    const { from, to } = opts.window;
+    const rowH = (r) => sheet.heights.get(r) ?? sheet.defaultHeight ?? opts.rowHeight ?? 26;
+    const frozen = Math.max(sheet.headerRows, sheet.freeze.rows);
+    const keep = [];
+    rowsShown.forEach((r, i) => {
+      if (r < frozen || (i >= from && i < to)) keep.push(r);
+      else if (i < from) spacerBefore += rowH(r); else spacerAfter += rowH(r);
+    });
+    rowsShown = keep;
+  }
   const out = [];
   out.push(`<table class="uf-ss-grid${rulers ? ' has-rulers' : ''}" data-sheet="${escHtml(sheet.name)}" data-sheet-index="${sheet.index}">`);
   out.push('<colgroup>' + (rulers ? '<col class="uf-ss-rulercol">' : '') + colsShown.map(c => `<col style="width:${colPx(sheet, c)}px">`).join('') + '</colgroup>');
@@ -49,7 +64,11 @@ export function renderSheetHtml(book, sheet, opts = {}) {
   }
   out.push('<tbody>');
   const shownSet = new Set(rowsShown);
+  const spacer = (h) => (h > 0 ? `<tr class="is-spacer" style="height:${h}px"><td colspan="${colsShown.length + (rulers ? 1 : 0)}"></td></tr>` : '');
+  const frozenCount = Math.max(sheet.headerRows, sheet.freeze.rows);
+  let spacerDone = false;
   for (const r of rowsShown) {
+    if (!spacerDone && r >= frozenCount) { out.push(spacer(spacerBefore)); spacerDone = true; }
     const row = sheet.rows[r];
     const isHeader = r < sheet.headerRows;
     const h = sheet.heights.get(r) ?? sheet.defaultHeight;
@@ -68,6 +87,8 @@ export function renderSheetHtml(book, sheet, opts = {}) {
     }
     out.push('</tr>');
   }
+  if (!spacerDone) out.push(spacer(spacerBefore));
+  out.push(spacer(spacerAfter));
   out.push('</tbody></table>');
   return out.join('');
 }
@@ -78,8 +99,8 @@ function cellHtml(book, sheet, cell, { isHeader, docOffsets, shownSet }) {
   const kind = book.kindOf(cell);
   const text = book.display(cell);
   const st = book.styleOf(cell);
-  const align = st.align ?? (kind === 'num' || kind === 'bool' ? 'right' : (kind === 'error' ? 'center' : 'left'));
-  const cls = ['uf-ss-cell', `is-${kind}`, cell.formula != null ? 'is-formula' : '', `al-${align}`, isHeader ? 'is-header' : ''].filter(Boolean).join(' ');
+  const align = st.align ?? (kind === 'num' || kind === 'bool' || kind === 'date' ? 'right' : (kind === 'error' ? 'center' : 'left'));
+  const cls = ['uf-ss-cell', `is-${kind}`, cell.formula != null ? 'is-formula' : '', `al-${align}`, isHeader ? 'is-header' : '', text.includes('\n') || st.wrap ? 'is-multiline' : ''].filter(Boolean).join(' ');
   // A span's rows/cols that are hidden shrink the span.
   let rowspan = 0, colspan = 0;
   for (let k = 0; k < cell.rowspan; k++) if (shownSet.has(r + k)) rowspan++;
@@ -104,9 +125,18 @@ export function renderWorkbookHtml(book, opts = {}) {
     parts.push(`<section class="uf-ss-sheet" data-sheet-index="${s.index}">` +
       `<h2 class="uf-ss-name"${opts.docOffsets !== false ? ` data-doc-from="${s.nameFrom}" data-doc-to="${s.nameTo}"` : ''}>${escHtml(s.name)}</h2>` +
       `<div class="uf-ss-scroll">${renderSheetHtml(book, s, opts)}</div>` +
+      renderChartsHtml(book, s, opts) +
       `</section>`);
   }
   return parts.join('\n');
+}
+
+/** Every chart of a sheet as inline SVG (the static views). */
+export function renderChartsHtml(book, sheet, opts = {}) {
+  if (!sheet.charts?.length) return '';
+  return `<div class="uf-ss-charts">` + sheet.charts.map((ch, i) =>
+    `<figure class="uf-ss-chartfig" data-chart="${i}">${renderChartSvg(chartData(book, sheet, ch), { type: ch.type, title: ch.title, width: ch.size?.w ?? CHART_DEFAULT_SIZE.w, height: ch.size?.h ?? CHART_DEFAULT_SIZE.h, legend: ch.legend, dark: !!opts.dark })}</figure>`
+  ).join('') + `</div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +178,9 @@ h2.uf-ss-name { font-size: 15px; margin: 28px 0 8px; color: #555; font-weight: 6
 .uf-ss-grid .is-error { color: #b00020; }
 .uf-ss-grid tr.uf-ss-header td { font-weight: 600; background: #fafafa; }
 .uf-ss-grid .uf-ss-colgrip, .uf-ss-grid .uf-ss-rowgrip, .uf-ss-grid .uf-ss-filterbtn { display: none; }
-.uf-ss-notes { max-width: 70ch; color: #333; font-size: 14px; }
+.uf-ss-charts { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; }
+.uf-ss-chartfig { margin: 0; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; }
+.uf-ss-grid .is-multiline { white-space: pre-wrap; }
 @media print { body { padding: 0; } h2.uf-ss-name { page-break-after: avoid; } .uf-ss-grid tr { page-break-inside: avoid; } .uf-ss-sheet { page-break-after: always; } .uf-ss-sheet:last-child { page-break-after: auto; } }
 `;
 

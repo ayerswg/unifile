@@ -46,8 +46,9 @@ import { parseStep, generateSequence } from './seq.js';
 
 export { tokenizeArgs, quoteArg } from './lex.js';
 
-export const SETTING_KEYS = ['merge', 'comment', 'rule', 'scale', 'seq', 'step', 'width', 'height', 'hidden'];
+export const SETTING_KEYS = ['merge', 'comment', 'rule', 'scale', 'bar', 'seq', 'step', 'width', 'height', 'hidden', 'chart', 'title', 'at', 'size', 'series', 'legend'];
 export const META_KEYS = ['name', 'header', 'freeze', 'width', 'height', 'decimals', 'sort', 'filter'];
+export const CHART_TYPES = ['column', 'bar', 'line', 'area', 'pie', 'scatter'];
 
 // ---------------------------------------------------------------------------
 // Ranges
@@ -311,7 +312,7 @@ function _parseBlock(b, index) {
     index, meta, metaRange: b.metaRange, from: b.from, to: b.from, remarks: [], lines: [], problems,
     name: get('name') || '', headerRows: 0, freeze: { rows: 0, cols: 0 }, widths: new Map(), heights: new Map(),
     defaultWidth: null, defaultHeight: null, decimals: null, filterOn: false,
-    merges: [], styles: [], rules: [], scales: [], comments: [], sequences: [], sorts: [], filters: [],
+    merges: [], styles: [], rules: [], scales: [], bars: [], charts: [], comments: [], sequences: [], sorts: [], filters: [],
     hidden: { rows: new Set(), cols: new Set() }, aligns: [],
   };
   const nameEntry = meta.find(e => e.key === 'name');
@@ -426,6 +427,30 @@ function _applyBlock(sheet, rec, problem) {
     if (colors.length < 2 || colors.some(c => !c)) problem(rec, 'scale: expected two or three colours');
     else sheet.scales.push({ range: R, colors, from: rec.from, to: rec.to });
   }
+  if (has('bar')) {
+    const color = parseColor(val('bar') ?? '#1a8cf5') ?? (val('bar') == null ? '#1a8cf5' : null);
+    if (!color) problem(rec, 'bar: expected a colour');
+    else sheet.bars.push({ range: R, color, from: rec.from, to: rec.to });
+  }
+  if (has('chart')) {
+    const type = String(val('chart') ?? 'column').toLowerCase();
+    if (!CHART_TYPES.includes(type)) problem(rec, `chart: expected one of ${CHART_TYPES.join(', ')}`);
+    else if (isOpen(R)) problem(rec, 'chart: the data needs a bounded range');
+    else {
+      const at = val('at') ? parseRange(val('at')) : null;
+      if (val('at') && !at) problem(rec, 'at: expected a cell');
+      const sm = /^(\d+)\s*[x×]\s*(\d+)$/.exec(String(val('size') ?? ''));
+      if (val('size') && !sm) problem(rec, 'size: expected WIDTHxHEIGHT in px');
+      const series = String(val('series') ?? 'cols').toLowerCase();
+      sheet.charts.push({
+        range: R, type, title: val('title') ?? '', at: at ? { r: at.r1, c: at.c1 } : null,
+        size: sm ? { w: +sm[1], h: +sm[2] } : null, series: series === 'rows' ? 'rows' : 'cols',
+        legend: !/^(off|false|no|none)$/i.test(String(val('legend') ?? 'on')), from: rec.from, to: rec.to,
+      });
+    }
+  } else if (has('title') || has('at') || has('size') || has('series') || has('legend')) {
+    problem(rec, 'title / at / size / series / legend belong to a chart');
+  }
   if (has('seq')) {
     const step = parseStep(val('step'));
     if (!step) problem(rec, `step: "${val('step')}" — a number, or N days | weeks | months | years`);
@@ -468,6 +493,7 @@ function _buildCells(sheet, valueLines, problem) {
   for (const s of sheet.sequences) grow(s.range);
   for (const m of sheet.merges) grow(m.range);
   for (const n of sheet.comments) grow({ r1: n.r, c1: n.c, r2: n.r, c2: n.c });
+  for (const ch of sheet.charts) grow(ch.range);
   rows = Math.max(rows, 1, sheet.headerRows); cols = Math.max(cols, 1);
 
   const grid = Array.from({ length: rows }, () => new Array(cols).fill(null));

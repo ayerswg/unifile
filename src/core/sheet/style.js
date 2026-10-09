@@ -26,7 +26,7 @@
  * renderer turns into CSS and the .xlsx writer into a cell style.
  */
 
-import { parseFormula, evaluate, isError, toNumber, toText, formatNumber } from '../tables/formula.js';
+import { parseFormula, evaluate, isError, isDate, toNumber, toText, formatNumber, formatDate, isDateFormat } from '../tables/formula.js';
 import { literalValue } from '../tables/grid.js';
 
 export const FLAGS = ['bold', 'italic', 'underline', 'strike', 'wrap'];
@@ -183,7 +183,7 @@ const FORMAT_RE = /^([^#0.,E%]*?)(#,##)?(0+)(?:\.(0+))?(E\+0+)?(%?)([^#0.,E%]*)$
 
 export function isValidFormat(fmt) {
   if (fmt === '@') return true;
-  return FORMAT_RE.test(String(fmt));
+  return FORMAT_RE.test(String(fmt)) || isDateFormat(fmt);
 }
 
 /**
@@ -195,9 +195,11 @@ export function formatValue(v, fmt) {
   if (v == null) return '';
   if (isError(v)) return v.code;
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+  if (isDate(v)) return fmt && isDateFormat(fmt) ? formatDate(v.serial, fmt) : v.toString();
   if (typeof v !== 'number') return String(v);
   if (!fmt) return formatNumber(v);
   if (fmt === '@') return formatNumber(v);
+  if (isDateFormat(fmt)) return formatDate(v, fmt);
   const m = FORMAT_RE.exec(fmt);
   if (!m) return formatNumber(v);
   const [, prefix, grouped, , decs, sci, pct, suffix] = m;
@@ -404,10 +406,13 @@ const keyOf = v => (typeof v === 'string' ? 's:' + v.toLowerCase() : typeof v + 
 
 /** Excel-ish comparison: numbers < text < booleans; text case-insensitive; numeric text compares as numbers to numbers. */
 export function compareValues(a, b) {
+  if (isDate(a)) a = a.serial;
+  if (isDate(b)) b = b.serial;
   if (a == null) a = typeof b === 'number' ? 0 : '';
   if (b == null) b = typeof a === 'number' ? 0 : '';
-  if (typeof a === 'number' && typeof b === 'string') { const n = literalValue(b); if (typeof n === 'number') b = n; }
-  if (typeof b === 'number' && typeof a === 'string') { const n = literalValue(a); if (typeof n === 'number') a = n; }
+  const numOf = (t) => { const n = literalValue(t); return typeof n === 'number' ? n : isDate(n) ? n.serial : null; };
+  if (typeof a === 'number' && typeof b === 'string') { const n = numOf(b); if (n != null) b = n; }
+  if (typeof b === 'number' && typeof a === 'string') { const n = numOf(a); if (n != null) a = n; }
   const rank = v => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : 2);
   const ra = rank(a), rb = rank(b);
   if (ra !== rb) return ra - rb;
@@ -445,6 +450,11 @@ export function styleResolver(sheet, values, ctx) {
     const min = nums.length ? Math.min(...nums) : 0, max = nums.length ? Math.max(...nums) : 0;
     return { ...sc, min, max, rgb: sc.colors.map(colorToRgb) };
   });
+  const bars = (sheet.bars ?? []).map(b => {
+    const nums = rangeVals(b.range)().filter(x => typeof x === 'number');
+    const min = Math.min(0, ...nums), max = Math.max(0, ...nums);
+    return { ...b, min, max };
+  });
 
   return (cell, { conditional = true } = {}) => {
     const out = {};
@@ -453,7 +463,7 @@ export function styleResolver(sheet, values, ctx) {
       if (!rangeContainsCell(s.range, r, c)) continue;
       applyProps(out, s.props);
     }
-    if (conditional && (rules.length || scales.length)) {
+    if (conditional && (rules.length || scales.length || bars.length)) {
       const v = values.get(cell) ?? null;
       for (const rule of rules) {
         if (!rangeContainsCell(rule.range, r, c)) continue;
@@ -462,6 +472,12 @@ export function styleResolver(sheet, values, ctx) {
       for (const sc of scales) {
         if (!rangeContainsCell(sc.range, r, c) || typeof v !== 'number') continue;
         out.bg = scaleColor(v, sc);
+      }
+      for (const b of bars) {
+        if (!rangeContainsCell(b.range, r, c) || typeof v !== 'number') continue;
+        const span = b.max - b.min || 1;
+        // A data bar: its length is the value's share of the range (from 0).
+        out.bar = { color: b.color, from: (Math.min(0, v) - b.min) / span, to: (Math.max(0, v) - b.min) / span };
       }
     }
     return out;
@@ -495,7 +511,13 @@ export function styleToCss(st, { bold = false } = {}) {
   const deco = [st.underline ? 'underline' : '', st.strike ? 'line-through' : ''].filter(Boolean).join(' ');
   if (deco) css.push(`text-decoration:${deco}`);
   if (st.color) css.push(`color:${st.color}`);
-  if (st.bg) css.push(`background:${st.bg}`);
+  if (st.bg) css.push(`background-color:${st.bg}`);
+  if (st.bar) {
+    const a = (st.bar.from * 100).toFixed(1), b = (st.bar.to * 100).toFixed(1);
+    // Translucent, so the value stays legible over the bar (Excel's gradient fill).
+    const col = `color-mix(in srgb, ${st.bar.color} 38%, transparent)`;
+    css.push(`background-image:linear-gradient(90deg, transparent ${a}%, ${col} ${a}%, ${col} ${b}%, transparent ${b}%)`);
+  }
   if (st.size) css.push(`font-size:${st.size}px`);
   if (st.font) css.push(`font-family:${st.font === 'mono' ? 'ui-monospace, Menlo, Consolas, monospace' : st.font === 'serif' ? 'Georgia, "Times New Roman", serif' : '-apple-system, "Segoe UI", Helvetica, Arial, sans-serif'}`);
   if (st.align) css.push(`text-align:${st.align}`);

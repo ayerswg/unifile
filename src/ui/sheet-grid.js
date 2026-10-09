@@ -31,9 +31,15 @@ import { renderSheetHtml, colPx } from '../core/sheet/render.js';
 import { colLetter, parseRange, formatRange, rangeContains } from '../core/sheet/parse.js';
 import { FORMAT_CHOICES, parseCondition, describeCondition, formatStyleProps } from '../core/sheet/style.js';
 import { parseStep } from '../core/sheet/seq.js';
+import { chartData, renderChartSvg, CHART_DEFAULT_SIZE } from '../core/sheet/chart.js';
+import { CHART_TYPES } from '../core/sheet/parse.js';
 
-const EXTRA_ROWS = 25;
+const EXTRA_ROWS = 40;
 const EXTRA_COLS = 6;
+// Rows past this many are windowed: only the visible band (+ a buffer) is in
+// the DOM; spacer rows keep the scroll height honest.
+const VIRTUAL_FROM = 150;
+const WINDOW_BUFFER = 20;
 const LONG_PRESS_MS = 480;
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -95,7 +101,7 @@ export class SheetGrid {
         <span class="uf-ss-sep"></span>
         ${btn('sort-asc', 'A↓', 'Sort rows by this column, ascending')}${btn('sort-desc', 'Z↓', 'Sort rows by this column, descending')}${btn('filter', '▽', 'Filter this column…')}
         <span class="uf-ss-sep"></span>
-        ${btn('comment', '❝', 'Comment…')}${btn('rules', '◈', 'Conditional formatting…')}${btn('more', '⋯', 'More…')}
+        ${btn('comment', '❝', 'Comment…')}${btn('rules', '◈', 'Conditional formatting…')}${btn('chart', '▥', 'Insert chart…')}${btn('more', '⋯', 'More…')}
       </div>
       <div class="uf-ss-fx">
         <button type="button" class="uf-ss-name" title="Go to a cell or range">A1</button>
@@ -104,6 +110,8 @@ export class SheetGrid {
       </div>
       <div class="uf-ss-scroll">
         <div class="uf-ss-tablewrap"></div>
+        <div class="uf-ss-charts-layer"></div>
+        <div class="uf-ss-fill" hidden title="Drag to fill"></div>
         <textarea class="uf-ss-editor" rows="1" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Edit cell"></textarea>
       </div>
       <div class="uf-ss-tabs"></div>
@@ -117,6 +125,8 @@ export class SheetGrid {
     this.scroll = root.querySelector('.uf-ss-scroll');
     this.tableWrap = root.querySelector('.uf-ss-tablewrap');
     this.editor = root.querySelector('.uf-ss-editor');
+    this.chartsLayer = root.querySelector('.uf-ss-charts-layer');
+    this.fillHandle = root.querySelector('.uf-ss-fill');
     this.tabs = root.querySelector('.uf-ss-tabs');
     this.pop = root.querySelector('.uf-ss-pop');
   }
@@ -180,14 +190,89 @@ export class SheetGrid {
       // An empty document: a blank grid to type into (the first edit creates Sheet1).
       const blank = computeWorkbook(ops.starterText('Sheet1'));
       this.tableWrap.innerHTML = renderSheetHtml(blank, blank.sheets[0], { extraRows: EXTRA_ROWS, extraCols: EXTRA_COLS + 2, docOffsets: false });
+      this._shown = null;
     } else {
-      this.tableWrap.innerHTML = renderSheetHtml(this.book, sheet, { extraRows: EXTRA_ROWS, extraCols: EXTRA_COLS });
+      this._shown = viewRows(this.book, sheet).concat(Array.from({ length: EXTRA_ROWS }, (_, i) => sheet.rows.length + i));
+      const win = this._window();
+      this.tableWrap.innerHTML = renderSheetHtml(this.book, sheet, { extraRows: EXTRA_ROWS, extraCols: EXTRA_COLS, window: win, rowHeight: this._rowH });
     }
     this.table = this.tableWrap.querySelector('table');
+    this._renderedWindow = this._shown && this._shown.length > VIRTUAL_FROM ? this._window() : null;
     this._applyFrozen();
+    this._measureRowHeight();
     this.scroll.scrollTop = top;
     this.scroll.scrollLeft = left;
     if (this.editing) this._placeEditor();
+    this._renderCharts();
+  }
+
+  /** The default row height, measured once from a rendered row (phones differ from desktop). */
+  _measureRowHeight() {
+    if (this._rowH) return;
+    const tr = this.table?.tBodies[0]?.querySelector('tr[data-row]:not(.is-spacer)');
+    if (tr && tr.offsetHeight) this._rowH = tr.offsetHeight;
+  }
+
+  /** The height of row r (its `height`, the sheet default, or the measured default). */
+  _rowHeight(r) {
+    const sh = this.sheet;
+    return sh?.heights.get(r) ?? sh?.defaultHeight ?? this._rowH ?? 26;
+  }
+
+  /** The rendered band of shown-row indexes when the sheet is tall enough to window; null = everything. */
+  _window() {
+    const shown = this._shown;
+    if (!shown || shown.length <= VIRTUAL_FROM) return null;
+    const rowH = this._rowH ?? 26;
+    const top = this.scroll.scrollTop, h = this.scroll.clientHeight || 600;
+    let y = 0, from = 0;
+    while (from < shown.length && y + this._rowHeight(shown[from]) < top) { y += this._rowHeight(shown[from]); from++; }
+    let to = from;
+    let yy = y;
+    while (to < shown.length && yy < top + h) { yy += this._rowHeight(shown[to]); to++; }
+    return { from: Math.max(0, from - WINDOW_BUFFER), to: Math.min(shown.length, to + WINDOW_BUFFER) };
+  }
+
+  /** The y offset of a row inside the table body (sum of the shown rows above it). */
+  _rowTop(r) {
+    const shown = this._shown ?? [];
+    let y = this.table?.tHead?.offsetHeight ?? 0;
+    for (const x of shown) { if (x === r) return y; y += this._rowHeight(x); }
+    return y;
+  }
+
+  /** Re-render when scrolling moved the window past its buffer. */
+  _onScroll() {
+    if (!this._shown || this._shown.length <= VIRTUAL_FROM) return;
+    const win = this._window();
+    const cur = this._renderedWindow;
+    if (cur && win.from >= cur.from && win.to <= cur.to && (win.from - cur.from < WINDOW_BUFFER) && (cur.to - win.to < WINDOW_BUFFER)) return;
+    this._renderTable();
+    this._paint();
+  }
+
+  /** Charts float over the grid at their anchor cell (the layer scrolls with the table). */
+  _renderCharts() {
+    const sheet = this.sheet;
+    this.chartsLayer.innerHTML = '';
+    if (!sheet?.charts?.length) return;
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (!document.documentElement.getAttribute('data-theme') && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
+    sheet.charts.forEach((ch, i) => {
+      const at = ch.at ?? { r: ch.range.r1, c: Math.min(ch.range.c2, sheet.cols - 1) + 2 };
+      const w = ch.size?.w ?? CHART_DEFAULT_SIZE.w, h = ch.size?.h ?? CHART_DEFAULT_SIZE.h;
+      const box = document.createElement('div');
+      box.className = 'uf-ss-chart';
+      box.dataset.chart = i;
+      box.innerHTML = renderChartSvg(chartData(this.book, sheet, ch), { type: ch.type, title: ch.title, width: w, height: h, legend: ch.legend, dark }) +
+        `<div class="uf-ss-chart-bar"><span class="uf-ss-chart-range">${esc(formatRange(ch.range))}</span><button type="button" data-chart-edit="${i}" title="Edit chart">✎</button><button type="button" data-chart-move="${i}" title="Move: drag">✥</button><button type="button" data-chart-del="${i}" title="Remove chart">×</button></div>`;
+      // Position: the anchor cell's offset (arithmetic, so it works off-window too).
+      let left = 40;
+      for (let c = 0; c < at.c; c++) if (!sheet.hidden.cols.has(c)) left += colPx(sheet, c);
+      box.style.left = left + 'px';
+      box.style.top = this._rowTop(at.r) + 'px';
+      box.style.width = w + 'px';
+      this.chartsLayer.appendChild(box);
+    });
   }
 
   /** Sticky offsets for the rulers and the frozen rows / columns. */
@@ -238,8 +323,22 @@ export class SheetGrid {
     for (const th of table.querySelectorAll('th.uf-ss-col')) { const c = +th.dataset.col; if (mode === 'all' || (c >= R.c1 && c <= R.c2)) th.classList.add('is-sel'); }
     for (const th of table.querySelectorAll('th.uf-ss-row')) { const r = +th.dataset.row; if (mode === 'all' || (r >= R.r1 && r <= R.r2)) th.classList.add('is-sel'); }
     this.fxName.textContent = mode === 'all' ? 'A:…' : formatRange(this._directiveRange());
+    this._placeFillHandle();
     if (!this.editing && document.activeElement !== this.fxInput) this.fxInput.value = this._cellText(head.r, head.c);
     this._paintToolbar();
+  }
+
+  /** The fill handle sits at the bottom-right corner of the selection. */
+  _placeFillHandle() {
+    const h = this.fillHandle;
+    if (!this.sheet || this.sel.mode !== 'cells' || this.editing) { h.hidden = true; return; }
+    const R = this._boundedRange();
+    const td = this._anchorTd(R.r2, R.c2);
+    if (!td) { h.hidden = true; return; }
+    const tr = td.getBoundingClientRect(), wr = this.tableWrap.getBoundingClientRect();
+    h.style.left = (tr.right - wr.left - 4) + 'px';
+    h.style.top = (tr.bottom - wr.top - 4) + 'px';
+    h.hidden = false;
   }
 
   _paintToolbar() {
@@ -307,7 +406,16 @@ export class SheetGrid {
   }
 
   _scrollCellIntoView(r, c) {
-    const td = this._anchorTd(r, c);
+    let td = this._anchorTd(r, c);
+    if (!td && this._renderedWindow) {
+      // Off the rendered window: scroll by arithmetic, re-render, then settle.
+      const y = this._rowTop(r) - (this.table.tHead?.offsetHeight ?? 0);
+      const h = this.scroll.clientHeight;
+      if (y < this.scroll.scrollTop || y > this.scroll.scrollTop + h - 60) this.scroll.scrollTop = Math.max(0, y - h / 2);
+      this._renderTable();
+      this._paint();
+      td = this._anchorTd(r, c);
+    }
     if (!td) return;
     const sc = this.scroll.getBoundingClientRect();
     const tr = td.getBoundingClientRect();
@@ -372,7 +480,9 @@ export class SheetGrid {
     st.left = (tr.left - wr.left) + 'px';
     st.top = (tr.top - wr.top) + 'px';
     st.width = Math.max(tr.width, 120) + 'px';
-    st.height = Math.max(tr.height, 26) + 'px';
+    this._editorMinH = Math.max(tr.height, 26);
+    st.height = 'auto';
+    st.height = Math.max(this.editor.scrollHeight, this._editorMinH) + 'px';
     st.textAlign = getComputedStyle(td).textAlign;
   }
 
@@ -494,6 +604,7 @@ export class SheetGrid {
       case 'comment': this._openCommentPop(head.r, head.c, ev.target); return;
       case 'rules': this._openRulesPop(ev.target); return;
       case 'scale': this._openScalePop(ev.target); return;
+      case 'chart': this._openChartPop(ev.target); return;
       case 'more': this._openMorePop(ev.target); return;
       case 'freeze-rows': this._apply(ops.setFreeze(this.text, this.sheetIndex, head.r + 1, this.sheet?.freeze.cols ?? 0, this.book), { select: sel() }); return;
       case 'freeze-cols': this._apply(ops.setFreeze(this.text, this.sheetIndex, this.sheet?.freeze.rows ?? 0, head.c + 1, this.book), { select: sel() }); return;
@@ -635,13 +746,68 @@ export class SheetGrid {
 
     // In-cell editor
     this.editor.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.altKey) { e.preventDefault(); this._commitEdit({ move: e.shiftKey ? [-1, 0] : [1, 0] }); }
+      if (e.key === 'Enter' && (e.altKey || e.ctrlKey || e.metaKey)) {
+        // A line break inside the cell (Excel's Alt+Enter).
+        e.preventDefault();
+        const ta = this.editor, a = ta.selectionStart, b = ta.selectionEnd;
+        ta.value = ta.value.slice(0, a) + '\n' + ta.value.slice(b);
+        ta.setSelectionRange(a + 1, a + 1);
+        ta.dispatchEvent(new Event('input'));
+      } else if (e.key === 'Enter') { e.preventDefault(); this._commitEdit({ move: e.shiftKey ? [-1, 0] : [1, 0] }); }
       else if (e.key === 'Tab') { e.preventDefault(); this._commitEdit({ move: e.shiftKey ? [0, -1] : [0, 1] }); }
       else if (e.key === 'Escape') { e.preventDefault(); this._cancelEdit(); }
       e.stopPropagation();
     });
-    this.editor.addEventListener('input', () => { this.fxInput.value = this.editor.value; });
+    this.editor.addEventListener('input', () => {
+      this.fxInput.value = this.editor.value;
+      // Grow with the text (Alt+Enter adds a line).
+      this.editor.style.height = 'auto';
+      this.editor.style.height = Math.max(this.editor.scrollHeight, this._editorMinH ?? 26) + 'px';
+    });
     this.editor.addEventListener('blur', () => { if (this.editing && !this._suppressBlurCommit) this._commitEdit(); });
+
+    // Virtual window follows the scroll.
+    this.scroll.addEventListener('scroll', () => { if (this._scrollRaf) return; this._scrollRaf = requestAnimationFrame(() => { this._scrollRaf = 0; this._onScroll(); }); }, { passive: true });
+
+    // Fill handle: drag to extend the selection's pattern.
+    this.fillHandle.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      if (this.editing) this._commitEdit();
+      this._drag = { kind: 'fill', src: this._boundedRange(), dst: null, pointerId: e.pointerId, moved: false, startX: e.clientX, startY: e.clientY };
+      try { this.scroll.setPointerCapture(e.pointerId); } catch { /* stale id */ }
+    });
+
+    // Charts: edit / remove / drag to move.
+    this.chartsLayer.addEventListener('click', e => {
+      const del = e.target.closest('[data-chart-del]');
+      if (del) { this._apply(ops.removeChart(this.text, this.sheetIndex, +del.dataset.chartDel, this.book)); return; }
+      const ed = e.target.closest('[data-chart-edit]');
+      if (ed) { this._openChartPop(ed, +ed.dataset.chartEdit); }
+    });
+    this.chartsLayer.addEventListener('pointerdown', e => {
+      const mv = e.target.closest('[data-chart-move]');
+      if (!mv) return;
+      e.preventDefault(); e.stopPropagation();
+      const box = mv.closest('.uf-ss-chart');
+      this._drag = { kind: 'chart', i: +mv.dataset.chartMove, box, startX: e.clientX, startY: e.clientY, left: parseFloat(box.style.left), top: parseFloat(box.style.top) };
+      try { this.chartsLayer.setPointerCapture(e.pointerId); } catch { /* stale id */ }
+    });
+    this.chartsLayer.addEventListener('pointermove', e => {
+      const d = this._drag;
+      if (!d || d.kind !== 'chart') return;
+      d.box.style.left = (d.left + e.clientX - d.startX) + 'px';
+      d.box.style.top = (d.top + e.clientY - d.startY) + 'px';
+    });
+    this.chartsLayer.addEventListener('pointerup', e => {
+      const d = this._drag;
+      if (!d || d.kind !== 'chart') return;
+      this._drag = null;
+      try { this.chartsLayer.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      // Snap to the cell under the box's top-left corner.
+      const at = this._cellAtPoint(parseFloat(d.box.style.left) + 2, parseFloat(d.box.style.top) + 2);
+      if (at) this._apply(ops.updateChart(this.text, this.sheetIndex, d.i, { at }, this.book));
+      else this._renderCharts();
+    });
 
     // Grid pointer gestures
     this.scroll.addEventListener('pointerdown', e => this._onPointerDown(e));
@@ -740,9 +906,39 @@ export class SheetGrid {
     }
   }
 
+  /** The (r, c) of a point in tableWrap coordinates, by arithmetic (works off-window). */
+  _cellAtPoint(x, y) {
+    const sheet = this.sheet;
+    if (!sheet) return null;
+    let left = 40, c = 0;
+    while (c < sheet.cols + EXTRA_COLS) { if (sheet.hidden.cols.has(c)) { c++; continue; } const w = colPx(sheet, c); if (x < left + w) break; left += w; c++; }
+    let top = this.table?.tHead?.offsetHeight ?? 0, i = 0;
+    const shown = this._shown ?? [];
+    while (i < shown.length) { const h = this._rowHeight(shown[i]); if (y < top + h) break; top += h; i++; }
+    return { r: shown[Math.min(i, shown.length - 1)] ?? 0, c: Math.max(0, c) };
+  }
+
   _onPointerMove(e) {
     const d = this._drag;
     if (!d) return;
+    if (d.kind === 'fill') {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const td = el?.closest?.('td[data-r]');
+      if (!td) return;
+      const r = +td.dataset.r, c = +td.dataset.c;
+      const src = d.src;
+      // Grow in the dominant direction only.
+      const dr = r > src.r2 ? r - src.r2 : r < src.r1 ? r - src.r1 : 0;
+      const dc = c > src.c2 ? c - src.c2 : c < src.c1 ? c - src.c1 : 0;
+      let dst = { ...src };
+      if (Math.abs(dr) >= Math.abs(dc) && dr !== 0) { if (dr > 0) dst.r2 = r; else dst.r1 = r; }
+      else if (dc !== 0) { if (dc > 0) dst.c2 = c; else dst.c1 = c; }
+      d.dst = dst;
+      d.moved = true;
+      for (const x of this.table.querySelectorAll('.is-fill')) x.classList.remove('is-fill');
+      for (const x of this.table.querySelectorAll('td[data-r]')) { const rr = +x.dataset.r, cc = +x.dataset.c; if (rr >= dst.r1 && rr <= dst.r2 && cc >= dst.c1 && cc <= dst.c2) x.classList.add('is-fill'); }
+      return;
+    }
     if (d.kind === 'col') {
       const w = Math.max(24, d.startW + (e.clientX - d.startX));
       const col = this.table.querySelector(`colgroup col:nth-child(${[...this.table.querySelectorAll('th.uf-ss-col')].findIndex(t => +t.dataset.col === d.c) + 2})`);
@@ -766,6 +962,12 @@ export class SheetGrid {
     const d = this._drag;
     this._drag = null;
     if (!d) return;
+    if (d.kind === 'fill') {
+      try { this.scroll.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      for (const x of this.table.querySelectorAll('.is-fill')) x.classList.remove('is-fill');
+      if (d.dst && d.moved) this._apply(ops.fillRange(this.text, this.sheetIndex, d.src, d.dst, this.book), { select: { range: d.dst } });
+      return;
+    }
     if (d.kind === 'col') {
       try { this.scroll.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
       if (d.w) this._apply(ops.setWidth(this.text, this.sheetIndex, d.c, d.c, Math.max(2, Math.round((d.w - 12) / 8)), this.book), { select: { range: this._range(), mode: this.sel.mode } });
@@ -884,7 +1086,7 @@ export class SheetGrid {
       ['filter-on', sh?.filterOn ? 'Hide the header filter buttons' : 'Show filter buttons on the header'], ['-'],
       ['hide-rows', 'Hide selected rows'], ['hide-cols', 'Hide selected columns'], ['unhide-rows', 'Unhide all rows', !sh?.hidden.rows.size], ['unhide-cols', 'Unhide all columns', !sh?.hidden.cols.size], ['-'],
       ['sequence', 'Fill with a sequence…'], ['-'],
-      ['width', 'Column width…'], ['height', 'Row height…'], ['scale', 'Colour scale…'], ['-'],
+      ['width', 'Column width…'], ['height', 'Row height…'], ['scale', 'Colour scale…'], ['chart', 'Insert chart…'], ['-'],
       ['rename-sheet', 'Rename sheet…'], ['add-sheet', 'Add sheet…'], ['delete-sheet', 'Delete sheet'], ['-'],
       ['align-text', 'Tidy the text (align pipes)'],
     ], anchor);
@@ -949,7 +1151,8 @@ export class SheetGrid {
     const scales = sh?.scales ?? [];
     const kinds = [['cmp', 'is'], ['between', 'between'], ['contains', 'contains'], ['starts', 'starts with'], ['ends', 'ends with'], ['blank', 'is blank'], ['filled', 'is not blank'], ['error', 'is an error'], ['duplicate', 'is a duplicate'], ['unique', 'is unique'], ['top', 'top N'], ['bottom', 'bottom N'], ['formula', 'formula is true']];
     const list = rules.map((r, i) => `<div class="uf-ss-rule"><code>${esc(formatRange(r.range))}</code> ${esc(describeCondition(r.cond))} → <code>${esc(formatStyleProps(r.props))}</code><button type="button" data-del-rule="${i}" title="Remove">×</button></div>`).join('') +
-      scales.map((s, i) => `<div class="uf-ss-rule"><code>${esc(formatRange(s.range))}</code> colour scale ${s.colors.map(c => `<span class="uf-ss-dot" style="background:${esc(c)}"></span>`).join('')}<button type="button" data-del-scale="${i}" title="Remove">×</button></div>`).join('');
+      scales.map((s, i) => `<div class="uf-ss-rule"><code>${esc(formatRange(s.range))}</code> colour scale ${s.colors.map(c => `<span class="uf-ss-dot" style="background:${esc(c)}"></span>`).join('')}<button type="button" data-del-scale="${i}" title="Remove">×</button></div>`).join('') +
+      (sh?.bars ?? []).map((b, i) => `<div class="uf-ss-rule"><code>${esc(formatRange(b.range))}</code> data bar <span class="uf-ss-dot" style="background:${esc(b.color)}"></span><button type="button" data-del-bar="${i}" title="Remove">×</button></div>`).join('');
     const pop = this._openPop(`<form class="uf-ss-form uf-ss-rules"><div class="uf-ss-form-title">Conditional formatting</div>
       ${list ? `<div class="uf-ss-rule-list">${list}</div>` : '<div class="uf-ss-muted">No rules yet.</div>'}
       <div class="uf-ss-form-title">New rule</div>
@@ -960,7 +1163,7 @@ export class SheetGrid {
         <label>Text <input type="color" name="color" value="#c0392b"><input type="checkbox" name="useColor" checked></label>
         <label>Fill <input type="color" name="bg" value="#fde2e2"><input type="checkbox" name="useBg"></label>
       </div>
-      <div class="uf-ss-form-row"><button type="submit">Add rule</button><button type="button" data-scale>Colour scale…</button></div></form>`, anchor);
+      <div class="uf-ss-form-row"><button type="submit">Add rule</button><button type="button" data-scale>Colour scale…</button><label>Data bar <input type="color" name="barColor" value="#2a78d6"><button type="button" data-bar>Add</button></label></div></form>`, anchor);
     wireConditionForm(pop);
     pop.querySelector('form').addEventListener('submit', e => {
       e.preventDefault();
@@ -980,7 +1183,38 @@ export class SheetGrid {
     pop.addEventListener('click', e => {
       const d = e.target.closest('[data-del-rule]'); if (d) { this._closePop(); this._apply(ops.removeRule(this.text, this.sheetIndex, +d.dataset.delRule, this.book)); return; }
       const s = e.target.closest('[data-del-scale]'); if (s) { this._closePop(); this._apply(ops.removeScale(this.text, this.sheetIndex, +s.dataset.delScale, this.book)); return; }
+      const b = e.target.closest('[data-del-bar]'); if (b) { this._closePop(); this._apply(ops.removeBar(this.text, this.sheetIndex, +b.dataset.delBar, this.book)); return; }
+      if (e.target.closest('[data-bar]')) { const f = pop.querySelector('form'); const R = parseRange(f.range.value.trim()); if (!R) { window.alert('Range: use A1:C9, A or 3'); return; } this._closePop(); this._apply(ops.addBar(this.text, this.sheetIndex, R, f.barColor.value, this.book), { select: { range: this._range(), mode: this.sel.mode } }); return; }
       if (e.target.closest('[data-scale]')) { this._openScalePop(anchor); }
+    });
+  }
+
+  /** Insert (i == null) or edit a chart. */
+  _openChartPop(anchor, i = null) {
+    const ch = i != null ? this.sheet?.charts[i] : null;
+    const R = ch ? ch.range : this._boundedRange();
+    const pop = this._openPop(`<form class="uf-ss-form"><div class="uf-ss-form-title">${ch ? 'Edit chart' : 'Insert chart'}</div>
+      <label>Data <input name="range" value="${esc(formatRange(R))}"></label>
+      <label>Type <select name="type">${CHART_TYPES.map(t => `<option value="${t}"${(ch?.type ?? 'column') === t ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label>Title <input name="title" value="${esc(ch?.title ?? '')}" placeholder="optional"></label>
+      <div class="uf-ss-form-row"><label>Series in <select name="series"><option value="cols"${(ch?.series ?? 'cols') === 'cols' ? ' selected' : ''}>columns</option><option value="rows"${ch?.series === 'rows' ? ' selected' : ''}>rows</option></select></label>
+      <label><input type="checkbox" name="legend"${ch?.legend !== false ? ' checked' : ''}> legend</label></div>
+      <div class="uf-ss-form-row"><label>At <input name="at" value="${esc(ch?.at ? colLetter(ch.at.c) + (ch.at.r + 1) : '')}" placeholder="cell (auto)" style="width:70px"></label>
+      <label>Size <input name="size" value="${esc(ch?.size ? ch.size.w + 'x' + ch.size.h : '')}" placeholder="480x300" style="width:80px"></label></div>
+      <div class="uf-ss-form-row"><button type="submit">${ch ? 'Apply' : 'Insert'}</button></div></form>`, anchor);
+    pop.querySelector('form').addEventListener('submit', e => {
+      e.preventDefault();
+      const f = e.target;
+      const range = parseRange(f.range.value.trim());
+      if (!range || range.r2 === Infinity || range.c2 === Infinity) { window.alert('Data: a bounded range like A1:C9'); return; }
+      const atR = f.at.value.trim() ? parseRange(f.at.value.trim()) : null;
+      if (f.at.value.trim() && !atR) { window.alert('At: a cell like G2'); return; }
+      const sm = /^(\d+)\s*[x×]\s*(\d+)$/.exec(f.size.value.trim());
+      if (f.size.value.trim() && !sm) { window.alert('Size: WIDTHxHEIGHT in px'); return; }
+      const chart = { range, type: f.type.value, title: f.title.value.trim(), series: f.series.value, legend: f.legend.checked, at: atR ? { r: atR.r1, c: atR.c1 } : null, size: sm ? { w: +sm[1], h: +sm[2] } : null };
+      this._closePop();
+      if (ch) this._apply(ops.updateChart(this.text, this.sheetIndex, i, chart, this.book));
+      else this._apply(ops.addChart(this.text, this.sheetIndex, chart, this.book), { select: { range: this._range(), mode: this.sel.mode } });
     });
   }
 

@@ -12,9 +12,10 @@
 
 import { buildZip } from '../zip.js';
 import { cellAddress, colLetter } from '../tables/grid.js';
-import { isError, formulaForExcel } from '../tables/formula.js';
+import { isError, isDate, isDateFormat, formulaForExcel } from '../tables/formula.js';
 import { formatRange } from './parse.js';
 import { colorToRgb, rgbToHex } from './style.js';
+import { chartData, CHART_PALETTE, CHART_DEFAULT_SIZE } from './chart.js';
 
 const xml = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const argb = (c) => { const rgb = colorToRgb(c); return rgb ? 'FF' + rgbToHex(rgb).slice(1).toUpperCase() : null; };
@@ -153,6 +154,11 @@ function cfRulesXml(book, sheet, styles) {
     }
     if (body) out.push(`<conditionalFormatting sqref="${ref}">${body}</conditionalFormatting>`);
   });
+  (sheet.bars ?? []).forEach(b => {
+    const c = argb(b.color);
+    if (!c) return;
+    out.push(`<conditionalFormatting sqref="${sqref(b.range, sheet)}"><cfRule type="dataBar" priority="${priority++}"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="${c}"/></dataBar></cfRule></conditionalFormatting>`);
+  });
   sheet.scales.forEach(sc => {
     const cols = sc.colors.map(argb).filter(Boolean);
     if (cols.length < 2) return;
@@ -163,7 +169,7 @@ function cfRulesXml(book, sheet, styles) {
   return out.join('');
 }
 
-function sheetXml(book, sheet, styles, { hasComments }) {
+function sheetXml(book, sheet, styles, { hasComments, hasDrawing }) {
   const rows = [];
   const merges = [];
   for (let r = 0; r < sheet.rows.length; r++) {
@@ -174,12 +180,15 @@ function sheetXml(book, sheet, styles, { hasComments }) {
       const ref = cellAddress(r, c);
       if (cell.colspan > 1 || cell.rowspan > 1) merges.push(`${ref}:${cellAddress(r + cell.rowspan - 1, c + cell.colspan - 1)}`);
       const v = book.valueOf(cell);
-      const st = book.staticStyleOf(cell);   // rules go out as conditional formats, not baked in
+      let st = book.staticStyleOf(cell);   // rules go out as conditional formats, not baked in
+      if (isDate(v) && !(st.format && isDateFormat(st.format))) st = { ...st, format: v.hasTime ? 'yyyy-mm-dd hh:mm' : 'yyyy-mm-dd' };
+      if (typeof v === 'string' && v.includes('\n') && !st.wrap) st = { ...st, wrap: true };
       const xf = styles.xf(st, { bold: r < sheet.headerRows });
       const s = xf ? ` s="${xf}"` : '';
       const f = cell.formula != null ? `<f>${xml(formulaForExcel(cell.formula, r))}</f>` : '';
       if (cell.formula == null && (v == null || v === '')) { if (xf) cells.push(`<c r="${ref}"${s}/>`); continue; }
       if (isError(v)) cells.push(`<c r="${ref}"${s} t="e">${f}<v>${xml(v.code === '#CIRC!' ? '#REF!' : v.code)}</v></c>`);
+      else if (isDate(v)) cells.push(`<c r="${ref}"${s}>${f}<v>${String(Number(v.serial.toPrecision(15)))}</v></c>`);
       else if (typeof v === 'number') cells.push(`<c r="${ref}"${s}>${f}<v>${Number.isFinite(v) ? String(Number(v.toPrecision(15))) : 0}</v></c>`);
       else if (typeof v === 'boolean') cells.push(`<c r="${ref}"${s} t="b">${f}<v>${v ? 1 : 0}</v></c>`);
       else if (f) cells.push(`<c r="${ref}"${s} t="str">${f}<v>${xml(v)}</v></c>`);
@@ -197,7 +206,9 @@ function sheetXml(book, sheet, styles, { hasComments }) {
     widths[cell.c] = Math.max(widths[cell.c], Math.min(60, book.display(cell).length + 2));
   }
   for (const [c, w] of sheet.widths) if (c < sheet.cols) widths[c] = w;
-  const colsXml = widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"${sheet.hidden.cols.has(i) ? ' hidden="1"' : ''}/>`).join('');
+  // customWidth marks the widths the sheet SET (an importer keeps those and
+  // drops the text-derived ones).
+  const colsXml = widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}"${sheet.widths.has(i) || sheet.defaultWidth ? ' customWidth="1"' : ''}${sheet.hidden.cols.has(i) ? ' hidden="1"' : ''}/>`).join('');
 
   const frozenRows = Math.max(sheet.headerRows, sheet.freeze.rows), frozenCols = sheet.freeze.cols;
   const pane = frozenRows || frozenCols
@@ -214,6 +225,7 @@ function sheetXml(book, sheet, styles, { hasComments }) {
     autoFilter +
     (merges.length ? `<mergeCells count="${merges.length}">${merges.map(m => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : '') +
     cfRulesXml(book, sheet, styles) +
+    (hasDrawing ? `<drawing r:id="rId3"/>` : '') +
     (hasComments ? `<legacyDrawing r:id="rId1"/>` : '') +
     `</worksheet>`;
 }
@@ -232,6 +244,78 @@ function commentsXml(sheet) {
 function vmlXml(sheet) {
   const shapes = sheet.comments.map((c, i) => `<v:shape id="_x0000_s${1025 + i}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:${(c.r * 15)}pt;width:120pt;height:60pt;z-index:${i + 1};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>${c.c + 1}, 15, ${c.r}, 2, ${c.c + 3}, 15, ${c.r + 3}, 2</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>${c.r}</x:Row><x:Column>${c.c}</x:Column></x:ClientData></v:shape>`).join('');
   return `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>${shapes}</xml>`;
+}
+
+// ---------------------------------------------------------------------------
+// Charts (DrawingML)
+// ---------------------------------------------------------------------------
+
+const EMU_PX = 9525;
+
+/** The drawing part: one two-cell anchor per chart. */
+function drawingXml(sheet, chartIds) {
+  const anchors = sheet.charts.map((ch, i) => {
+    const at = ch.at ?? { r: ch.range.r1, c: Math.min(ch.range.c2, sheet.cols - 1) + 2 };
+    const w = ch.size?.w ?? CHART_DEFAULT_SIZE.w, h = ch.size?.h ?? CHART_DEFAULT_SIZE.h;
+    // Approximate the extent in cells: 64px columns, 20px rows (Excel repositions on open).
+    const cols = Math.max(1, Math.round(w / 64)), rows = Math.max(1, Math.round(h / 20));
+    return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${at.c}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${at.r}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+      `<xdr:to><xdr:col>${at.c + cols}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${at.r + rows}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
+      `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${i + 2}" name="Chart ${i + 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>` +
+      `<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="${w * EMU_PX}" cy="${h * EMU_PX}"/></xdr:xfrm>` +
+      `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId${chartIds[i]}"/></a:graphicData></a:graphic>` +
+      `</xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>`;
+  }).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${anchors}</xdr:wsDr>`;
+}
+
+/** One chart part. Series point at the sheet's cells; cached values ride along for readers that want them. */
+function chartXml(book, sheet, sheetName, ch) {
+  const data = chartData(book, sheet, ch);
+  const q = `'${sheetName.replace(/'/g, "''")}'`;
+  const R = ch.range;
+  const hasHeader = data.series.length && data.series[0].name !== 'Series 1';
+  const byRows = ch.series === 'rows';
+  const oneCol = (byRows ? R.r2 - R.r1 : R.c2 - R.c1) === 0;
+  const r1 = R.r1 + (hasHeader && !byRows ? 1 : 0), c1 = R.c1 + (hasHeader && byRows ? 1 : 0);
+  const abs = (r, c) => `$${colLetter(c)}$${r + 1}`;
+  const catRef = byRows ? `${q}!${abs(R.r1, c1)}:${abs(R.r1, R.c2)}` : `${q}!${abs(r1, R.c1)}:${abs(R.r2, R.c1)}`;
+  const valRef = (i) => {
+    const k = (oneCol ? 0 : 1) + i;
+    return byRows ? `${q}!${abs(R.r1 + k, c1)}:${abs(R.r1 + k, R.c2)}` : `${q}!${abs(r1, R.c1 + k)}:${abs(R.r2, R.c1 + k)}`;
+  };
+  const nameRef = (i) => { const k = (oneCol ? 0 : 1) + i; return byRows ? `${q}!${abs(R.r1 + k, R.c1)}` : `${q}!${abs(R.r1, R.c1 + k)}`; };
+  const strCache = (vals) => `<c:strCache><c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${xml(v)}</c:v></c:pt>`).join('')}</c:strCache>`;
+  const numCache = (vals) => `<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${vals.length}"/>${vals.map((v, i) => (v == null ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`)).join('')}</c:numCache>`;
+  const ser = (s, i) => {
+    const color = argb(CHART_PALETTE[i % 8]).slice(2);
+    const fill = ch.type === 'line' || ch.type === 'scatter' ? `<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln></c:spPr>` : `<c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr>`;
+    const tx = hasHeader ? `<c:tx><c:strRef><c:f>${xml(nameRef(i))}</c:f>${strCache([s.name])}</c:strRef></c:tx>` : `<c:tx><c:v>${xml(s.name)}</c:v></c:tx>`;
+    const cat = oneCol ? '' : (ch.type === 'scatter' ? `<c:xVal><c:numRef><c:f>${xml(catRef)}</c:f>${numCache(data.xs ?? [])}</c:numRef></c:xVal>` : `<c:cat><c:strRef><c:f>${xml(catRef)}</c:f>${strCache(data.categories)}</c:strRef></c:cat>`);
+    const val = ch.type === 'scatter' ? `<c:yVal><c:numRef><c:f>${xml(valRef(i))}</c:f>${numCache(s.values)}</c:numRef></c:yVal>` : `<c:val><c:numRef><c:f>${xml(valRef(i))}</c:f>${numCache(s.values)}</c:numRef></c:val>`;
+    const marker = ch.type === 'line' ? `<c:marker><c:symbol val="circle"/><c:size val="5"/></c:marker>` : ch.type === 'scatter' ? `<c:marker><c:symbol val="circle"/><c:size val="6"/></c:marker>` : '';
+    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${fill}${marker}${cat}${val}${ch.type === 'line' || ch.type === 'scatter' ? '<c:smooth val="0"/>' : ''}</c:ser>`;
+  };
+  const series = data.series.slice(0, 8).map(ser).join('');
+  const axes = `<c:axId val="10"/><c:axId val="20"/>`;
+  let plot;
+  switch (ch.type) {
+    case 'bar': case 'column': plot = `<c:barChart><c:barDir val="${ch.type === 'bar' ? 'bar' : 'col'}"/><c:grouping val="clustered"/><c:varyColors val="0"/>${series}<c:gapWidth val="60"/>${axes}</c:barChart>`; break;
+    case 'line': plot = `<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>${series}<c:marker val="1"/>${axes}</c:lineChart>`; break;
+    case 'area': plot = `<c:areaChart><c:grouping val="standard"/><c:varyColors val="0"/>${series}${axes}</c:areaChart>`; break;
+    case 'scatter': plot = `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>${series.replace(/<a:ln w="19050">/g, '<a:ln w="19050"><a:noFill/></a:ln><a:ln w="19050">')}${axes}</c:scatterChart>`; break;
+    default: plot = `<c:pieChart><c:varyColors val="1"/>${data.series.slice(0, 1).map(ser).join('')}<c:firstSliceAng val="0"/></c:pieChart>`;
+  }
+  const axisXml = ch.type === 'pie' ? '' :
+    (ch.type === 'scatter'
+      ? `<c:valAx><c:axId val="10"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="1"/><c:tickLblPos val="nextTo"/><c:crossAx val="20"/><c:crosses val="autoZero"/></c:valAx>`
+      : `<c:catAx><c:axId val="10"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${ch.type === 'bar' ? 'l' : 'b'}"/><c:tickLblPos val="nextTo"/><c:crossAx val="20"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx>`) +
+    `<c:valAx><c:axId val="20"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${ch.type === 'bar' ? 'b' : 'l'}"/><c:majorGridlines/><c:numFmt formatCode="General" sourceLinked="1"/><c:tickLblPos val="nextTo"/><c:crossAx val="10"/><c:crosses val="autoZero"/></c:valAx>`;
+  const title = ch.title ? `<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1300" b="1"/></a:pPr><a:r><a:rPr lang="en-US" sz="1300" b="1"/><a:t>${xml(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>` : `<c:autoTitleDeleted val="1"/>`;
+  const legend = ch.legend !== false && (data.series.length >= 2 || ch.type === 'pie') ? `<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>` : '';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plot}${axisXml}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,7 +338,11 @@ export function workbookToXlsx(book, { title = '' } = {}) {
   const names = sheets.map(s => xlsxSheetName(s.name, used));
   const styles = new StyleTable();
   const entries = [];
-  const sheetParts = sheets.map((s, i) => ({ xml: sheetXml(book, s, styles, { hasComments: s.comments.length > 0 }), comments: s.comments.length > 0, i }));
+  let chartNo = 0;
+  const sheetParts = sheets.map((s, i) => {
+    const charts = (s.charts ?? []).map(() => ++chartNo);
+    return { xml: sheetXml(book, s, styles, { hasComments: s.comments.length > 0, hasDrawing: charts.length > 0 }), comments: s.comments.length > 0, charts, i };
+  });
 
   entries.push({ name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -265,7 +353,7 @@ export function workbookToXlsx(book, { title = '' } = {}) {
 <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
 <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-${sheetParts.map(p => `<Override PartName="/xl/worksheets/sheet${p.i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` + (p.comments ? `\n<Override PartName="/xl/comments${p.i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>` : '')).join('\n')}
+${sheetParts.map(p => `<Override PartName="/xl/worksheets/sheet${p.i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` + (p.comments ? `\n<Override PartName="/xl/comments${p.i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>` : '') + (p.charts.length ? `\n<Override PartName="/xl/drawings/drawing${p.i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>` + p.charts.map(n => `\n<Override PartName="/xl/charts/chart${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`).join('') : '')).join('\n')}
 </Types>` });
   entries.push({ name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -290,15 +378,28 @@ ${names.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openx
 </Relationships>` });
   for (const p of sheetParts) {
     entries.push({ name: `xl/worksheets/sheet${p.i + 1}.xml`, data: p.xml });
+    const s = sheets[p.i];
+    const rels = [];
     if (p.comments) {
-      const s = sheets[p.i];
-      entries.push({ name: `xl/worksheets/_rels/sheet${p.i + 1}.xml.rels`, data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing${p.i + 1}.vml"/>
-<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments${p.i + 1}.xml"/>
-</Relationships>` });
+      rels.push(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing${p.i + 1}.vml"/>`);
+      rels.push(`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments${p.i + 1}.xml"/>`);
       entries.push({ name: `xl/comments${p.i + 1}.xml`, data: commentsXml(s) });
       entries.push({ name: `xl/drawings/vmlDrawing${p.i + 1}.vml`, data: vmlXml(s) });
+    }
+    if (p.charts.length) {
+      rels.push(`<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${p.i + 1}.xml"/>`);
+      entries.push({ name: `xl/drawings/drawing${p.i + 1}.xml`, data: drawingXml(s, p.charts.map((_, k) => k + 1)) });
+      entries.push({ name: `xl/drawings/_rels/drawing${p.i + 1}.xml.rels`, data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${p.charts.map((n, k) => `<Relationship Id="rId${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart${n}.xml"/>`).join('\n')}
+</Relationships>` });
+      p.charts.forEach((n, k) => entries.push({ name: `xl/charts/chart${n}.xml`, data: chartXml(book, s, names[p.i], s.charts[k]) }));
+    }
+    if (rels.length) {
+      entries.push({ name: `xl/worksheets/_rels/sheet${p.i + 1}.xml.rels`, data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${rels.join('\n')}
+</Relationships>` });
     }
   }
   // styles.xml last: the sheets register their xfs / dxfs while rendering.

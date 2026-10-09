@@ -42,7 +42,8 @@ export function splitTop(s, seps = ',', { formats = false } = {}) {
 export function unquote(s) {
   const t = String(s ?? '');
   if (t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"') {
-    return t.slice(1, -1).replace(/\\(["\\])/g, '$1').replace(/""/g, '"');
+    // `\n` inside quotes is a line break (a multi-line cell).
+    return t.slice(1, -1).replace(/\\(["\\n])/g, (_, c) => (c === 'n' ? '\n' : c)).replace(/""/g, '"');
   }
   return t;
 }
@@ -51,8 +52,8 @@ export function unquote(s) {
 export function quoteIf(s, chars = ',{}') {
   const t = String(s ?? '');
   if (t === '') return '""';
-  const needs = [...chars].some(c => t.includes(c)) || t.includes('"') || t !== t.trim() || t.includes('\\');
-  return needs ? '"' + t.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"' : t;
+  const needs = [...chars].some(c => t.includes(c)) || t.includes('"') || t !== t.trim() || t.includes('\\') || t.includes('\n');
+  return needs ? '"' + t.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"' : t;
 }
 
 /** Trim a segment, keeping its offsets right. */

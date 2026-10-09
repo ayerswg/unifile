@@ -1446,7 +1446,7 @@ D2:D3  =B*C {format: $#,##0.00}
 A4:C4  Total {merge}
 D4     =SUM(D2:D3)</code></pre>
 <p class="help-note">A sheet is a YAML block between <code>---</code> fences — the sheet-wide settings — followed by one line per cell or range: <code>&lt;range&gt; &lt;values&gt; {settings}</code>. Another <code>---</code> block starts the next sheet. Addresses are Excel's: <code>B3</code>, <code>A1:D9</code>, <code>A</code> / <code>A:C</code> (whole columns), <code>3</code> / <code>3:5</code> (whole rows). A line starting with <code>#</code> is a remark.</p>
-<p class="help-note">Most editing happens in the <strong>grid</strong> (the eye / render pane): type to replace a cell, <kbd>Enter</kbd> / <kbd>Tab</kbd> to move, <kbd>F2</kbd> to edit in place, click a letter or number for a whole column or row, right-click (long-press on a phone) for the menu. Every change rewrites the text — tidily, so a one-cell edit is a one-line diff — and lands in the same undo history as typing.</p>`
+<p class="help-note">Most editing happens in the <strong>grid</strong> (the eye / render pane): type to replace a cell, <kbd>Enter</kbd> / <kbd>Tab</kbd> to move, <kbd>F2</kbd> to edit in place, click a letter or number for a whole column or row, right-click (long-press on a phone) for the menu, drag the small square at the selection's corner to <strong>fill</strong> a series (numbers, dates, <code>Item 1</code>…, formulas with their references moved). Every change rewrites the text — tidily, so a one-cell edit is a one-line diff — and lands in the same undo history as typing. <strong>Import Excel / CSV…</strong> (the ⋯ menu) reads an .xlsx or .csv into this format.</p>`
       },
       {
         group: 'The file',
@@ -1466,6 +1466,7 @@ decimals: 2               rounding for formula results without a format</code></
         group: 'The file',
         title: 'Values & Formulas',
         content: `<pre><code>A2:D2  Apples, 3, 1.20, =B*C      a row: values fill the range left to right
+A3     "line one\\nline two"        \\n inside quotes = a line break (Alt+Enter in the grid)
 A2:A9  Apples                     one value fills every cell
 D2:D9  =B*C                       one formula fills a column (this row's B × C)
 B:B    =A*2                       an open range fills the used rows
@@ -1511,6 +1512,28 @@ D2:D9  {rule: =D>C, color: red}          a formula, per row
 A2:A9  {rule: duplicate, color: #c00}
 E2:E9  {scale: #fff #1a8cf5}             2 or 3 colours</code></pre>
 <p class="help-note"><code>rule</code> makes the block's properties conditional. Conditions: <code>&gt; &gt;= &lt; &lt;= = &lt;&gt;</code> a value (any expression — <code>&gt; B1*2</code>), <code>between a and b</code>, <code>contains</code> / <code>starts</code> / <code>ends "text"</code>, <code>blank</code>, <code>filled</code>, <code>error</code>, <code>duplicate</code>, <code>unique</code>, <code>top n</code>, <code>bottom n</code>, or <code>=formula</code> evaluated for each cell with the row's bare-column refs. Rules apply in order after the plain styles; a <code>scale</code> shades numbers from the lowest to the highest value. The ◈ toolbar button lists and adds rules.</p>`
+      },
+      {
+        group: 'Settings',
+        title: 'Dates',
+        content: `<pre><code>A2     2026-01-31                 an ISO date is a date value
+B2     =A2+30                     2026-03-02 — arithmetic keeps the date
+C2     =B2-A2                     30 (days between)
+D2     =EDATE(A2, 1)              2026-02-28     =EOMONTH(A2, 0)
+E2     =DATEDIF(A2, B2, "d")      d · m · y · ym · md · yd
+F2     =TEXT(A2, "mmmm d, yyyy")  January 31, 2026
+G2     =TODAY()   =DATE(2026, 7, 4)   =YEAR(A2)  =MONTH(A2)  =DAY(A2)  =WEEKDAY(A2)
+A2:A9  {format: d mmm yyyy}       31 Jan 2026 — also dd/mm/yyyy, mmm yyyy, dddd, hh:mm</code></pre>
+<p class="help-note">Dates are Excel serials underneath (<code>2026-01-31 14:30</code> carries a time), so they sort, compare (<code>rule: > "2026-01-01"</code>), subtract and feed <code>MIN</code>/<code>MAX</code>; a <code>{seq: 2026-01-31, step: 1 month}</code> generates them. The .xlsx export writes real date cells.</p>`
+      },
+      {
+        group: 'Settings',
+        title: 'Data Bars & Charts',
+        content: `<pre><code>B2:B9  {bar: #2a78d6}                                   a data bar behind each value
+A1:C9  {chart: column, title: "Sales", at: E2, size: 480x300}
+A1:C9  {chart: line}        {chart: area}   {chart: pie}   {chart: scatter}
+A1:C9  {chart: bar, series: rows, legend: off}</code></pre>
+<p class="help-note">A chart line names its <em>data</em>: the first column holds the categories (the x values of a scatter), the first row the series names when it reads as a header, every other column a series (<code>series: rows</code> transposes). <code>at</code> is the top-left cell the chart floats at (default: right of the data), <code>size</code> its pixels. In the grid, hover a chart for edit / move / remove; ▥ on the toolbar inserts one from the selection. Charts go into the .xlsx as native Excel charts and into the HTML / PDF exports as pictures.</p>`
       },
       {
         group: 'Settings',

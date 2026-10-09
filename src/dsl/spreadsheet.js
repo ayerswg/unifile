@@ -29,6 +29,7 @@ import { workbookToXlsx } from '../core/sheet/xlsx.js';
 import { PROP_NAMES, ALIGNS, VALIGNS, FONTS } from '../core/sheet/style.js';
 import { FUNCTION_NAMES } from '../core/tables/formula.js';
 import { mountSheetGrid } from '../ui/sheet-grid.js';
+import { importXlsx, importCsv } from '../core/sheet/xlsx-import.js';
 
 // ---------------------------------------------------------------------------
 // Workbook cache — parse + evaluate once per document text
@@ -95,12 +96,49 @@ async function exportPdf(content) {
 }
 
 // ---------------------------------------------------------------------------
+// Import — .xlsx / .csv from the device
+// ---------------------------------------------------------------------------
+
+/** Inflate a raw-deflate buffer with the browser's DecompressionStream. */
+async function inflateRawBrowser(bytes) {
+  if (typeof DecompressionStream === 'undefined') throw new Error('This browser cannot read compressed .xlsx files');
+  const ds = new DecompressionStream('deflate-raw');
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/** Pick an .xlsx / .csv and replace the document with it (undoable). */
+export function pickImport() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,.csv,.tsv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv';
+  input.style.display = 'none';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    try {
+      let text;
+      if (/\.xlsx$/i.test(file.name)) text = await importXlsx(new Uint8Array(await file.arrayBuffer()), { inflateRaw: inflateRawBrowser });
+      else text = importCsv(await file.text(), file.name.replace(/\.[^.]+$/, '') || 'Sheet1');
+      const cur = state.currentContent ?? '';
+      if (cur.trim() && !window.confirm(`Replace the current document with "${file.name}"? (Undo brings it back.)`)) return;
+      state.emit('dsl-edit', { changes: [{ from: 0, to: cur.length, insert: text }] });
+    } catch (err) {
+      window.alert(`Import failed: ${err?.message ?? err}`);
+    }
+  });
+  document.body.appendChild(input);
+  input.click();
+}
+
+// ---------------------------------------------------------------------------
 // Editor — tokenizer
 // ---------------------------------------------------------------------------
 
 const RANGE_RE = /^(\$?[A-Za-z]{1,3}\$?\d*(?::\$?[A-Za-z]{1,3}\$?\d*)?|\d+(?::\d+)?)(?=\s|$|\{)/;
 const REF_RE = /^(?:'[^']+'!|[A-Za-z_][A-Za-z0-9_]*!)?\$?[A-Za-z]{1,3}\$?\d*(?::\$?[A-Za-z]{1,3}\$?\d*)?(?![A-Za-z0-9_(])/;
-const SETTING_RE = /^(merge|comment|rule|scale|seq|step|width|height|hidden|bold|italic|underline|strike|wrap|border|color|bg|size|font|align|valign|format)(?=\s*[:,}])/;
+const SETTING_RE = /^(merge|comment|rule|scale|bar|chart|title|at|series|legend|seq|step|width|height|hidden|bold|italic|underline|strike|wrap|border|color|bg|size|font|align|valign|format)(?=\s*[:,}])/;
 
 /**
  * Line kinds: `---` fences, front matter `key: value`, `# remarks`, cell
@@ -196,6 +234,9 @@ const PROP_OPTIONS = [
   ...['format: 0.00', 'format: #,##0', 'format: #,##0.00', 'format: 0%', 'format: $#,##0.00', 'format: text', 'format: general'].map(f => ({ label: f, type: 'property' })),
   { label: 'rule: ', type: 'property', detail: 'a condition: > 100, contains "x", blank, =D>C' },
   { label: 'scale: ', type: 'property', detail: 'two or three colours' },
+  { label: 'bar: ', type: 'property', detail: 'a data bar colour' },
+  { label: 'chart: column', type: 'property', detail: 'column · bar · line · area · pie · scatter' },
+  { label: 'title: ', type: 'property', detail: 'the chart title' }, { label: 'at: ', type: 'property', detail: 'the chart anchor cell' }, { label: 'size: 480x300', type: 'property' },
   { label: 'comment: ', type: 'property', detail: 'a cell note' },
   { label: 'seq: ', type: 'property', detail: 'a sequence start: 1, 2026-01-01, Jan, Item 1' },
   { label: 'step: ', type: 'property', detail: '1 · 7 · 1 week · 1 month · 1 year' },
@@ -291,7 +332,8 @@ const spreadsheetDSL = {
 
   // The editor view's verbs (⋯ menu, the phone bubble in the editor view).
   actions: [
-    { id: 'tidy', label: 'Tidy the text (align pipes)', glyph: '⫴', run: ({ editor }) => { editor?.alignActiveDsl?.(); } },
+    { id: 'import', label: 'Import Excel / CSV…', glyph: '⤒', run: () => pickImport() },
+    { id: 'tidy', label: 'Tidy the text', glyph: '⫴', run: ({ editor }) => { editor?.alignActiveDsl?.(); } },
   ],
   // The grid's verbs for the phone bubble in the render view.
   renderActions: [
@@ -305,6 +347,7 @@ const spreadsheetDSL = {
     { id: 'merge', label: 'Merge / unmerge', glyph: '⊞', run: gridAct('merge') },
     { id: 'comment', label: 'Comment', glyph: '❝', run: gridAct('comment') },
     { id: 'clear', label: 'Clear cells', glyph: '⌫', run: gridAct('clear') },
+    { id: 'chart', label: 'Insert chart', glyph: '▥', run: gridAct('chart') },
   ],
 
   exporters: {

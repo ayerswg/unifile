@@ -30,7 +30,7 @@
 import { parseSpreadsheet, parseRange, formatRange, rangeEquals, rangeWithin, rangeIntersects, isOpen, colLetter, META_KEYS } from './parse.js';
 import { formatStyleProps, formatCondition, compareValues, FLAGS } from './style.js';
 import { formatStep } from './seq.js';
-import { quoteIf, quoteArg } from './lex.js';
+import { quoteIf, quoteArg, tokenizeArgs } from './lex.js';
 import { tokenize } from '../tables/formula.js';
 import { literalValue } from '../tables/grid.js';
 
@@ -65,7 +65,7 @@ export function emptyModel(name = 'Sheet1') {
   return {
     name, rows: [['']], headerRows: 0, freeze: { rows: 0, cols: 0 }, defaultWidth: null, defaultHeight: null, decimals: null,
     filterOn: false, extraMeta: [], remarks: [], widths: new Map(), heights: new Map(),
-    merges: [], styles: [], rules: [], scales: [], comments: [], sequences: [], sorts: [], filters: [],
+    merges: [], styles: [], rules: [], scales: [], bars: [], charts: [], comments: [], sequences: [], sorts: [], filters: [],
     hiddenRows: new Set(), hiddenCols: new Set(),
   };
 }
@@ -90,6 +90,8 @@ export function toModel(sheet) {
   m.styles = sheet.styles.map(s => ({ range: { ...s.range }, props: { ...s.props } }));
   m.rules = sheet.rules.map(s => ({ range: { ...s.range }, cond: { ...s.cond }, props: { ...s.props } }));
   m.scales = sheet.scales.map(s => ({ range: { ...s.range }, colors: s.colors.slice() }));
+  m.bars = (sheet.bars ?? []).map(b => ({ range: { ...b.range }, color: b.color }));
+  m.charts = (sheet.charts ?? []).map(ch => ({ range: { ...ch.range }, type: ch.type, title: ch.title, at: ch.at ? { ...ch.at } : null, size: ch.size ? { ...ch.size } : null, series: ch.series, legend: ch.legend }));
   m.comments = sheet.comments.map(c => ({ r: c.r, c: c.c, text: c.text }));
   m.sequences = sheet.sequences.map(s => ({ range: { ...s.range }, start: s.start, step: { ...s.step } }));
   m.sorts = sheet.sorts.map(s => ({ ...s }));
@@ -113,11 +115,11 @@ function trim(m) {
   const used = (row) => row.some(t => t !== '');
   const bounded = (R) => (R.r2 === Infinity ? 0 : R.r2 + 1);
   const boundedC = (R) => (R.c2 === Infinity ? 0 : R.c2 + 1);
-  const rowsNeeded = Math.max(1, m.headerRows, ...m.merges.map(bounded), ...m.comments.map(x => x.r + 1), ...m.sequences.map(s => bounded(s.range)));
+  const rowsNeeded = Math.max(1, m.headerRows, ...m.merges.map(bounded), ...m.comments.map(x => x.r + 1), ...m.sequences.map(s => bounded(s.range)), ...m.charts.map(c => bounded(c.range)));
   while (m.rows.length > rowsNeeded && !used(m.rows[m.rows.length - 1])) m.rows.pop();
   let w = cols(m);
   const colUsed = (c) => m.rows.some(row => row[c] !== '');
-  const colsNeeded = Math.max(1, ...m.merges.map(boundedC), ...m.comments.map(x => x.c + 1), ...m.sequences.map(s => boundedC(s.range)));
+  const colsNeeded = Math.max(1, ...m.merges.map(boundedC), ...m.comments.map(x => x.c + 1), ...m.sequences.map(s => boundedC(s.range)), ...m.charts.map(c => boundedC(c.range)));
   while (w > colsNeeded && !colUsed(w - 1)) w--;
   for (const row of m.rows) { row.length = w; for (let c = 0; c < w; c++) if (row[c] == null) row[c] = ''; }
   while (m.rows.length < rowsNeeded) m.rows.push(new Array(w).fill(''));
@@ -130,7 +132,7 @@ function trim(m) {
 const valueItem = (t) => {
   if (t === '') return '';
   if (t.startsWith('=')) return t;   // a formula: its commas are inside parens, its strings quoted
-  if (/[,{}"\\]/.test(t) || t !== t.trim()) return quoteIf(t);
+  if (/[,{}"\\\n]/.test(t) || t !== t.trim()) return quoteIf(t);
   return t;
 };
 // A setting value is quoted when it holds a `}`, a quote, or a comma that is
@@ -194,6 +196,8 @@ export function serializeModel(m) {
       r = e + 1;
     }
   }
+  // Row segments: contiguous cells of a row (inner blanks as empty items).
+  const segments = [];   // { r, c1, c2 }
   m.rows.forEach((row, r) => {
     let c = 0;
     while (c < w) {
@@ -202,13 +206,37 @@ export function serializeModel(m) {
       let lastUsed = c;
       while (e + 1 < w && !consumed[r][e + 1]) { e++; if (row[e] !== '') lastUsed = e; }
       e = lastUsed;
-      const items = [];
-      for (let k = c; k <= e; k++) items.push(valueItem(row[k]));
-      const rangeText = formatRange({ r1: r, c1: c, r2: r, c2: e });
-      vlines.push({ r, c, text: withStyle(rangeText, `${rangeText} ${items.join(', ')}`) });
+      segments.push({ r, c1: c, c2: e });
       c = e + 1;
     }
   });
+  // Data entered down a column reads better as a column list: 3+ consecutive
+  // rows whose only segment in that column is the single cell become one line.
+  const single = new Map();   // `r:c` → segment
+  for (const sg of segments) if (sg.c1 === sg.c2) single.set(`${sg.r}:${sg.c1}`, sg);
+  const used = new Set();
+  for (let c = 0; c < w; c++) {
+    let r = 0;
+    while (r < m.rows.length) {
+      if (!single.has(`${r}:${c}`)) { r++; continue; }
+      let e = r;
+      while (single.has(`${e + 1}:${c}`)) e++;
+      if (e - r + 1 >= 3) {
+        const items = [];
+        for (let k = r; k <= e; k++) { items.push(valueItem(m.rows[k][c])); used.add(single.get(`${k}:${c}`)); }
+        const rangeText = formatRange({ r1: r, c1: c, r2: e, c2: c });
+        vlines.push({ r, c, text: withStyle(rangeText, `${rangeText} ${items.join(', ')}`) });
+      }
+      r = e + 1;
+    }
+  }
+  for (const sg of segments) {
+    if (used.has(sg)) continue;
+    const items = [];
+    for (let k = sg.c1; k <= sg.c2; k++) items.push(valueItem(m.rows[sg.r][k]));
+    const rangeText = formatRange({ r1: sg.r, c1: sg.c1, r2: sg.r, c2: sg.c2 });
+    vlines.push({ r: sg.r, c: sg.c1, text: withStyle(rangeText, `${rangeText} ${items.join(', ')}`) });
+  }
   vlines.sort((a, b) => a.r - b.r || a.c - b.c);
   if (vlines.length) lines.push('', ...vlines.map(v => v.text));
 
@@ -223,6 +251,16 @@ export function serializeModel(m) {
   // A condition is self-delimiting (its strings are quoted): written raw.
   for (const r of m.rules) s.push(`${formatRange(r.range)} {rule: ${formatCondition(r.cond)}, ${propsToBlock(r.props)}}`);
   for (const sc of m.scales) s.push(`${formatRange(sc.range)} {scale: ${sc.colors.join(' ')}}`);
+  for (const b of m.bars) s.push(`${formatRange(b.range)} {bar: ${b.color}}`);
+  for (const ch of m.charts) {
+    const parts = [`chart: ${ch.type}`];
+    if (ch.title) parts.push(`title: ${settingValue(ch.title)}`);
+    if (ch.at) parts.push(`at: ${colLetter(ch.at.c)}${ch.at.r + 1}`);
+    if (ch.size) parts.push(`size: ${ch.size.w}x${ch.size.h}`);
+    if (ch.series === 'rows') parts.push('series: rows');
+    if (ch.legend === false) parts.push('legend: off');
+    s.push(`${formatRange(ch.range)} {${parts.join(', ')}}`);
+  }
   for (const c of m.comments) s.push(`${colLetter(c.c)}${c.r + 1} {comment: ${quoteIf(c.text, ',{}')}}`);
   if (s.length) lines.push('', ...s);
   return lines.join('\n');
@@ -231,13 +269,11 @@ export function serializeModel(m) {
 /** Props → block entries: `bold, bg: #eef, format: $#,##0.00`. */
 export function propsToBlock(props) {
   const out = [];
-  for (const tok of formatStyleProps(props).split(' ').filter(Boolean)) {
-    const i = tok.indexOf(':');
-    if (i < 0) { out.push(tok); continue; }
-    const key = tok.slice(0, i);
-    let val = tok.slice(i + 1);
-    if (val.startsWith('"')) val = val.slice(1, -1).replace(/\\"/g, '"');
-    out.push(`${key}: ${settingValue(val)}`);
+  // formatStyleProps quotes a value holding spaces; tokenizeArgs keeps it whole.
+  for (const tok of tokenizeArgs(formatStyleProps(props))) {
+    const i = tok.text.indexOf(':');
+    if (i < 0) { out.push(tok.text); continue; }
+    out.push(`${tok.text.slice(0, i)}: ${settingValue(tok.text.slice(i + 1))}`);
   }
   return out.join(', ');
 }
@@ -332,9 +368,9 @@ export function clearRange(text, index, R, book) {
   }, book);
 }
 
-/** A typed value → cell text: newlines collapsed, trimmed. */
+/** A typed value → cell text: CR dropped (line breaks stay — a multi-line cell), trimmed. */
 function normalizeInput(v) {
-  return String(v ?? '').replace(/\r?\n/g, ' ').trim();
+  return String(v ?? '').replace(/\r/g, '').trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +435,13 @@ function structural(text, index, axis, at, n, book, mutate) {
   m.rules = m.rules.map(s => ({ ...s, range: shiftR(s.range) })).filter(s => s.range);
   m.scales = m.scales.map(s => ({ ...s, range: shiftR(s.range) })).filter(s => s.range);
   m.sequences = m.sequences.map(s => ({ ...s, range: shiftR(s.range) })).filter(s => s.range);
+  m.bars = m.bars.map(s => ({ ...s, range: shiftR(s.range) })).filter(s => s.range);
+  m.charts = m.charts.map(ch => {
+    const range = shiftR(ch.range);
+    if (!range) return null;
+    const at = ch.at ? shiftR({ r1: ch.at.r, c1: ch.at.c, r2: ch.at.r, c2: ch.at.c }) : null;
+    return { ...ch, range, at: ch.at ? (at ? { r: at.r1, c: at.c1 } : null) : null };
+  }).filter(Boolean);
   m.comments = m.comments.map(c => { const R = shiftR({ r1: c.r, c1: c.c, r2: c.r, c2: c.c }); return R ? { ...c, r: R.r1, c: R.c1 } : null; }).filter(Boolean);
   if (axis === 'col') {
     m.sorts = m.sorts.map(s => ({ ...s, col: sh(s.col) })).filter(s => s.col != null);
@@ -630,6 +673,126 @@ export function addScale(text, index, R, colors, book) {
 }
 export function removeScale(text, index, i, book) {
   return withSheet(text, index, (m) => { m.scales.splice(i, 1); }, book);
+}
+
+export function addBar(text, index, R, color, book) {
+  return withSheet(text, index, (m) => { m.bars = m.bars.filter(b => !rangeEquals(b.range, R)); m.bars.push({ range: { ...R }, color }); }, book);
+}
+export function removeBar(text, index, i, book) {
+  return withSheet(text, index, (m) => { m.bars.splice(i, 1); }, book);
+}
+export function addChart(text, index, chart, book) {
+  return withSheet(text, index, (m) => { m.charts.push({ range: { ...chart.range }, type: chart.type, title: chart.title ?? '', at: chart.at ?? null, size: chart.size ?? null, series: chart.series ?? 'cols', legend: chart.legend !== false }); }, book);
+}
+export function updateChart(text, index, i, patch, book) {
+  return withSheet(text, index, (m) => { if (m.charts[i]) m.charts[i] = { ...m.charts[i], ...patch }; }, book);
+}
+export function removeChart(text, index, i, book) {
+  return withSheet(text, index, (m) => { m.charts.splice(i, 1); }, book);
+}
+
+/**
+ * The fill handle: extend the pattern in `src` over `dst` (a range that
+ * contains `src` and grows it in ONE direction).  Per lane (a column when
+ * filling down/up, a row when filling right/left):
+ *   • numbers (2+ of them) → the linear series; one number → copied
+ *   • dates → the date series (2+), else a day apart
+ *   • text ending in a number → the number counts on (`Item 1` → `Item 2`…)
+ *   • formulas → copied with their relative references moved (`$` pins)
+ *   • anything else cycles
+ */
+export function fillRange(text, index, src, dst, book) {
+  return withSheet(text, index, (m) => {
+    const down = dst.r2 > src.r2, up = dst.r1 < src.r1, right = dst.c2 > src.c2, left = dst.c1 < src.c1;
+    if (!(down || up || right || left)) return { cancel: true };
+    ensure(m, dst.r2, dst.c2);
+    const vertical = down || up;
+    const lanes = vertical ? range(src.c1, src.c2) : range(src.r1, src.r2);
+    for (const lane of lanes) {
+      const cellsOf = vertical ? range(src.r1, src.r2).map(r => m.rows[r][lane]) : range(src.c1, src.c2).map(c => m.rows[lane][c]);
+      const n = cellsOf.length;
+      const targets = vertical
+        ? (down ? range(src.r2 + 1, dst.r2) : range(dst.r1, src.r1 - 1).reverse())
+        : (right ? range(src.c2 + 1, dst.c2) : range(dst.c1, src.c1 - 1).reverse());
+      const series = seriesOf(cellsOf);
+      targets.forEach((t, k) => {
+        const step = up || left ? -(k + 1) : k + 1;   // distance from the pattern's edge
+        const idx = up || left ? ((n - 1 - (k % n)) + n) % n : k % n;
+        const srcText = cellsOf[idx];
+        let v;
+        if (series) v = series(step, idx);
+        else if (srcText.startsWith('=')) {
+          const srcPos = vertical ? src.r1 + idx : src.c1 + idx;
+          const d = t - srcPos;
+          v = '=' + offsetFormula(srcText.slice(1), vertical ? d : 0, vertical ? 0 : d);
+        } else v = srcText;
+        if (vertical) m.rows[t][lane] = v; else m.rows[lane][t] = v;
+      });
+    }
+  }, book);
+}
+const range = (a, b) => { const out = []; for (let i = a; i <= b; i++) out.push(i); return out; };
+
+/** A function (stepFromEdge, patternIndex) → text for numeric / date / text+number lanes, else null. */
+function seriesOf(texts) {
+  const n = texts.length;
+  if (!n || texts.some(t => t === '' || t.startsWith('='))) return null;
+  const vals = texts.map(literalValue);
+  if (vals.every(v => typeof v === 'number')) {
+    const step = n > 1 ? (vals[n - 1] - vals[0]) / (n - 1) : 0;
+    const last = vals[n - 1], first = vals[0];
+    return (k) => formatNum(k > 0 ? last + step * k : first + step * k);
+  }
+  if (vals.every(v => v && typeof v === 'object' && 'serial' in v)) {
+    const step = n > 1 ? (vals[n - 1].serial - vals[0].serial) / (n - 1) : 1;
+    const last = vals[n - 1].serial, first = vals[0].serial;
+    return (k) => isoOf(k > 0 ? last + step * k : first + step * k);
+  }
+  const tm = texts.map(t => /^(.*?)(\d+)$/.exec(t));
+  if (tm.every(Boolean) && tm.every(x => x[1] === tm[0][1])) {
+    const nums = tm.map(x => parseInt(x[2], 10));
+    const step = n > 1 ? (nums[n - 1] - nums[0]) / (n - 1) : 1;
+    const width = tm[0][2][0] === '0' ? tm[0][2].length : 0;
+    return (k) => tm[0][1] + String(Math.round(k > 0 ? nums[n - 1] + step * k : nums[0] + step * k)).padStart(width, '0');
+  }
+  return null;
+}
+const formatNum = (x) => (Number.isInteger(x) ? String(x) : String(Number(x.toPrecision(12))));
+function isoOf(serial) {
+  const d = new Date(Date.UTC(1899, 11, 30) + Math.round(serial) * 86400000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Move a formula's RELATIVE references by (dr, dc): `A1+$B$1` filled one row
+ * down becomes `A2+$B$1`.  Bare column refs (`B`) and whole columns stay.
+ */
+export function offsetFormula(formula, dr, dc) {
+  let toks;
+  try { toks = tokenize(formula); } catch { return formula; }
+  let out = '', last = 0;
+  for (const t of toks) {
+    if (t.type === 'end') break;
+    out += formula.slice(last, t.from);
+    if (t.type === 'ref') {
+      const raw = formula.slice(t.from, t.to);
+      const bang = raw.lastIndexOf('!');
+      const prefix = bang >= 0 ? raw.slice(0, bang + 1) : '';
+      const body = bang >= 0 ? raw.slice(bang + 1) : raw;
+      out += prefix + body.split(':').map(part => {
+        const m = /^(\$?)([A-Za-z]{1,3})(\$?)(\d*)$/.exec(part);
+        if (!m) return part;
+        let col = colIndexOf(m[2]);
+        if (!m[1] && m[4]) col = Math.max(0, col + dc);     // a bare column (no row) is this-row: keep it
+        else if (!m[1] && !m[4] && body.includes(':')) col = Math.max(0, col + dc);
+        let row = m[4] ? parseInt(m[4], 10) : null;
+        if (row != null && !m[3]) row = Math.max(1, row + dr);
+        return m[1] + colLetter(col) + m[3] + (row == null ? '' : row);
+      }).join(':');
+    } else out += formula.slice(t.from, t.to);
+    last = t.to;
+  }
+  return out + formula.slice(last);
 }
 
 export function setComment(text, index, r, c, comment, book) {

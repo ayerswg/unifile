@@ -518,11 +518,199 @@ test('workbookToXlsx: a stored ZIP with styles, formulas, merges, cf rules, comm
   assert.ok(s.includes('<row r="3" hidden="1">'));
   assert.ok(s.includes('<autoFilter'));
   assert.ok(s.includes('Market price, October'));
-  assert.ok(s.includes('2026-02-28'));
+  assert.ok(s.includes('<v>46081</v>') && s.includes('formatCode="yyyy-mm-dd"'));   // the generated date: a real date cell
 });
 
 test('usedExtent / toModel / serializeModel of a blank sheet', () => {
   const wb = parseSpreadsheet('---\nname: S\n---\nA1 a\n');
   assert.deepEqual(usedExtent(wb.sheets[0]), { rows: 1, cols: 1 });
   assert.equal(serializeModel(toModel(wb.sheets[0])), '---\nname: S\n---\n\nA1 a');
+});
+
+// ---------------------------------------------------------------------------
+// Dates, data bars, multi-line cells, fill series, charts, import
+// ---------------------------------------------------------------------------
+
+import { fillRange, offsetFormula, addBar, removeBar, addChart, updateChart, removeChart } from '../src/core/sheet/edit.js';
+import { chartData, renderChartSvg, niceTicks } from '../src/core/sheet/chart.js';
+import { importXlsx, importCsv } from '../src/core/sheet/xlsx-import.js';
+import { parseXml, textOf } from '../src/core/sheet/xml.js';
+import { parseDateText, formatDate, isDateFormat, FUNCTIONS, isDate } from '../src/core/tables/formula.js';
+import { inflateRawSync } from 'node:zlib';
+
+test('dates: literals, arithmetic, functions, formats', () => {
+  const d = parseDateText('2026-01-31');
+  assert.equal(d.serial, 46053);
+  assert.equal(String(d), '2026-01-31');
+  assert.equal(parseDateText('2026-02-30'), null);
+  assert.equal(formatDate(d.serial, 'd mmm yyyy'), '31 Jan 2026');
+  assert.equal(formatDate(d.serial + 0.5, 'yyyy-mm-dd hh:mm AM/PM'), '2026-01-31 12:00 PM');
+  assert.equal(formatDate(d.serial, 'dddd, mmmm d'), 'Saturday, January 31');
+  assert.ok(isDateFormat('dd/mm/yyyy') && !isDateFormat('#,##0.00'));
+  const book = computeWorkbook('A1 2026-01-31\nB1 =A1+30\nC1 =B1-A1\nD1 =EDATE(A1, 1)\nE1 =EOMONTH(A1, 1)\nF1 =DATEDIF(A1, "2027-03-15", "ym")\nG1 =TEXT(A1, "mmmm yyyy")\nH1 =YEAR(A1)&"-"&WEEKDAY(A1)\nI1 =MAX(A1, D1)\nJ1 =A1 {format: d mmm yyyy}\nK1 =DAYS("2026-03-01", A1)\n');
+  const s = book.sheets[0];
+  const show = c => book.display(s.grid[0][c]);
+  assert.equal(show(1), '2026-03-02');
+  assert.equal(show(2), '30');
+  assert.equal(show(3), '2026-02-28');
+  assert.equal(show(4), '2026-02-28');
+  assert.equal(show(5), '1');
+  assert.equal(show(6), 'January 2026');
+  assert.equal(show(7), '2026-7');
+  assert.equal(show(8), '2026-02-28');
+  assert.equal(show(9), '31 Jan 2026');
+  assert.equal(show(10), '29');
+  assert.equal(book.kindOf(s.grid[0][1]), 'date');
+  assert.ok(isDate(FUNCTIONS.TODAY()));
+  // Sorting and comparisons treat dates as numbers.
+  const v = computeWorkbook('---\nsort: A asc\n---\nA1:A3 2026-03-01, 2025-12-31, 2026-01-15\n');
+  assert.deepEqual(viewRows(v, v.sheets[0]), [1, 2, 0]);
+  const rule = computeWorkbook('A1 2026-03-01\nA1 {rule: > "2026-01-01", bold}\n');
+  assert.equal(rule.styleOf(rule.sheets[0].grid[0][0]).bold, true);
+});
+
+test('data bars: resolved length, css, xlsx rule, edit ops', () => {
+  const book = computeWorkbook('A1:A4 10, 20, -5, 40\nA1:A4 {bar: #2a78d6}\n');
+  const s = book.sheets[0];
+  const b4 = book.styleOf(s.grid[3][0]).bar;
+  assert.equal(b4.to, 1);
+  assert.ok(Math.abs(book.styleOf(s.grid[0][0]).bar.to - (15 / 45)) < 1e-9);
+  const b3 = book.styleOf(s.grid[2][0]).bar;
+  assert.equal(b3.from, 0);
+  assert.ok(renderSheetHtml(book, s).includes('linear-gradient(90deg'));
+  const x = Buffer.from(workbookToXlsx(book)).toString('latin1');
+  assert.ok(x.includes('<cfRule type="dataBar"'));
+  let r = addBar('A1 1\n', 0, { r1: 0, c1: 0, r2: 4, c2: 0 }, '#e34948');
+  assert.ok(r.text.includes('A1:A5 {bar: #e34948}'));
+  r = removeBar(r.text, 0, 0);
+  assert.ok(!r.text.includes('bar:'));
+});
+
+test('multi-line cells: \\n in quotes round-trips, renders pre-wrap, exports', () => {
+  const src = '---\nname: S\n---\n\nA1:B1 "line one\\nline two", x\n';
+  const book = computeWorkbook(src);
+  assert.equal(book.sheets[0].grid[0][0].text, 'line one\nline two');
+  assert.equal(alignSpreadsheet(src), src);
+  assert.ok(renderSheetHtml(book, book.sheets[0]).includes('is-multiline'));
+  assert.equal(sheetToCsv(book, book.sheets[0]), '"line one\nline two",x\r\n');
+  const r = setCell('A1 a\n', 0, 0, 0, 'p\r\nq');
+  assert.ok(r.text.includes('A1 "p\\nq"'));
+  assert.ok(Buffer.from(workbookToXlsx(book)).toString('latin1').includes('wrapText="1"'));
+});
+
+test('fillRange: linear numbers, dates, text+number, formulas with relative refs, cycling', () => {
+  let r = fillRange('A1:B1 1, =A*2\nA2:B2 3, =A*2\n', 0, { r1: 0, c1: 0, r2: 1, c2: 1 }, { r1: 0, c1: 0, r2: 4, c2: 1 });
+  assert.ok(r.text.includes('A1:A5 1, 3, 5, 7, 9'));
+  assert.ok(r.text.includes('B1:B5 =A*2'));
+  r = fillRange('A1 2026-01-31\nB1 Item 1\nC1 =A1+1\nD1 x\n', 0, { r1: 0, c1: 0, r2: 0, c2: 3 }, { r1: 0, c1: 0, r2: 2, c2: 3 });
+  assert.ok(r.text.includes('A2:D2 2026-02-01, Item 2, =A2+1, x'));
+  assert.ok(r.text.includes('A3:D3 2026-02-02, Item 3, =A3+1, x'));
+  // Filling up and to the right; a two-value text cycle.
+  r = fillRange('A3:B3 5, =$A$1+A3\n', 0, { r1: 2, c1: 0, r2: 2, c2: 1 }, { r1: 0, c1: 0, r2: 2, c2: 1 });
+  assert.ok(r.text.includes('A1:B1 5, =$A$1+A1'));
+  r = fillRange('A1:A2 x, y\n', 0, { r1: 0, c1: 0, r2: 1, c2: 0 }, { r1: 0, c1: 0, r2: 4, c2: 0 });
+  assert.ok(r.text.includes('A1:A5 x, y, x, y, x'));
+  r = fillRange('A1 10\n', 0, { r1: 0, c1: 0, r2: 0, c2: 0 }, { r1: 0, c1: 0, r2: 0, c2: 3 });
+  assert.ok(r.text.includes('A1:D1 10, 10, 10, 10'));
+  assert.equal(fillRange('A1 1\n', 0, { r1: 0, c1: 0, r2: 0, c2: 0 }, { r1: 0, c1: 0, r2: 0, c2: 0 }).changes.length, 0);
+  assert.equal(offsetFormula('A1+$B$1+SUM(C1:C3)+B+Sheet2!A1+$C2+D$3', 2, 1), 'B3+$B$1+SUM(D3:D5)+B+Sheet2!B3+$C4+E$3');
+});
+
+test('charts: data from the sheet, svg forms, edit ops, xlsx parts', () => {
+  const src = '---\nheader: 1\n---\nA1:C1 Month, North, South\nA2:A4 Jan, Feb, Mar\nB2:B4 1, 2, 3\nC2:C4 4, 5, 6\nA1:C4 {chart: column, title: "T", at: E2, size: 400x240}\nB1:B4 {chart: pie}\nA1:C4 {chart: scatter, series: rows, legend: off}\n';
+  const book = computeWorkbook(src);
+  const s = book.sheets[0];
+  assert.equal(s.charts.length, 3);
+  assert.deepEqual(s.charts[0].at, { r: 1, c: 4 });
+  const d = chartData(book, s, s.charts[0]);
+  assert.deepEqual(d.categories, ['Jan', 'Feb', 'Mar']);
+  assert.deepEqual(d.series.map(x => x.name), ['North', 'South']);
+  assert.deepEqual(d.series[1].values, [4, 5, 6]);
+  const byRows = chartData(book, s, s.charts[2]);
+  assert.deepEqual(byRows.series.map(x => x.name), ['Jan', 'Feb', 'Mar']);
+  for (const type of ['column', 'bar', 'line', 'area', 'pie', 'scatter']) {
+    const svg = renderChartSvg(d, { type, title: 'x', width: 300, height: 200 });
+    assert.ok(svg.startsWith('<svg') && svg.endsWith('</svg>'), type);
+    assert.ok(svg.includes('#2a78d6'), type);
+  }
+  assert.ok(renderChartSvg(d, { type: 'column' }).includes('<rect x="48"'));      // legend for 2 series
+  assert.ok(!renderChartSvg({ categories: ['a'], series: [{ name: 's', values: [1] }], xs: null }, { type: 'column' }).includes('<rect x="48"'));
+  assert.ok(renderChartSvg({ categories: [], series: [], xs: null }, {}).includes('No data'));
+  assert.deepEqual(niceTicks(0, 23).ticks, [0, 5, 10, 15, 20, 25]);
+  assert.equal(alignSpreadsheet(src), alignSpreadsheet(alignSpreadsheet(src)));
+  assert.ok(alignSpreadsheet(src).includes('A1:C4 {chart: column, title: T, at: E2, size: 400x240}'));
+  assert.ok(alignSpreadsheet(src).includes('A1:C4 {chart: scatter, series: rows, legend: off}'));
+  assert.ok(renderWorkbookHtml(book).includes('uf-ss-chartfig'));
+  const x = Buffer.from(workbookToXlsx(book)).toString('latin1');
+  assert.ok(x.includes('xl/charts/chart1.xml') && x.includes('xl/charts/chart3.xml') && x.includes('xl/drawings/drawing1.xml'));
+  assert.ok(x.includes('<c:barChart>') && x.includes('<c:pieChart>') && x.includes('<c:scatterChart>'));
+  assert.ok(x.includes("<c:f>'Sheet1'!$B$2:$B$4</c:f>"));
+  assert.ok(x.includes('<drawing r:id="rId3"/>'));
+  let r = addChart('A1:B2 1, 2, 3, 4\n', 0, { range: { r1: 0, c1: 0, r2: 1, c2: 1 }, type: 'line', title: 'L' });
+  assert.ok(r.text.includes('A1:B2 {chart: line, title: L}'));
+  r = updateChart(r.text, 0, 0, { at: { r: 3, c: 3 } });
+  assert.ok(r.text.includes('at: D4'));
+  r = insertRows(r.text, 0, 0, 1);
+  assert.ok(r.text.includes('A2:B3 {chart: line, title: L, at: D5}'));
+  r = removeChart(r.text, 0, 0);
+  assert.ok(!r.text.includes('chart:'));
+});
+
+test('row windowing: spacer rows carry the hidden heights; frozen rows always render', () => {
+  const lines = ['---', 'header: 1', '---', 'A1 h'];
+  for (let i = 2; i <= 300; i++) lines.push(`A${i} ${i}`);
+  const book = computeWorkbook(lines.join('\n'));
+  const html = renderSheetHtml(book, book.sheets[0], { window: { from: 100, to: 120 }, rowHeight: 26 });
+  assert.ok(html.includes('data-addr="A1"'));
+  assert.ok(!html.includes('data-addr="A50"'));
+  assert.ok(html.includes('data-addr="A110"'));
+  assert.ok(html.includes('<tr class="is-spacer" style="height:' + (99 * 26) + 'px">'));
+  assert.ok(html.includes('<tr class="is-spacer" style="height:' + (180 * 26) + 'px">'));
+});
+
+test('xml: a tiny OOXML reader', () => {
+  const root = parseXml('<?xml version="1.0"?><a:root xmlns:a="x"><b k="1 &amp; 2"/><c>hi <d>there</d></c><!-- c --></a:root>');
+  assert.equal(root.name, 'root');
+  assert.equal(root.children[0].attrs.k, '1 & 2');
+  assert.equal(textOf(root.children[1]), 'hi there');
+});
+
+test('importXlsx round-trips our own export (stored + deflated); importCsv', async () => {
+  const src = `---
+name: Sales
+header: 1
+freeze: cols 1
+filter: on
+---
+A1:D1 Month, North, South, Note {bold, bg: #eeeeff}
+A2:E2 Jan, 12, 8, "two\\nlines", =B2+C2
+A3:E3 Feb, 18, 11, 2026-02-28, =B3+C3
+A4:E4 Mar, 9, 14, , =B4+C4
+
+A {width: 14}
+4 {hidden}
+E2:E4 {format: #,##0.00}
+B2:C4 {rule: > 10, bold, color: #008000}
+E2:E4 {scale: #ffffff #1a8cf5}
+B2:B4 {bar: #2a78d6}
+B3 {comment: big month}
+`;
+  const book = computeWorkbook(src);
+  const bytes = workbookToXlsx(book);
+  const back = await importXlsx(bytes, { inflateRaw: inflateRawSync });
+  for (const line of ['name: Sales', 'header: 1', 'freeze: cols 1', 'filter: on', 'A1:D1 Month, North, South, Note {bold, bg: #eeeeff}', 'A2:E2 Jan, 12, 8, "two\\nlines", =B2+C2', 'A3:E3 Feb, 18, 11, 2026-02-28, =B3+C3', 'A {width: 14}', '4 {hidden}', 'E2:E4 {format: #,##0.00}', 'B2:C4 {rule: > 10, bold, color: #008000}', 'E2:E4 {scale: #ffffff #1a8cf5}', 'B2:B4 {bar: #2a78d6}', 'B3 {comment: big month}']) {
+    assert.ok(back.includes(line), line);
+  }
+  // Deflated entries go through the inflater.
+  const { deflateRawSync } = await import('node:zlib');
+  const { readZip } = await import('../src/core/zip.js');
+  const stored = await readZip(bytes);
+  assert.ok(stored.has('xl/workbook.xml'));
+  const inflated = await readZip(bytes, inflateRawSync);
+  assert.equal(inflated.size, stored.size);
+  void deflateRawSync;
+  const csv = importCsv('a,b,"c, d"\r\n1,2,"x\ny"\r\n', 'Data');
+  assert.equal(csv, '---\nname: Data\n---\n\nA1:C1 a, b, "c, d"\nA2:C2 1, 2, "x\\ny"\n');
+  assert.ok(importCsv('a;b\n1;2\n').includes('A1:B1 a, b'));
+  assert.ok(importCsv('a\tb\n1\t2\n').includes('A2:B2 1, 2'));
 });

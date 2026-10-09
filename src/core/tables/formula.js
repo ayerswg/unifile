@@ -31,6 +31,110 @@ export const isError = v => v instanceof FormulaError;
 const E = (code, detail) => new FormulaError(code, detail);
 
 // ---------------------------------------------------------------------------
+// Dates — Excel serials (days since 1899-12-30), carried as a value type so a
+// result stays a date through `+ -` arithmetic and formats as one.
+// ---------------------------------------------------------------------------
+
+const EPOCH = Date.UTC(1899, 11, 30);
+const DAY_MS = 86400000;
+
+export class DateValue {
+  constructor(serial, hasTime = false) { this.serial = serial; this.hasTime = hasTime; }
+  valueOf() { return this.serial; }
+  toString() { return formatDate(this.serial, this.hasTime ? 'yyyy-mm-dd hh:mm' : 'yyyy-mm-dd'); }
+}
+export const isDate = v => v instanceof DateValue;
+
+export function dateToSerial(y, m, d, h = 0, mi = 0, sec = 0) {
+  return (Date.UTC(y, m - 1, d, h, mi, sec) - EPOCH) / DAY_MS;
+}
+/** The UTC Date of a serial (fractions are the time of day). */
+export function serialToDate(serial) {
+  return new Date(EPOCH + Math.round(serial * DAY_MS));
+}
+/** `2026-01-31`, `2026-01-31 14:30`, `2026-01-31T14:30:00` → DateValue, else null. */
+export function parseDateText(t) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(String(t ?? '').trim());
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  const hasTime = m[4] != null;
+  return new DateValue(dateToSerial(y, mo, d, hasTime ? +m[4] : 0, hasTime ? +m[5] : 0, m[6] ? +m[6] : 0), hasTime);
+}
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DATE_TOKEN_RE = /yyyy|yy|mmmm|mmm|mm|m|dddd|ddd|dd|d|hh|h|ss|s|am\/pm|AM\/PM/g;
+
+/** True when a format pattern is a date/time pattern (`yyyy-mm-dd`, `d mmm yyyy`, `hh:mm`…). */
+export function isDateFormat(fmt) {
+  const f = String(fmt ?? '');
+  return /(yyyy|yy|mmm|dddd|ddd|hh|ss)/i.test(f) || /^(d{1,2}[\/.-]m{1,2}[\/.-]y+|m{1,2}[\/.-]d{1,2}[\/.-]y+)$/i.test(f);
+}
+
+/** Format a serial with an Excel-style date pattern. */
+export function formatDate(serial, fmt = 'yyyy-mm-dd') {
+  const dt = serialToDate(serial);
+  if (Number.isNaN(dt.getTime())) return '#NUM!';
+  const p2 = n => String(n).padStart(2, '0');
+  const h24 = dt.getUTCHours();
+  const ampm = /am\/pm/i.test(fmt);
+  // In Excel's grammar `m` is minutes when it follows an hour or precedes seconds.
+  const tokens = fmt.match(DATE_TOKEN_RE) ?? [];
+  let out = '';
+  let last = 0;
+  let prevWasHour = false;
+  const re = new RegExp(DATE_TOKEN_RE.source, 'g');
+  let m;
+  while ((m = re.exec(fmt))) {
+    out += fmt.slice(last, m.index);
+    const tok = m[0];
+    const after = fmt.slice(m.index + tok.length);
+    const nextIsSeconds = /^\s*:?\s*ss?\b/.test(after);
+    switch (tok) {
+      case 'yyyy': out += dt.getUTCFullYear(); break;
+      case 'yy': out += p2(dt.getUTCFullYear() % 100); break;
+      case 'mmmm': out += MONTH_NAMES[dt.getUTCMonth()]; break;
+      case 'mmm': out += MONTH_NAMES[dt.getUTCMonth()].slice(0, 3); break;
+      case 'mm': out += (prevWasHour || nextIsSeconds) ? p2(dt.getUTCMinutes()) : p2(dt.getUTCMonth() + 1); break;
+      case 'm': out += (prevWasHour || nextIsSeconds) ? dt.getUTCMinutes() : dt.getUTCMonth() + 1; break;
+      case 'dddd': out += DAY_NAMES[dt.getUTCDay()]; break;
+      case 'ddd': out += DAY_NAMES[dt.getUTCDay()].slice(0, 3); break;
+      case 'dd': out += p2(dt.getUTCDate()); break;
+      case 'd': out += dt.getUTCDate(); break;
+      case 'hh': out += p2(ampm ? ((h24 % 12) || 12) : h24); break;
+      case 'h': out += ampm ? ((h24 % 12) || 12) : h24; break;
+      case 'ss': out += p2(dt.getUTCSeconds()); break;
+      case 's': out += dt.getUTCSeconds(); break;
+      case 'am/pm': out += h24 < 12 ? 'am' : 'pm'; break;
+      case 'AM/PM': out += h24 < 12 ? 'AM' : 'PM'; break;
+    }
+    prevWasHour = tok === 'hh' || tok === 'h';
+    last = m.index + tok.length;
+  }
+  void tokens;
+  return out + fmt.slice(last);
+}
+
+function addMonthsSerial(serial, n) {
+  const dt = serialToDate(serial);
+  const y = dt.getUTCFullYear(), mo = dt.getUTCMonth() + n, d = dt.getUTCDate();
+  const first = new Date(Date.UTC(y, mo, 1));
+  const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  return dateToSerial(first.getUTCFullYear(), first.getUTCMonth() + 1, Math.min(d, lastDay)) + (serial - Math.floor(serial));
+}
+const asDate = (v) => {
+  v = scalarOf(v);
+  if (isDate(v)) return v;
+  if (typeof v === 'number') return new DateValue(v);
+  if (typeof v === 'string') { const d = parseDateText(v); if (d) return d; }
+  throw E('#VALUE!', 'not a date');
+};
+const scalarOf = v => (Array.isArray(v) ? (v[0]?.[0] ?? null) : v);
+
+// ---------------------------------------------------------------------------
 // Tokenizer
 // ---------------------------------------------------------------------------
 
@@ -86,14 +190,20 @@ export function tokenize(src) {
         push('ref', { sheet: word, a: rm[1].replace(/\$/g, ''), b: rm[2] ? rm[2].replace(/\$/g, '') : null }, from, j + rm[0].length);
         i = j + rm[0].length; continue;
       }
-      const refm = /^\$?([A-Za-z]{1,3})\$?(\d*)$/.exec(word);
+      // `D$3` — a column word followed by an absolute row.
+      let refWord = word;
+      if (/^[A-Za-z]{1,3}$/.test(word) && s[j] === '$' && /\d/.test(s[j + 1] ?? '')) {
+        const dm = /^\$\d+/.exec(s.slice(j));
+        refWord = word + dm[0]; j += dm[0].length;
+      }
+      const refm = /^\$?([A-Za-z]{1,3})\$?(\d*)$/.exec(refWord);
       if (refm) {
         let b = null;
         if (s[j] === ':') {
           const rm = /^:(\$?[A-Za-z]{1,3}\$?\d*)/.exec(s.slice(j));
           if (rm) { b = rm[1].replace(/\$/g, ''); j += rm[0].length; }
         }
-        push('ref', { sheet: null, a: word.replace(/\$/g, ''), b }, from, j);
+        push('ref', { sheet: null, a: refWord.replace(/\$/g, ''), b }, from, j);
         i = j; continue;
       }
       push('name', word.toUpperCase(), from, j); i = j; continue;
@@ -244,6 +354,7 @@ export function toNumber(v) {
   if (isError(v)) throw v;
   if (v == null) return 0;
   if (typeof v === 'number') return v;
+  if (isDate(v)) return v.serial;
   if (typeof v === 'boolean') return v ? 1 : 0;
   const t = String(v).trim();
   if (t === '') return 0;
@@ -258,6 +369,7 @@ export function toNumber(v) {
 export function toText(v) {
   if (isError(v)) throw v;
   if (v == null) return '';
+  if (isDate(v)) return v.toString();
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
   if (typeof v === 'number') return formatNumber(v);
   return String(v);
@@ -285,7 +397,9 @@ export function formatNumber(n) {
 }
 
 function _cmp(a, b) {
-  // Excel: numbers < text < booleans; text compares case-insensitively.
+  // Excel: numbers (dates included) < text < booleans; text compares case-insensitively.
+  if (isDate(a)) a = a.serial;
+  if (isDate(b)) b = b.serial;
   const rank = v => (v == null ? 0 : typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : 2);
   const ra = rank(a), rb = rank(b);
   if (ra !== rb) return ra - rb;
@@ -313,7 +427,7 @@ function nums(args) {
   const out = [];
   for (const a of args) {
     if (Array.isArray(a)) {
-      for (const row of a) for (const v of row) { if (isError(v)) throw v; if (typeof v === 'number') out.push(v); }
+      for (const row of a) for (const v of row) { if (isError(v)) throw v; if (typeof v === 'number') out.push(v); else if (isDate(v)) out.push(v.serial); }
     } else {
       if (isError(a)) throw a;
       if (a == null) continue;
@@ -355,13 +469,19 @@ function criterion(c) {
   };
 }
 const asGrid = v => Array.isArray(v) ? v : [[v]];
+/** Every non-empty value among the args is a date (MIN/MAX keep the type). */
+function allDates(args) {
+  let any = false;
+  for (const a of args) for (const v of (Array.isArray(a) ? a.flat() : [a])) { if (v == null || v === '') continue; if (!isDate(v)) return false; any = true; }
+  return any;
+}
 
 export const FUNCTIONS = {
   SUM:     (...a) => nums(a).reduce((x, y) => x + y, 0),
   AVERAGE: (...a) => { const n = nums(a); if (!n.length) throw E('#DIV/0!'); return n.reduce((x, y) => x + y, 0) / n.length; },
   AVG:     (...a) => FUNCTIONS.AVERAGE(...a),
-  MIN:     (...a) => { const n = nums(a); return n.length ? Math.min(...n) : 0; },
-  MAX:     (...a) => { const n = nums(a); return n.length ? Math.max(...n) : 0; },
+  MIN:     (...a) => { const n = nums(a); const r = n.length ? Math.min(...n) : 0; return allDates(a) ? new DateValue(r) : r; },
+  MAX:     (...a) => { const n = nums(a); const r = n.length ? Math.max(...n) : 0; return allDates(a) ? new DateValue(r) : r; },
   COUNT:   (...a) => nums(a).length,
   COUNTA:  (...a) => flat(a).filter(v => v != null && v !== '').length,
   COUNTBLANK: (...a) => flat(a).filter(v => v == null || v === '').length,
@@ -410,7 +530,35 @@ export const FUNCTIONS = {
   FIND:  (f, s, start = 1) => { const i = txt(s).indexOf(txt(f), Math.max(0, num(start) - 1)); if (i < 0) throw E('#VALUE!'); return i + 1; },
   SEARCH: (f, s, start = 1) => { const i = txt(s).toLowerCase().indexOf(txt(f).toLowerCase(), Math.max(0, num(start) - 1)); if (i < 0) throw E('#VALUE!'); return i + 1; },
   SUBSTITUTE: (s, a, b) => txt(s).split(txt(a)).join(txt(b)),
-  TEXT:  (x, fmt) => formatWith(scalar(x), txt(fmt)),
+  TEXT:  (x, fmt) => { const v = scalar(x), f = txt(fmt); return isDateFormat(f) ? formatDate(toNumber(v), f) : formatWith(isDate(v) ? v.serial : v, f); },
+  // Dates
+  TODAY: () => new DateValue(Math.floor((Date.now() - EPOCH) / DAY_MS)),
+  NOW:   () => new DateValue((Date.now() - EPOCH) / DAY_MS, true),
+  DATE:  (y, m, d) => new DateValue(dateToSerial(num(y), num(m), num(d))),
+  DATEVALUE: (t) => { const d = parseDateText(txt(t)); if (!d) throw E('#VALUE!', 'not a date'); return new DateValue(Math.floor(d.serial)); },
+  YEAR:  d => serialToDate(asDate(d).serial).getUTCFullYear(),
+  MONTH: d => serialToDate(asDate(d).serial).getUTCMonth() + 1,
+  DAY:   d => serialToDate(asDate(d).serial).getUTCDate(),
+  HOUR:  d => serialToDate(asDate(d).serial).getUTCHours(),
+  MINUTE: d => serialToDate(asDate(d).serial).getUTCMinutes(),
+  WEEKDAY: (d, type = 1) => { const w = serialToDate(asDate(d).serial).getUTCDay(); const t = num(type); return t === 2 ? ((w + 6) % 7) + 1 : t === 3 ? (w + 6) % 7 : w + 1; },
+  DAYS:  (end, start) => Math.floor(asDate(end).serial) - Math.floor(asDate(start).serial),
+  EDATE: (d, n) => new DateValue(addMonthsSerial(asDate(d).serial, Math.trunc(num(n)))),
+  EOMONTH: (d, n) => { const s = addMonthsSerial(asDate(d).serial, Math.trunc(num(n)) + 1); const dt = serialToDate(s); return new DateValue(dateToSerial(dt.getUTCFullYear(), dt.getUTCMonth() + 1, 1) - 1); },
+  DATEDIF: (a, b, unit) => {
+    const s = serialToDate(asDate(a).serial), e = serialToDate(asDate(b).serial);
+    if (e < s) throw E('#NUM!');
+    const months = (e.getUTCFullYear() - s.getUTCFullYear()) * 12 + (e.getUTCMonth() - s.getUTCMonth()) - (e.getUTCDate() < s.getUTCDate() ? 1 : 0);
+    switch (txt(unit).toUpperCase()) {
+      case 'D': return Math.floor(asDate(b).serial) - Math.floor(asDate(a).serial);
+      case 'M': return months;
+      case 'Y': return Math.floor(months / 12);
+      case 'YM': return months % 12;
+      case 'MD': { let d = e.getUTCDate() - s.getUTCDate(); if (d < 0) d += new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), 0)).getUTCDate(); return d; }
+      case 'YD': { const sameYear = new Date(Date.UTC(e.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate())); return Math.floor((e - (sameYear > e ? new Date(Date.UTC(e.getUTCFullYear() - 1, s.getUTCMonth(), s.getUTCDate())) : sameYear)) / DAY_MS); }
+    }
+    throw E('#NUM!', 'unit');
+  },
   SUMIF:   (range, crit, sumRange) => {
     const g = asGrid(range), s = sumRange === undefined ? g : asGrid(sumRange), ok = criterion(crit);
     let t = 0;
@@ -507,6 +655,7 @@ export const FUNCTION_NAMES = Object.keys(FUNCTIONS).filter(n => n !== 'TRUE' &&
  */
 export function formatWith(v, fmt) {
   if (v == null) return '';
+  if (isDate(v)) return isDateFormat(fmt) ? formatDate(v.serial, fmt) : v.toString();
   if (typeof v !== 'number') return toText(v);
   const m = /^([$€£¥]?)(#,##)?0(?:\.(0+))?(%?)$/.exec(String(fmt || '').trim());
   if (!m) return formatNumber(v);
@@ -551,9 +700,10 @@ export function evaluate(ast, ctx) {
       case 'pct': return num(ev(n.arg)) / 100;
       case 'bin': {
         const a = ev(n.left), b = ev(n.right);
+        const da = isDate(scalar(a)), db = isDate(scalar(b));
         switch (n.op) {
-          case '+': return num(a) + num(b);
-          case '-': return num(a) - num(b);
+          case '+': { const r = num(a) + num(b); return (da !== db) ? new DateValue(r, (da ? scalar(a) : scalar(b)).hasTime || !Number.isInteger(r)) : r; }
+          case '-': { const r = num(a) - num(b); return (da && !db) ? new DateValue(r, scalar(a).hasTime || !Number.isInteger(r)) : r; }
           case '*': return num(a) * num(b);
           case '/': { const d = num(b); if (d === 0) throw E('#DIV/0!'); return num(a) / d; }
           case '^': return Math.pow(num(a), num(b));

@@ -940,9 +940,53 @@ sparse and large): it is a per-sheet YAML front matter + one LINE PER CELL OR RA
   PDF (print window, landscape). Tests in `test/sheet.test.mjs` cover lexing, parsing, sequences,
   styles, conditions, formats, the computed view, every edit op (incl. reference shifting and the
   exact canonical serialization), rendering and the .xlsx parts.
-- **Not done / ideas**: no date arithmetic in formulas (sequences generate ISO dates as text), no data
-  bars, no multi-line cells, no drag-fill handle, no charts, no .xlsx IMPORT, no virtualisation (a
-  sheet of thousands of rows re-renders the whole table per edit).
+- **Dates (2026-10, `core/tables/formula.js`)**: a `DateValue` type (Excel serial, days since
+  1899-12-30, `hasTime`) — `literalValue` turns ISO `yyyy-mm-dd[ hh:mm]` text into one, `+`/`-` keep
+  the date when one side is a date (date − date = days), `_cmp`/`nums` see serials (SUM/MIN/MAX work;
+  MIN/MAX return a date when every input is one), `TODAY NOW DATE DATEVALUE YEAR MONTH DAY HOUR MINUTE
+  WEEKDAY DAYS EDATE EOMONTH DATEDIF`, `TEXT` + `formatValue` take date patterns (`formatDate`:
+  `yyyy yy mmmm mmm mm m dddd ddd dd d hh h ss AM/PM` — `m` is minutes after an hour or before
+  seconds). The {document} tables share this engine, so ISO dates compute there too. xlsx: a date
+  cell is a serial with a date numFmt (`yyyy-mm-dd`, or the cell's own date format).
+- **Data bars** `{bar: #hex}` (`sheet.bars`; resolver adds `style.bar = {color, from, to}` on numeric
+  cells, scaled over [min(0,…), max]; `styleToCss` draws a `linear-gradient` background-image, `bg`
+  is `background-color` so both coexist; xlsx `dataBar` rule; `addBar/removeBar`).
+- **Multi-line cells**: `\n` inside a quoted value is a line break (`lex.unquote`/`quoteIf`);
+  `normalizeInput` keeps newlines; `.is-multiline` renders `pre-wrap` (the row grows); Alt+Enter in
+  the grid's textarea (which auto-grows); xlsx sets `wrapText`.
+- **Fill handle** (`edit.js fillRange(src, dst)` + the grid's `.uf-ss-fill` square, drag kind
+  `'fill'`): per lane, 2+ numbers → the linear series, dates likewise, text ending in a number counts
+  on, formulas copy with RELATIVE refs moved (`offsetFormula`: `$` pins; bare column refs stay), else
+  the values cycle. `offsetFormula` also expands shared formulas on import.
+- **Charts** (`core/sheet/chart.js`, pure): `{chart: column|bar|line|area|pie|scatter, title, at,
+  size, series: cols|rows, legend}` on a DATA range; `chartData` (first column = categories / scatter
+  x, a header row when the first row isn't numeric or lies in the header rows, 8 series max — extras
+  fold into "Other"), `renderChartSvg` (one SVG; the dataviz house rules: fixed validated palette
+  `CHART_PALETTE`/`_DARK`, thin rounded bars with 2px gaps, 2px lines + markers, recessive grid, one
+  axis, a legend only for ≥ 2 series, pie slice labels, `<title>` hover). The grid floats charts in
+  `.uf-ss-charts-layer` at their anchor cell (arithmetic offsets, so off-window too), with hover
+  edit/move/remove (move = drag → `updateChart({at})`); ⋯ / ▥ → the insert popover. Static HTML/PDF
+  draw them under the sheet (`renderChartsHtml`); the .xlsx gets REAL charts (DrawingML:
+  `drawing<n>.xml` twoCellAnchor + `charts/chart<m>.xml` with `c:strRef`/`c:numRef` into the sheet
+  and cached values).
+- **Row windowing** (`VIRTUAL_FROM` = 150 shown rows): `renderSheetHtml(…, { window: {from, to},
+  rowHeight })` renders the band + `WINDOW_BUFFER`, frozen rows always, and `tr.is-spacer` rows of
+  the summed heights outside; the grid re-renders on scroll (rAF) when the band leaves the buffer,
+  measures the default row height once (`_rowH`), and positions off-window things by arithmetic
+  (`_rowTop`, `_cellAtPoint`; `_scrollCellIntoView` scrolls, re-renders, then settles). Multi-line
+  rows make the arithmetic approximate (acceptable). Columns are not windowed.
+- **Import** (`core/sheet/xlsx-import.js` + `core/zip.js readZip` + `core/sheet/xml.js`, a tiny
+  OOXML reader so Node tests run without a DOM): `importXlsx(bytes, { inflateRaw })` — Node passes
+  `zlib.inflateRawSync`, the browser a `DecompressionStream('deflate-raw')` (`spreadsheet.js
+  inflateRawBrowser`) — reads sheets, shared/inline strings, numbers (date-styled → ISO), formulas
+  (shared formulas expanded via `offsetFormula`), merges, widths (`customWidth` only — the exporter
+  marks just the sheet's own widths), heights, hidden, frozen panes → `header`/`freeze`, autofilter,
+  cell styles coalesced into rectangles (`rectangles`), conditional formats (cellIs/containsText/…/
+  colorScale/dataBar) and comments; charts/images are dropped. `importCsv` detects `,`/`;`/tab.
+  The DSL action "Import Excel / CSV…" replaces the document through `dsl-edit` (undoable) after a
+  confirm. Round-trip of our own export is tested.
+- **Not done / ideas**: no column windowing, no date arithmetic across time zones (everything is UTC
+  serials), no chart styling beyond the house palette, no .xlsx images, no pivot tables.
 
 ## Mobile / iOS (hard-won — read before touching layout)
 
