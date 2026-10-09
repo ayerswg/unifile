@@ -1,5 +1,5 @@
 /**
- * {sheet} — the formula engine (pure, Node-tested in test/sheet.test.mjs).
+ * {document} tables — the formula engine (pure, Node-tested in test/tables.test.mjs).
  *
  * Excel's grammar, the useful subset:
  *   =B2*C2  =SUM(D2:D9)  =IF(B2>10, "big", "small")  =Budget!B3  ='Q1 Sales'!A1

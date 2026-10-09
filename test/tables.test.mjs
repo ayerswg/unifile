@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import {
   parseWorkbook, parseRowCells, splitRow, parseSeparator, colLetter, colIndex, cellAddress, parseAddress,
   literalValue, alignTables, blankTable, tsvToTable, cellAtOffset,
-} from '../src/core/sheet/grid.js';
+} from '../src/core/tables/grid.js';
 import {
   tokenize, parseFormula, evaluate, evaluateWorkbook, formatNumber, formatWith, formulaForExcel, isError, FUNCTIONS,
-} from '../src/core/sheet/formula.js';
+} from '../src/core/tables/formula.js';
 import {
   renderSheetHtml, renderWorkbookHtml, displayValue, sheetToCsv, workbookToXlsx, sheetDocument, printDocument,
-} from '../src/core/sheet/render.js';
+} from '../src/core/tables/render.js';
 
 const BUDGET = `---
 title: Budget

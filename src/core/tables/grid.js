@@ -1,5 +1,5 @@
 /**
- * {sheet} — the workbook parser (pure, Node-tested in test/sheet.test.mjs).
+ * {document} tables — the workbook parser (pure, Node-tested in test/tables.test.mjs).
  *
  * A spreadsheet is a Markdown document.  Every GFM pipe table is a SHEET; the
  * nearest heading above it (since the previous table) is the sheet's name, the

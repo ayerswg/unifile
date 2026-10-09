@@ -15,7 +15,7 @@ spellings, both from the single source `src/core/brand.js` (`APPS`, `appName()`,
 braces (`{¶}`, `{◇}`, `{♪}`, `{✎}`, `{⌂}`, `{▭}`). The mark IS the app icon
 (`build/icons.mjs` renders it as SVG text; `gen-icons.mjs` rasterizes the PNGs),
 heads the phone title bar, and sits beside the name on the site. Build ids stay
-`markdown` / `mermaid` / `abcjs` / `upub` / `udraft` / `slides` / `sheet`; "uPub"/"uDraft"/"uDoc"/
+`markdown` / `mermaid` / `abcjs` / `upub` / `udraft` / `slides`; "uPub"/"uDraft"/"uDoc"/
 "uDraw"/"uNote" in older comments and plans are the retired u-codenames of the
 same apps. Glyphs were picked for having no emoji presentation; action glyphs
 that do (▶ ⏸ ⚙) get U+FE0E appended (`actions.js`).
@@ -69,9 +69,9 @@ src/
                      resolution, save-time pruning — Marpit-free so app.js can import it in every build
     slides/          The {slides} deck engine (pure, Node-tested): deck.js (Marpit render, `---`/`===` split, exports'
                      standalone documents), themes.js (GENERATED — the three Marp themes as offline CSS)
-    sheet/           The {sheet} engine (pure, Node-tested `test/sheet.test.mjs`): grid.js (Markdown tables → sheets,
-                     `||`/`^^` merges, A1 addresses, `alignTables`), formula.js (Excel grammar + ~70 functions,
-                     `evaluateWorkbook`), render.js (the grid HTML, CSV, a real .xlsx, HTML/print documents)
+    tables/          {document} TABLE FORMULAS engine (pure, Node-tested `test/tables.test.mjs`): grid.js (Markdown
+                     tables → sheets, `||`/`^^` merges, A1 addresses, `alignTables`), formula.js (Excel grammar +
+                     ~70 functions, `evaluateWorkbook`), render.js (the grid HTML, CSV, a real .xlsx, HTML/print)
     zip.js           Stored-only ZIP writer (EPUB, the .xlsx, the multi-sheet CSV export)
     hash.js, crypto.js
     brand.js         `{name}` / `{glyph}` per app — THE naming source (site, manifests, icons, title bar)
@@ -79,7 +79,8 @@ src/
                      "is that build newer?" rule shared by every shell's update check (Node-tested)
     (assets/piano-soundfont.js — committed FluidR3 acoustic grand, ~2.5MB, note→dataURI)
   dsl/               One module per format; self-registers via registry.js
-    markdown.js, abcjs.js, mermaid.js, slides.js, sheet.js, fountain.js
+    markdown.js, abcjs.js, mermaid.js, slides.js, fountain.js
+    markdown-tables.js  Tables with formulas inside {document}: the marked block extension, DOCX/XLSX, editor pieces
     registry.js      registerDSL / getDSL / listDSLs
     abcjs-piano-loader.js  CommonJS drop-in for abcjs's ./load-note (offline soundfont)
   upub/              The uPub variant's own shell (no CodeMirror — see "uPub")
@@ -142,12 +143,12 @@ dist/                Build output (gitignored)
 esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 - **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
-- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft), `slides`(sld), `sheet`(sht). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft), `slides`(sld). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
 - A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `upub` and `udraft` variants use this (see below) — no CodeMirror, no DSL registry, their own CSS.
 - `npm test` → `node --test test/**` — pure Node, no browser: the uDraft core, the library (`test/library.test.mjs`), page config, emoji, etc.
 - `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
-- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model. The exceptions are `slides`, whose deck IS Markdown (Marpit) — it bundles only `slides.js` (no marked/docx) — and `sheet`, which brings its own `marked` for the notes between tables.
+- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model. The exception is `slides`, whose deck IS Markdown (Marpit) — it bundles only `slides.js` (no marked/docx).
 
 **Compile-time defines** (esbuild `define`, referenced as globals; guard with `typeof … !== 'undefined'`):
 - `UNIFILE_MODE` = `"quine"` | `"pwa"` → `IS_QUINE` in storage.js.
@@ -761,63 +762,75 @@ slides layout) is untouched and unrelated.
   shared `fm-schema.js` autocomplete/lint (theme enum = the vendored theme names).
   `marp: true` is accepted and ignored (pasted Marp decks).
 
-## {sheet} (`src/dsl/sheet.js` + `src/core/sheet/`, 2026-10)
+## {document} tables with formulas (`src/dsl/markdown-tables.js` + `src/core/tables/`, 2026-10)
 
-A dedicated **spreadsheet** variant (abbrev `sht`, dslType `sheet`) on the STANDARD shell,
-`wholeDocument: true` like {slides}. **The workbook is a Markdown document**: every GFM pipe
-table is a SHEET, the heading right above it is the sheet's name (no heading → `Sheet1`,
-`Sheet2`…; a heading with no table before the next heading is ordinary prose), the prose
-between tables is notes. The syntax was chosen so a GitHub table pastes in unchanged and
-every extension is an existing Markdown convention:
+**Every `| … |` table in a {document} is a small spreadsheet** — it started as a separate
+{sheet} app and was folded into {document} the same day (the user's call: it is a table syntax,
+not an app). Every extension is an existing Markdown convention, so a GitHub table pastes in
+unchanged:
 
 - **Formulas**: a cell starting with `=` (Excel grammar: `=B2*C2`, `=SUM(D2:D9)`,
-  `=IF(B2>10,"big","small")`, `=Budget!D4`, `='Q1 Sales'!A1`, `=SUM(B:B)`; `+ - * / ^ &`,
-  comparisons, `%`). **A bare column letter is the cell in THIS row** (`=B*C`) — the one
-  non-Excel addition, so a column formula is written once per row with no renumbering;
-  `formulaForExcel` expands it (`B5*C5`) for the .xlsx. `'=…` (apostrophe) forces text.
+  `=IF(B2>10,"big","small")`, `=SUM(B:B)`; `+ - * / ^ &`, comparisons, `%`). **A bare column
+  letter is the cell in THIS row** (`=B*C`) — the one non-Excel addition, so a column formula
+  is written once per row with no renumbering; `formulaForExcel` expands it (`B5*C5`) for the
+  .xlsx. `'=…` (apostrophe) forces text. **Across tables**: the heading right above a table
+  names it (`=Budget!D4`, `='Q1 Sales'!A1`; no heading → `Sheet1`, `Sheet2`…).
 - **Merges = the MultiMarkdown conventions**: `||` with NOTHING between the pipes extends the
   previous cell across one more column (`| |` with a space is an empty cell); `^^` as a cell's
-  whole content merges it into the cell above. Both survive into the .xlsx as real merges.
+  whole content merges it into the cell above. Both survive into the .docx and .xlsx exports.
 - **Addresses are Excel's**: columns A…Z, AA…; rows count pipe rows from 1 — the `|---|`
   separator is NOT a row, so the header row is row 1 (as in Excel). Rows above the separator
-  are header rows (bold); no separator → no header. `:--`/`--:`/`:-:` align; default numbers
-  right, text left. Literal cells show what was typed; their VALUE is what they read as
-  (`1,200`, `$3.50`, `12%` → 0.12, `(5)` → −5, `TRUE`). Formula results show General (10
-  significant digits, `formatNumber`) or `decimals: N` from the front matter; `TEXT(x, fmt)`
-  covers `0.00` / `#,##0` / `0%` / `$#,##0.00`.
-- **The text is the source of truth** — results are never written back, so diffs are what
-  you typed. `evaluateWorkbook` is memoised per cell, dependency-driven, cycle-safe (`#CIRC!`);
+  are header rows; no separator → no header. `:--`/`--:`/`:-:` align; default numbers right,
+  text left. Literal cells show what was typed; their VALUE is what they read as (`1,200`,
+  `$3.50`, `12%` → 0.12, `(5)` → −5, `TRUE`). Formula results show General (10 significant
+  digits, `formatNumber`) or `decimals: N` from the front matter; `TEXT(x, fmt)` covers
+  `0.00` / `#,##0` / `0%` / `$#,##0.00`.
+- **The text is the source of truth** — results are never written back, so diffs are what you
+  typed. `evaluateWorkbook` is memoised per cell, dependency-driven, cycle-safe (`#CIRC!`);
   errors are Excel's (`#DIV/0! #NAME? #VALUE! #REF! #N/A #NUM!`) and propagate through ranges.
   Coercion follows Excel: empty = 0 / "", numeric text counts in arithmetic but SUM/AVERAGE/
   COUNT over a RANGE skip text and booleans, `IF`/`IFERROR` branches are lazy.
-- **Engine (`core/sheet/`, pure, `test/sheet.test.mjs`)**: `grid.js` (`parseWorkbook` → sheets
+- **Engine (`core/tables/`, pure, `test/tables.test.mjs`)**: `grid.js` (`parseWorkbook` → sheets
   with `grid[r][c]` → the anchor cell, `cells[]` with `from/to` = the trimmed content and
   `rawFrom/rawTo` = pipe to pipe, `blocks[]` in document order — `prose` / `name` / `sheet`;
-  `alignTables` pads every column, idempotent, Alt-Shift-F / the bubble's "Align columns";
-  `tsvToTable` for a pasted spreadsheet block), `formula.js` (tokenizer → Pratt parser → AST →
-  `evaluate`; `FUNCTIONS` ~70 Excel names, `FUNCTION_NAMES` feeds the completion), `render.js`
-  (`renderSheetHtml` = the Excel-style grid with a corner, column letters, row numbers,
+  `alignTables` pads every column, idempotent; `tsvToTable` for a pasted spreadsheet block),
+  `formula.js` (tokenizer → Pratt parser → AST → `evaluate`; `FUNCTIONS` ~70 Excel names,
+  `FUNCTION_NAMES` feeds the completion), `render.js` (`renderSheetHtml` = the grid, with the
+  Excel-style rulers — corner, column letters, row numbers — only when `headings` is asked,
   colspan/rowspan, `data-addr`, `data-doc-from/to` on every cell for click-back; CSV; the
-  **.xlsx writer** — inline strings, `<f>` + cached `<v>` so Excel/Numbers/Sheets show values
-  at once and recalc on edit, `<mergeCells>`, bold header style, sheet names clipped to
-  Excel's 31 chars; `sheetDocument`/`printDocument`). `src/core/zip.js` (moved from `upub/`) is
-  the stored-only ZIP both EPUB and XLSX use.
-- **DSL module**: `workbookFor(text)` caches parse+eval per document text (render, lint, hover,
-  exports all share it). The preview highlights the cell under the caret and a sticky status
-  strip shows `Sheet!D2 =B*C 3.60` — updated on `'editor-select'` WITHOUT a re-render. Editor:
-  GFM Markdown language + a ViewPlugin tinting `=`/refs/functions/strings and the `||`/`^^`
-  spans (pipes recede like Markdown marks), formula errors as lint on the cell, hover = the
-  computed value, function completion after `=`, **Tab / Shift-Tab = next / previous cell**
-  (selects the cell's content; Tab past the last cell of the last row inserts a new row of the
-  same width; the separator row is skipped), a `paste` handler turning TSV into a table.
-  Exports: `xlsx` (binary), `csv` (ONE sheet → `.csv`; several → a `.zip` of CSVs — the
-  exporter's `ext`/`mime`/`binary` are GETTERS over the current text, which the export dialog
-  reads at click time), `html`, `pdf` (print window, landscape). Actions (⋯ menu + phone
-  bubble): Align columns, Insert table (`'editor-insert-block'`). CSS: `.uf-sheet-book` breaks
-  out of the prose column like the deck; the grid scrolls inside `.uf-sheet-scroll` with
-  sticky rulers. Help: `DSL_HELP.sheet` in topbar.js.
+  **.xlsx writer** — inline strings, `<f>` + cached `<v>` so Excel/Numbers/Sheets show values at
+  once and recalc on edit, `<mergeCells>`, bold header style, sheet names clipped to Excel's 31
+  chars). `src/core/zip.js` (moved from `upub/`) is the stored-only ZIP both EPUB and XLSX use.
+- **The glue (`dsl/markdown-tables.js`)**: `workbookFor(text)` caches parse+eval per document
+  text. **marked**: `markedTablesExtension` is a BLOCK extension that claims every table whose
+  rows all have leading + trailing pipes (anything else falls through to marked's own GFM
+  table) and renders it via `renderSheetHtml` — rulers only on a table that holds a formula
+  (`hasFormula`), so a plain table keeps the document look. **Values come from the WHOLE
+  document**: markdown.js calls `setTableContext(fullText)` before every parse
+  (`state.currentContent` in `render()` — layouts parse the document in SLICES and a slice
+  cannot compute `=Budget!D4` — the export's content in `renderToString`/`exportDocx`), and the
+  renderer matches a token to its sheet by raw text, identical tables in document order; an
+  unmatched table is computed on its own. `_annotateClickback` still sees one block element
+  per token (the `.uf-sheet-block` wrapper); the cells inside carry ABSOLUTE offsets (DOMPurify
+  keeps `data-*`). The caret's cell is outlined live (`_markActiveCell` on `'editor-select'`,
+  and after a content change on a short delay — no re-render). **DOCX**: `case 'ufTable'` →
+  `tableTokenToDocx` (docx `columnSpan` / `verticalMerge` restart+continue, computed values,
+  bold header). **Exporters**: `xlsx` ("Tables as Excel") added to {document}'s list.
+  **Editor** (spread into `getEditorExtensions`): `Prec.high` Tab / Shift-Tab = next /
+  previous CELL (selects the content; returns false outside a table row so Tab still
+  indents; past the last cell inserts a new row of the same width; the separator row is
+  skipped), a ViewPlugin tinting `=`/refs/functions/strings and the `||`/`^^` spans
+  (`cm-sheet-*` classes), hover = the computed value, formula errors merged into
+  `markdownLint`, `tableComplete` (function names with one-line details, after `=`, or
+  Ctrl-Space right after `=`) ahead of the emoji completion in `markdownComplete`, a `paste`
+  handler turning TSV into a table. `alignSource: alignTables` (Alt-Shift-F) and
+  `actions` = Insert table · Align table columns (⋯ menu + phone bubble). `decimals` lives in
+  `markdownFrontMatterSchema` via `tablesFrontMatterSchema`. Help: the "Tables" section +
+  the "Table formulas" group in `DSL_HELP.markdown`. CSS: `.uf-sheet*` in app.css (the
+  rulers' look is gated on `.has-rulers`), `TABLE_EXPORT_CSS` appended to markdown's
+  `EXPORT_CSS` for HTML/PDF.
 - **Not done / ideas**: no date functions, no number-format row (use `TEXT()` or `decimals:`),
-  no CSV *import* from the device picker (paste TSV instead), no charts.
+  no CSV import, no charts.
 
 ## Mobile / iOS (hard-won — read before touching layout)
 
@@ -887,7 +900,7 @@ Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`
 
 ## Conventions & workflows
 
-- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site; add the app to `src/core/brand.js` + `npm run gen:icons` (commit only the new `templates/icons/<abbrev>/` — the run regenerates every app's PNGs byte-differently, `git checkout` the others); list the new `pwa-<abbrev>` in `sync-site.mjs` and `render-site.mjs` (`TYPE_TO_ICON` + the copy list); a help entry in `topbar.js DSL_HELP`. ({sheet}, 2026-10, is the latest worked example.) A DSL that owns the whole document sets `wholeDocument: true` (see {slides}); `actions: [{id,label,glyph,run}]` puts verbs on the ⋯ menu and the phone bubble.
+- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site; add the app to `src/core/brand.js` + `npm run gen:icons` (commit only the new `templates/icons/<abbrev>/` — the run regenerates every app's PNGs byte-differently, `git checkout` the others); list the new `pwa-<abbrev>` in `sync-site.mjs` and `render-site.mjs` (`TYPE_TO_ICON` + the copy list); a help entry in `topbar.js DSL_HELP`. Before adding an app, ask whether it is really a FEATURE of an existing one — the table formulas (2026-10) were built as a {sheet} app first and folded into {document}. A DSL that owns the whole document sets `wholeDocument: true` (see {slides}); `actions: [{id,label,glyph,run}]` puts verbs on the ⋯ menu and the phone bubble.
 - **Verifying UI changes:** use the preview tools against a build (`node build/build.mjs --dsl=abcjs --no-pwa`, serve `dist/` — see `.claude/launch.json`, port 8765). Resize to 375px for mobile. **Always build the variant you're testing.** In the PWA build the app object is NOT on `window.__unifile` (quines only); drive it through `globalThis.__uf.state` (`state.emit('checkout', {content})` sets the editor text). Playwright lives in `/opt/node-tools/node_modules/playwright` (not a project dependency); the pre-install banner (`#uf-install-banner`) covers the phone title bar in a browser tab — remove it before tapping.
 - **Deploying is automatic on push:** Cloudflare Pages rebuilds from source (`build:site && site:preview`) on every push to `main`, so a source-only commit deploys correctly — no need to pre-run `build:site` for the deployed site to be current (that old footgun is gone). You still build the specific variant locally to *test* UI changes in the preview.
 - **Branches — `dev` is the working branch; `main` only ever receives `dev`.** Every change is

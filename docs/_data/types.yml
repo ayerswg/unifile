@@ -89,19 +89,3 @@
     - PDF and single-file HTML export (click to present)
   pwa: /pwa-sld/
   download: /dl/unifile.sld.html
-
-- id: sheet
-  title: "{sheet}"
-  tagline: A spreadsheet written as Markdown tables — formulas, merged cells, offline.
-  overview: >
-    A spreadsheet you write as text. Every Markdown table is a sheet, a cell
-    that starts with `=` is an Excel-style formula (`=SUM(B2:B9)`, `=B*C`,
-    `=Budget!D4`), `||` merges a cell across columns and `^^` merges it with
-    the cell above — with git-style version history inside the document and
-    export to a real .xlsx workbook, CSV, HTML or PDF.
-  features:
-    - Works 100% offline — no server, no account, no sync
-    - Excel formulas with A1 references, 70+ functions, cross-sheet refs
-    - Merged cells; exports to .xlsx (formulas kept), CSV, HTML, PDF
-  pwa: /pwa-sht/
-  download: /dl/unifile.sht.html

@@ -9,7 +9,6 @@
     "build:abcjs": "node build/build.mjs --dsl=abcjs",
     "build:upub": "node build/build.mjs --dsl=upub",
     "build:slides": "node build/build.mjs --dsl=slides",
-    "build:sheet": "node build/build.mjs --dsl=sheet",
     "gen:slides-themes": "node build/gen-slides-themes.mjs",
     "build:plugins": "node build/build.mjs --plugins",
     "build:site": "node build/sync-site.mjs",

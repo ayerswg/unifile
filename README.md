@@ -6,10 +6,9 @@ lines. unifile ships as a **dedicated app per content type**, each named in
 the `{…}` signature (curly braces, monospaced): **`{document}`** `{¶}` Markdown,
 **`{diagram}`** `{◇}` Mermaid, **`{compose}`** `{♪}` ABC music notation,
 **`{write}`** `{✎}` the Markdown book-writing app, **`{draft}`** `{⌂}` the
-blueprint drafting app, **`{slides}`** `{▭}` Marp-style slide decks, and **`{sheet}`** `{▦}`
-spreadsheets written as Markdown tables — each
+blueprint drafting app, and **`{slides}`** `{▭}` Marp-style slide decks — each
 bundling just what it needs. (Their build ids —
-`markdown`, `mermaid`, `abcjs`, `upub`, `udraft`, `slides`, `sheet` — and the older codenames uPub /
+`markdown`, `mermaid`, `abcjs`, `upub`, `udraft`, `slides` — and the older codenames uPub /
 uDraft you may still meet in source comments are the same apps.) There is no universal multi-format build and no runtime plugins. Everything runs in the browser — **no server, no account, no
 network**. Your data never leaves the device.
 
@@ -51,9 +50,9 @@ Requires Node. Install deps once: `npm install`.
 
 | Command | Output |
 |---|---|
-| `npm run build` | Every dedicated variant (markdown, mermaid, abcjs, upub, udraft, slides, sheet): quine + PWA each |
+| `npm run build` | Every dedicated variant (markdown, mermaid, abcjs, upub, udraft, slides): quine + PWA each |
 | `npm run build:abcjs` | Just the ABC build `dist/unifile.abc.html` + PWA (offline piano) |
-| `node build/build.mjs --dsl=<id>` | Just one `DSL_META` variant (markdown, mermaid, abcjs, upub, udraft, slides, sheet) |
+| `node build/build.mjs --dsl=<id>` | Just one `DSL_META` variant (markdown, mermaid, abcjs, upub, udraft, slides) |
 | `npm test` | Node unit tests (the {draft} core, the {slides} deck engine, build identity, ABC formatter) |
 | `npm run build:dev` | Unminified + inline source maps |
 | `npm run build:site` | Build all apps + copy into `docs/` + write `docs/version.json` (release step) |

@@ -1,5 +1,5 @@
 /**
- * {sheet} — rendering + exports (pure, Node-tested in test/sheet.test.mjs).
+ * {document} tables — rendering + exports (pure, Node-tested in test/tables.test.mjs).
  *
  *   renderSheetHtml(sheet, values, opts)  the Excel-style grid: a corner, column
  *                                         letters, row numbers, merged cells as
@@ -10,7 +10,7 @@
  *                                         with cached values, merges, header bold
  *   sheetDocument(...) / printDocument()  the self-contained HTML / print page
  *
- * Nothing here touches the DOM; the DSL module (src/dsl/sheet.js) mounts the
+ * Nothing here touches the DOM; the DSL module (src/dsl/markdown-tables.js) mounts the
  * strings and supplies the Markdown inline renderer for cell text.
  */
 
@@ -73,7 +73,7 @@ export function renderSheetHtml(sheet, values, opts = {}) {
   const headings = opts.headings !== false;
   const docOffsets = opts.docOffsets !== false;
   const out = [];
-  out.push(`<table class="uf-sheet" data-sheet="${escHtml(sheet.name)}">`);
+  out.push(`<table class="uf-sheet${headings ? ' has-rulers' : ''}" data-sheet="${escHtml(sheet.name)}">`);
   if (headings) {
     out.push('<thead><tr class="uf-sheet-cols"><th class="uf-sheet-corner"></th>');
     for (let c = 0; c < sheet.cols; c++) out.push(`<th class="uf-sheet-col" data-col="${c}">${colLetter(c)}</th>`);
@@ -248,19 +248,28 @@ ${names.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openx
 // Standalone HTML / print
 // ---------------------------------------------------------------------------
 
-/** The CSS the exports and the print page share (the app's own is in app.css). */
+/** The table rules alone — the {document} HTML/PDF exports append these to their own CSS. */
+export const TABLE_EXPORT_CSS = `
+.uf-sheet-block { margin: 1em 0; overflow-x: auto; }
+.uf-sheet { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.uf-sheet th, .uf-sheet td { border: 1px solid #ddd; padding: .4em .8em; vertical-align: top; }
+.uf-sheet th.uf-cell { background: #f5f5f5; }
+.uf-sheet .uf-sheet-col, .uf-sheet .uf-sheet-row, .uf-sheet .uf-sheet-corner { background: #f1f1f1; color: #888; font-weight: 500; font-size: .8em; text-align: center; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.uf-sheet .uf-sheet-row { text-align: right; }
+.uf-sheet .al-right { text-align: right; } .uf-sheet .al-center { text-align: center; } .uf-sheet .al-left { text-align: left; }
+.uf-sheet .is-error { color: #b00020; }
+.uf-sheet .uf-cell p { margin: 0; }
+`;
+
+/** The CSS the standalone sheet exports / print page use. */
 export const EXPORT_CSS = `
 body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #1a1a1a; background: #fff; margin: 0; padding: 32px; }
 h1, h2 { font-weight: 600; }
 h2.uf-sheet-name { font-size: 15px; margin: 28px 0 8px; color: #555; }
-.uf-sheet { border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
-.uf-sheet th, .uf-sheet td { border: 1px solid #cfcfcf; padding: 4px 8px; vertical-align: top; white-space: pre-wrap; }
-.uf-sheet .uf-sheet-col, .uf-sheet .uf-sheet-row, .uf-sheet .uf-sheet-corner { background: #f1f1f1; color: #777; font-weight: 500; font-size: 11px; text-align: center; }
-.uf-sheet .uf-sheet-row { text-align: right; }
-.uf-sheet tr.uf-sheet-header th.uf-cell { background: #f7f7f7; font-weight: 600; }
-.uf-sheet .al-right { text-align: right; } .uf-sheet .al-center { text-align: center; } .uf-sheet .al-left { text-align: left; }
-.uf-sheet .is-error { color: #b00020; }
 .uf-sheet-notes { max-width: 70ch; color: #333; }
+${TABLE_EXPORT_CSS}
+.uf-sheet { width: auto; font-size: 13px; }
+.uf-sheet th, .uf-sheet td { padding: 4px 8px; white-space: pre-wrap; }
 @media print { body { padding: 0; } h2.uf-sheet-name { page-break-after: avoid; } .uf-sheet { page-break-inside: auto; } .uf-sheet tr { page-break-inside: avoid; } .uf-sheet-block { page-break-after: always; } .uf-sheet-block:last-child { page-break-after: auto; } }
 `;
 

@@ -42,6 +42,12 @@ import { splitAlignMarker, alignClass, ALIGN_MARKER_RE } from '../core/md-align.
 import { parsePageConfig, resolveDate, PAGE_NUMBER_POSITIONS } from '../core/page-config.js';
 import { searchEmoji, emojiForShortcode } from '../core/emoji.js';
 import { openPrintDocument } from './markdown-print.js';
+import { state } from '../ui/state.js';
+import {
+  markedTablesExtension, setTableContext, tableTokenToDocx, exportTablesXlsx,
+  tableEditorExtensions, tableLint, tableComplete, tableActions, tablesFrontMatterSchema, alignTables,
+} from './markdown-tables.js';
+import { TABLE_EXPORT_CSS } from '../core/tables/render.js';
 
 // GFM-only editor language: CommonMark + GFM extensions (tables, strikethrough,
 // task lists, autolinks) — exactly what `marked` renders with `gfm: true`.
@@ -87,6 +93,12 @@ marked.use({
     }
   }]
 });
+
+// Tables with formulas and merged cells (markdown-tables.js): claims every
+// `| … |` table ahead of marked's own GFM table tokenizer.  Needs
+// setTableContext(fullText) before a parse so `=Other!B2` can see the whole
+// document (layouts parse it in slices).
+marked.use({ extensions: [markedTablesExtension] });
 
 // Block alignment — `# Heading {.center}` / `Paragraph text {.right}`.
 // marked 11 renderers receive the already-inlined text; the marker survives
@@ -282,6 +294,8 @@ function safeHtml(raw) {
 async function render(content, el) {
   const sectionBase = parseInt(el.dataset.docFrom ?? '0', 10);
   const { meta, body } = parseFrontMatter(content || '');
+  // Table formulas are computed over the whole document, not this slice.
+  setTableContext(state.currentContent ?? content ?? '');
   // bodyOffset: how many chars of `content` are front matter (before `body` starts)
   const bodyOffset = (content || '').length - body.length;
 
@@ -312,6 +326,7 @@ async function render(content, el) {
 
 export async function renderToString(content) {
   const { meta, body } = parseFrontMatter(content || '');
+  setTableContext(content || '');
   return renderFrontMatterBlock(meta) + safeHtml(marked.parse(body));
 }
 
@@ -347,6 +362,7 @@ const EXPORT_CSS = `
   table { border-collapse: collapse; width: 100%; }
   th, td { border: 1px solid #ddd; padding: .4em .8em; }
   th { background: #f5f5f5; }
+  ${TABLE_EXPORT_CSS}
 
   /* Front matter header block */
   .fm-header { text-align: center; margin: 1.5em 0 2.5em; padding-bottom: 1.5em; border-bottom: 1px solid #ddd; }
@@ -718,6 +734,10 @@ function tokenToParas(token, { indent = 0 } = {}, ctx) {
     case 'table':
       return [tableToDocx(token)];
 
+    case 'ufTable':
+      // A `| … |` table claimed by markdown-tables.js: values computed, merges kept.
+      return [tableTokenToDocx(token)];
+
     default:
       return [];
   }
@@ -725,6 +745,7 @@ function tokenToParas(token, { indent = 0 } = {}, ctx) {
 
 async function exportDocx(content) {
   const { meta, body } = parseFrontMatter(content || '');
+  setTableContext(content || '');
   const tokens = marked.lexer(body);
 
   // ctx accumulates numbering configs as lists are encountered and tracks
@@ -883,8 +904,10 @@ function getEditorExtensions() {
   return [
     // GFM-only base: strikethrough, tables, task lists — no subscript/superscript.
     md,
-    // Front-matter keys/values + the `:emoji` menu (one source, see below)
+    // Front-matter keys/values, table-formula functions, the `:emoji` menu (one source, see below)
     md.language.data.of({ autocomplete: markdownComplete }),
+    // Tables: formula tinting, hover values, Tab between cells, TSV paste
+    ...tableEditorExtensions,
     autocompletion({ addToOptions: [emojiOptionGlyph] }),
     linter(markdownLint, { delay: 500 }),
     // `:shortcode:` → emoji on the closing colon
@@ -959,16 +982,18 @@ export const markdownFrontMatterSchema = {
   'frozen-cols':  { type: 'number', doc: 'Frozen columns (grid model).' },
   start:          { type: 'string', doc: 'Timeline start (timeline model).' },
   end:            { type: 'string', doc: 'Timeline end (timeline model).' },
+  ...tablesFrontMatterSchema,
 };
 
 function markdownLint(view) {
   const doc = view.state.doc.toString();
   const region = getFrontMatterRange(doc);
-  if (!region) return [];
   const docLen = doc.length;
-  return schemaLint(markdownFrontMatterSchema, region)
+  const fm = region ? schemaLint(markdownFrontMatterSchema, region)
     .map(d => ({ ...d, from: Math.max(0, Math.min(d.from, docLen)), to: Math.max(0, Math.min(d.to, docLen)) }))
-    .filter(d => d.from <= d.to);
+    .filter(d => d.from <= d.to) : [];
+  // Table formula errors (#NAME?, #DIV/0!, …) on the cell they sit in.
+  return fm.concat(tableLint(view));
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,7 +1048,7 @@ const emojiOptionGlyph = {
   },
 };
 
-/** Unified completion source: front-matter schema inside the block, emoji elsewhere. */
+/** Unified completion source: front-matter schema inside the block, table functions in a formula cell, emoji elsewhere. */
 function markdownComplete(context) {
   try {
     const doc = context.state.doc.toString();
@@ -1031,7 +1056,7 @@ function markdownComplete(context) {
     if (region && context.pos <= region.bodyFrom) {
       return schemaCompletions(markdownFrontMatterSchema, region, context.pos, context.explicit);
     }
-    return emojiComplete(context);
+    return tableComplete(context) ?? emojiComplete(context);
   } catch { return null; }
 }
 
@@ -1414,6 +1439,11 @@ const markdownDSL = {
   getEditorExtensions,
   frontMatterSchema: markdownFrontMatterSchema,
 
+  // Alt-Shift-F / "Align table columns": line the pipes of every table up.
+  alignSource: alignTables,
+  // The ⋯ menu + the phone bubble: Insert table · Align table columns.
+  actions: tableActions,
+
   exporters: {
     html: { label: 'HTML',        mime: 'text/html',        ext: '.html', export: exportHTML },
     pdf:  { label: 'PDF (print)', mime: 'application/pdf',  ext: '.pdf',  export: exportPDF  },
@@ -1424,7 +1454,14 @@ const markdownDSL = {
       binary: true,
       export: exportDocx
     },
-    text: { label: 'Plain text',  mime: 'text/plain',       ext: '.md',   export: exportText }
+    text: { label: 'Plain text',  mime: 'text/plain',       ext: '.md',   export: exportText },
+    xlsx: {
+      label: 'Tables as Excel (.xlsx)',
+      mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ext: '.xlsx',
+      binary: true,
+      export: exportTablesXlsx
+    },
   },
 
   detect(content) {
