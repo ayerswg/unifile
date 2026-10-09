@@ -23,6 +23,7 @@
  */
 
 import { parseGlobalFrontMatter } from '../front-matter.js';
+import { parseDateText } from './formula.js';
 
 // ---------------------------------------------------------------------------
 // Addresses
@@ -365,6 +366,7 @@ export function literalValue(text) {
   if (t === '') return null;
   if (t.startsWith("'")) return t.slice(1);
   if (/^(true|false)$/i.test(t)) return t.toLowerCase() === 'true';
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) { const d = parseDateText(t); if (d) return d; }
   let s = t;
   let neg = false;
   const paren = /^\((.*)\)$/.exec(s);

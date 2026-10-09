@@ -16,7 +16,7 @@
  *   dist/unifile.<abbrev>.html   standalone quine for each DSL
  *   dist/pwa-<abbrev>/            installable PWA for each DSL
  *
- *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | upub | udraft | slides)
+ *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | upub | udraft | slides | spreadsheet)
  *     e.g. `node build/build.mjs --dsl=abcjs` → dist/unifile.abc.html (offline piano)
  *
  * npm scripts
@@ -174,6 +174,9 @@ const DSL_META = {
   // {slides}: the standard shell with ONLY the slides DSL (no markdown base —
   // the deck is Markdown already, and marked/docx would be dead weight).
   slides:    { abbrev: 'sld',  plugins: ['slides'],              defaultDslType: 'slides',   label: appName('slides')   },
+  // {spreadsheet}: the standard shell with ONLY the spreadsheet DSL — the
+  // render pane is the grid editor (src/ui/sheet-grid.js); no marked/docx.
+  spreadsheet: { abbrev: 'sht', plugins: ['spreadsheet'],        defaultDslType: 'spreadsheet', label: appName('spreadsheet') },
 };
 
 if (dslArg && !DSL_META[dslArg]) {

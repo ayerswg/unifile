@@ -44,6 +44,12 @@
   pinned: true
   excerpt: Marp-style slide decks from Markdown with PDF/HTML export — install or download.
 
+- title: "{spreadsheet}"
+  url: /spreadsheet/
+  kind: app
+  pinned: true
+  excerpt: A spreadsheet written as readable text — grid editing, formulas, formats, .xlsx export.
+
 # ── Direct links (searchable) ──
 - title: "{document} — download (.html)"
   url: /dl/unifile.md.html
@@ -104,3 +110,13 @@
   url: /pwa-sld/
   kind: pwa
   excerpt: Install {slides} as an offline presentation app.
+
+- title: "{spreadsheet} — download (.html)"
+  url: /dl/unifile.sht.html
+  kind: download
+  excerpt: Standalone single-file spreadsheet editor; save and open offline.
+
+- title: "{spreadsheet} — install (PWA)"
+  url: /pwa-sht/
+  kind: pwa
+  excerpt: Install {spreadsheet} as an offline spreadsheet app.

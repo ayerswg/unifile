@@ -647,7 +647,7 @@ export class Editor {
     // The transaction is tagged with DSL_SELECT_EVENT so the updateListener
     // can skip the 'editor-select' emission (ABC already handled its own click)
     // and avoid clearing the decoration we're about to set.
-    this._unsub.push(state.on('dsl-select', ({ from, to }) => {
+    this._unsub.push(state.on('dsl-select', ({ from, to, focus }) => {
       if (!this._view) return;
       // Clamp to document length to guard against stale positions.
       const docLen = this._view.state.doc.length;
@@ -673,8 +673,15 @@ export class Editor {
         scrollIntoView: !mobile,
         annotations: Transaction.userEvent.of(DSL_SELECT_EVENT)
       });
-      if (!mobile) this._view.focus();
+      // `focus: false` — a surface with its own keyboard handling (the
+      // spreadsheet grid) mirrors its selection here without losing focus.
+      if (!mobile && focus !== false) this._view.focus();
     }));
+
+    // Undo / redo requested by a DSL surface (the spreadsheet grid's Ctrl+Z):
+    // the editor's history is THE history, so the grid never keeps its own.
+    this._unsub.push(state.on('editor-undo', () => { this.undo(); }));
+    this._unsub.push(state.on('editor-redo', () => { this.redo(); }));
 
     // A DSL asked for a block of text (an image reference) at `at`, else at the
     // cursor, on its own line(s): a blank line is replaced in place, a line

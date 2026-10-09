@@ -89,3 +89,19 @@
     - PDF and single-file HTML export (click to present)
   pwa: /pwa-sld/
   download: /dl/unifile.sld.html
+
+- id: spreadsheet
+  title: "{spreadsheet}"
+  tagline: A spreadsheet you can read as text — formulas, formats, versioned, offline.
+  overview: >
+    A spreadsheet editor whose file is a compact, readable text document: rows
+    are pipe-delimited lines, formulas use Excel's grammar, and merges, number
+    formats, conditional formatting and cell comments are one-line rules keyed
+    by A1 ranges. Edit in the grid (sort, filter, insert rows, merge, format)
+    or in the text — both are the same document, with git-style history inside.
+  features:
+    - Works 100% offline — no server, no account, no sync
+    - A real grid: formulas, merged cells, formatting, conditional rules, comments, sort & filter
+    - Exports a real .xlsx (styles and rules included), CSV, HTML and PDF
+  pwa: /pwa-sht/
+  download: /dl/unifile.sht.html

@@ -54,6 +54,8 @@ export function defaultPrimary(dslId, view = 'editor') {
   if (dslId === 'abcjs') return 'play';
   // The diagram's render view: a tap re-fits the diagram (zoom to extents).
   if (view === 'render' && dslId === 'mermaid') return 'fit';
+  // The spreadsheet's render view is the grid: a tap undoes, like the editors.
+  if (view === 'render' && dslId === 'spreadsheet') return 'undo';
   if (view !== 'editor') return 'menu';
   // Mermaid is indentation-shaped (subgraphs, nested nodes) and a soft keyboard
   // has no Tab — so the diagram app's tap is Indent, not Undo.
@@ -89,6 +91,11 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
   };
 
   if (view === 'render') {
+    // A DSL whose render view is itself an editing surface ({spreadsheet}'s
+    // grid) supplies the bubble's verbs there: `dsl.renderActions`.
+    let renderActs = [];
+    try { renderActs = getDSL(dslId)?.renderActions ?? []; } catch { /* no DSL */ }
+    for (const a of renderActs) acts.push(mk({ id: a.id, label: a.label, glyph: a.glyph ?? '·', run: () => a.run({ editor }) }));
     if (isAbc) play();
     if (dslId === 'mermaid') {
       // The diagram's zoom stage (mermaid-zoom.js) obeys these from anywhere.
