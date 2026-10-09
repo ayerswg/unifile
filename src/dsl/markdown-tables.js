@@ -36,6 +36,7 @@ import {
   parseWorkbook, parseRowCells, isTableRow, cellAtOffset, cellAddress, alignTables, blankTable, tsvToTable,
 } from '../core/tables/grid.js';
 import { evaluateWorkbook, tokenize, FUNCTION_NAMES, isError } from '../core/tables/formula.js';
+import { FN_DETAIL } from '../core/tables/formula-help.js';
 import { renderSheetHtml, displayValue, valueKind, workbookToXlsx, escHtml } from '../core/tables/render.js';
 
 export { alignTables };
@@ -314,10 +315,6 @@ const tableHover = hoverTooltip((view, pos) => {
 // ---------------------------------------------------------------------------
 // Editor — completion: function names inside a formula cell
 // ---------------------------------------------------------------------------
-
-// Short descriptions for the completion menu.
-const FN_DETAIL_SRC = `SUM:add numbers|AVERAGE:mean|AVG:mean|MIN:smallest|MAX:largest|COUNT:count numbers|COUNTA:count non-empty|COUNTBLANK:count empty|PRODUCT:multiply|MEDIAN:middle value|STDEV:sample std dev|SUMIF:sum if criteria|COUNTIF:count if criteria|AVERAGEIF:mean if criteria|SUMPRODUCT:Σ a×b|LARGE:k-th largest|SMALL:k-th smallest|RANK:rank in list|IF:if(test, yes, no)|IFERROR:value or fallback|AND:all true|OR:any true|NOT:negate|ISBLANK:is empty?|ISNUMBER:is a number?|ISTEXT:is text?|ISERROR:is an error?|ROUND:round to decimals|ROUNDUP:round away from 0|ROUNDDOWN:round toward 0|INT:round down|TRUNC:drop decimals|CEILING:up to multiple|FLOOR:down to multiple|ABS:absolute|MOD:remainder|POWER:x^y|SQRT:square root|EXP:e^x|LN:natural log|LOG:log base b|LOG10:log base 10|PI:3.14159…|LEN:text length|UPPER:UPPER CASE|LOWER:lower case|PROPER:Title Case|TRIM:trim spaces|LEFT:first n chars|RIGHT:last n chars|MID:substring|FIND:position (case-sensitive)|SEARCH:position|SUBSTITUTE:replace text|CONCAT:join text|CONCATENATE:join text|TEXTJOIN:join with separator|REPT:repeat text|TEXT:format a number|VALUE:text → number|N:→ number|VLOOKUP:look up by first column|HLOOKUP:look up by first row|INDEX:cell of a range|MATCH:position in a range|ROW:row number|COLUMN:column number|ROWS:rows in range|COLUMNS:columns in range`;
-const FN_DETAIL = Object.fromEntries(FN_DETAIL_SRC.split('|').map(s => { const i = s.indexOf(':'); return [s.slice(0, i), s.slice(i + 1)]; }));
 
 const FN_OPTIONS = FUNCTION_NAMES.map(n => ({ label: n, type: 'function', apply: n + '(', detail: FN_DETAIL[n] ?? '', boost: n === 'SUM' ? 2 : 0 }));
 
