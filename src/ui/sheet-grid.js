@@ -30,6 +30,7 @@ import * as ops from '../core/sheet/edit.js';
 import { renderSheetHtml, colPx } from '../core/sheet/render.js';
 import { colLetter, parseRange, formatRange, rangeContains } from '../core/sheet/parse.js';
 import { FORMAT_CHOICES, parseCondition, describeCondition, formatStyleProps } from '../core/sheet/style.js';
+import { parseStep } from '../core/sheet/seq.js';
 
 const EXTRA_ROWS = 25;
 const EXTRA_COLS = 6;
@@ -479,6 +480,17 @@ export class SheetGrid {
       case 'view-sort-clear': this._apply(ops.setSortView(this.text, this.sheetIndex, [], this.book), { select: sel() }); return;
       case 'filter': this._openFilterPop(head.c, ev.target); return;
       case 'filter-clear': this._apply(ops.clearFilters(this.text, this.sheetIndex, this.book), { select: sel() }); return;
+      case 'filter-on': this._apply(ops.setFilterOn(this.text, this.sheetIndex, !this.sheet?.filterOn, this.book), { select: sel() }); return;
+      case 'sequence': {
+        const start = window.prompt('Sequence start (1, 2026-01-01, Jan, Monday, Item 1):', this._cellText(head.r, head.c) || '1');
+        if (start == null || !start.trim()) return;
+        const stepText = window.prompt('Step (1, -1, 0.5, 7, 1 week, 1 month, 1 year):', '1');
+        if (stepText == null) return;
+        const step = parseStep(stepText);
+        if (!step) { window.alert('Step: a number, or N days / weeks / months / years'); return; }
+        this._apply(ops.setSequence(this.text, this.sheetIndex, this._directiveRange(), start.trim(), step, this.book), { select: sel() });
+        return;
+      }
       case 'comment': this._openCommentPop(head.r, head.c, ev.target); return;
       case 'rules': this._openRulesPop(ev.target); return;
       case 'scale': this._openScalePop(ev.target); return;
@@ -687,6 +699,14 @@ export class SheetGrid {
       try { this.scroll.setPointerCapture(e.pointerId); } catch { /* stale id */ }
       return;
     }
+    const fbtn = target.closest('[data-filter-col]');
+    if (fbtn) {
+      e.preventDefault();
+      const c = +fbtn.dataset.filterCol;
+      this._select(0, c, { mode: 'cols' });
+      this._openMenu([['view-sort-asc', 'Sort A → Z (view)'], ['view-sort-desc', 'Sort Z → A (view)'], ['view-sort-clear', 'Clear sort', !this.sheet?.sorts.length], ['-'], ['filter', 'Filter…'], ['filter-clear', 'Clear all filters', !this.sheet?.filters.length]], fbtn);
+      return;
+    }
     const td = target.closest('td[data-r]');
     const th = target.closest('th[data-col], th[data-row], th[data-corner]');
     if (!td && !th) return;
@@ -861,7 +881,9 @@ export class SheetGrid {
       ['freeze-rows', 'Freeze rows through the selected row'], ['freeze-cols', 'Freeze columns through the selected column'], ['freeze-none', 'Unfreeze', !sh || (!sh.freeze.rows && !sh.freeze.cols)], ['-'],
       ['header-rows', sh?.headerRows ? `Header rows: ${sh.headerRows} (toggle at the selected row)` : 'Make rows through the selected row the header'], ['-'],
       ['view-sort-asc', 'View sorted by this column ↑'], ['view-sort-desc', 'View sorted by this column ↓'], ['view-sort-clear', 'Clear view sort', !sh?.sorts.length], ['filter-clear', 'Clear all filters', !sh?.filters.length], ['-'],
+      ['filter-on', sh?.filterOn ? 'Hide the header filter buttons' : 'Show filter buttons on the header'], ['-'],
       ['hide-rows', 'Hide selected rows'], ['hide-cols', 'Hide selected columns'], ['unhide-rows', 'Unhide all rows', !sh?.hidden.rows.size], ['unhide-cols', 'Unhide all columns', !sh?.hidden.cols.size], ['-'],
+      ['sequence', 'Fill with a sequence…'], ['-'],
       ['width', 'Column width…'], ['height', 'Row height…'], ['scale', 'Colour scale…'], ['-'],
       ['rename-sheet', 'Rename sheet…'], ['add-sheet', 'Add sheet…'], ['delete-sheet', 'Delete sheet'], ['-'],
       ['align-text', 'Tidy the text (align pipes)'],

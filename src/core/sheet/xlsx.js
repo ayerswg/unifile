@@ -191,7 +191,7 @@ function sheetXml(book, sheet, styles, { hasComments }) {
     if (cells.length || h || hidden) rows.push(`<row ${attrs}>${cells.join('')}</row>`);
   }
   // Column widths: the directive's characters, else from the text.
-  const widths = new Array(sheet.cols).fill(8);
+  const widths = new Array(sheet.cols).fill(sheet.defaultWidth || 8);
   for (const cell of sheet.cells) {
     if (cell.colspan !== 1 || cell.merged) continue;
     widths[cell.c] = Math.max(widths[cell.c], Math.min(60, book.display(cell).length + 2));
@@ -203,7 +203,7 @@ function sheetXml(book, sheet, styles, { hasComments }) {
   const pane = frozenRows || frozenCols
     ? `<pane${frozenCols ? ` xSplit="${frozenCols}"` : ''}${frozenRows ? ` ySplit="${frozenRows}"` : ''} topLeftCell="${cellAddress(frozenRows, frozenCols)}" activePane="bottomRight" state="frozen"/>`
     : '';
-  const autoFilter = (sheet.filters.length || sheet.sorts.length) && sheet.rows.length > 1 && sheet.cols
+  const autoFilter = (sheet.filterOn || sheet.filters.length || sheet.sorts.length) && sheet.rows.length > 1 && sheet.cols
     ? `<autoFilter ref="${cellAddress(Math.max(0, sheet.headerRows - 1), 0)}:${cellAddress(sheet.rows.length - 1, sheet.cols - 1)}"/>` : '';
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

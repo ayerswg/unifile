@@ -843,96 +843,106 @@ unchanged:
 A dedicated **spreadsheet** app (abbrev `sht`, dslType `spreadsheet`, mark `{▦}`) on the STANDARD
 shell, `wholeDocument: true` like {slides}. It is NOT the {document} table feature (`core/tables/`,
 which stays as it is — a table syntax inside prose); it REUSES that engine's formula evaluator
-(`core/tables/formula.js`: Excel grammar, ~70 functions, bare-column refs `=B*C`) and row splitting
-(`grid.js splitRow/parseSeparator/literalValue`). **The render pane is the editor**: the user mostly
-works in the grid; the text is a compact readable file that every gesture rewrites.
+(`core/tables/formula.js`: Excel grammar, ~70 functions, bare-column refs `=B*C`). **The render pane
+is the editor**: the user mostly works in the grid; the text is a compact file that every gesture
+rewrites. **The DSL is NOT pipe tables** (the first cut was; the user rejected it — a sheet can be
+sparse and large): it is a per-sheet YAML front matter + one LINE PER CELL OR RANGE.
 
-- **The DSL (`core/sheet/parse.js`).** `# Heading` starts a sheet (none → `Sheet1`; duplicate names get
-  ` 2`). Inside a sheet a line is a ROW (`| a | b |`, `\|` escapes; one optional `|---|` line = the rows
-  above are HEADER rows: bold, frozen, exempt from sort/filter; its `:--:` colons are column aligns), a
-  DIRECTIVE (`width A:B 12` · `height 3 40` · `freeze rows:1 cols:1` · `merge A5:C5` · `style <range>
-  <props>` · `if <range> <cond> then <props>` · `scale <range> <c1> <c2> [c3]` · `comment B3 "…"` ·
-  `sort B desc[, C asc]` · `filter B > 0` / `filter =D>C` · `hide C:D` / `hide 3:5`), or a NOTE (any
-  other line — free text, rendered under the sheet). Rows count pipe rows from 1 (the separator is not a
-  row); addresses are Excel's (`parseRange`: `A1`, `A1:C3`, `A`, `A:C`, `3`, `3:5` — open ends are
-  `Infinity`). The inline `||`/`^^` spans of {document} tables are parsed too (a pasted table keeps its
-  merges) but the canonical form is `merge`. Directive args are tokenised by `tokenizeArgs` (quoted
-  strings with `\"` are one token, `format:"$#,##0 kg"` included). Problems are collected, never thrown
-  (`sheet.problems` → the editor's lint).
-- **Styles (`style.js`).** Flags `bold italic underline strike wrap` (`bold:off` clears), keyed
-  `color bg size font align valign format border` (`key:none` clears; `border` alone = all sides).
-  `format` = a pattern subset (`0.00`, `#,##0`, `0%`, `$#,##0.00`, any prefix/suffix, `0.00E+00`, `@`
-  = text) or a name (`general number integer percent currency text`). Conditions: `cmp` (`> 100`,
-  the right side is ANY formula expression), `between a and b`, `contains/starts/ends "x"`, `blank`,
-  `filled`, `error`, `duplicate`, `unique`, `top n`, `bottom n`, `=formula` (evaluated per cell with the
-  row's bare-column refs — `compileCondition` builds the predicate on formula.js's `evaluate`).
-  `styleResolver` layers per cell: `style` lines in order (later wins per key) → `if` rules whose
-  condition holds → `scale` (bg); `{ conditional: false }` gives the static style alone (what the .xlsx
-  writes as cell styles — the rules go out as real conditional formats, NEVER baked in).
+- **The DSL (`core/sheet/parse.js`).** A `---` line opens a sheet; its YAML block (flat `key: value`,
+  `parseMeta`, unknown keys preserved in order) holds the SHEET-WIDE settings: `name`, `header` (rows:
+  bold, frozen, exempt from sort/filter), `freeze: rows 1, cols 1`, `width`/`height` (defaults),
+  `decimals`, `sort: D desc, A asc` (a VIEW sort), `filter: on | off | B > 0; A contains "x"` (`on` =
+  the header's ▾ buttons; criteria imply on; `;` separates them). The body is `<range> [values]
+  [{settings}]` lines: `A2:D2 Apples, 3, 1.20, =B*C` (values fill the range row-major; ONE value fills
+  every cell — `D2:D9 =B*C`, `B:B =A*2` fills the used rows below the header; quote text holding
+  commas; `splitTop` is quote/paren-aware so a formula keeps its commas; an empty item clears);
+  `{…}` = comma-separated `key: value` / flags: the style props, `merge`, `comment: "…"`, `rule: <cond>`
+  (the block's props become a conditional format), `scale: #c1 #c2`, `seq: <start>` + `step:`,
+  `width`, `height`, `hidden`. In a block a comma glued to `#`/digit is a number format's separator
+  (`format: $#,##0.00` needs no quotes — `splitTop(…, {formats:true})`). `# …` lines are REMARKS
+  (kept). Addresses are Excel's (`parseRange`: open ends are `Infinity`). A file with no `---` is one
+  sheet. Later lines win on overlap. Problems are collected, never thrown (→ the editor's lint).
+- **Sequences (`seq.js`).** `{seq: 1}`, `{seq: 100, step: -5}`, `{seq: 2026-01-31, step: 1 month}`
+  (ISO dates; day/week/month/year steps, month ends clamp), `{seq: Jan}` / `{seq: Monday}` (cycling,
+  the start's spelling kept), `{seq: Item 1}` (trailing number). Generated cells (`cell.generated`)
+  are real to formulas/exports/CSV, are never serialized one by one (the seq line is), and an
+  explicit value in the range wins. An open range (`A:A`) generates the used rows below the header.
+- **Styles (`style.js`).** Flags `bold italic underline strike wrap` (`bold: off` clears), keyed
+  `color bg size font align valign format border` (`key: none` clears). `format` = a pattern subset
+  (`0.00`, `#,##0`, `0%`, `$#,##0.00`, prefix/suffix, `0.00E+00`, `@`=text) or a name. Conditions:
+  `cmp` (`> 100`, the right side is ANY formula expression), `between a and b`, `contains/starts/ends
+  "x"`, `blank`, `filled`, `error`, `duplicate`, `unique`, `top n`, `bottom n`, `=formula` (per cell
+  with the row's bare-column refs; `compileCondition` on formula.js's `evaluate`). `styleResolver`
+  layers per cell: plain styles in order → `rule`s whose condition holds → `scale` (bg);
+  `{ conditional: false }` = the static style (what the .xlsx writes as cell styles — the rules go
+  out as real conditional formats, NEVER baked in).
 - **Computed workbook (`book.js`).** `computeWorkbook(text)` = parse + `evaluateWorkbook` + resolvers;
   `display(cell)` = the typed text (a literal with a `format` and a numeric value shows the formatted
-  number), a formula result through its format / `decimals:` / General. **`sort` and `filter` are a
-  VIEW** (`viewRows`: header rows first, body filtered, stably sorted, blanks last, hidden rows removed —
-  the text's rows never move; addresses never change — Excel's autofilter). The toolbar's A↓/Z↓ are a
-  DATA sort (`edit.js sortRows`: reorders the row lines below the header; comments, heights, hidden
-  flags and single-row styles ride along; formulas are not rewritten, same as Excel — bare-column
-  formulas survive, `=SUM(D2:D3)` can end up self-referencing, also same as Excel).
-- **Edits (`edit.js`) are text → text.** Every op: parse → `toModel(sheet)` (cell texts + directives as
-  plain data) → mutate → `serializeModel` (canonical: pipes aligned per column, numbers right-padded
-  below row 1, the separator, then directives in a FIXED order width·height·freeze·merge·style·if·scale·
-  comment·sort·filter·hide, then notes; trailing empty rows/cols trimmed) → replace exactly that sheet's
-  block. A canonical file re-serializes byte-identically (= Alt-Shift-F `alignSpreadsheet`), so one cell
-  edit is a one-row diff; a hand-written file is normalised by its first grid edit. `insertRows/Cols`,
-  `deleteRows/Cols` shift every directive range (`shiftRange`) AND every formula reference to the sheet,
-  in THIS sheet (unqualified refs) and in OTHER sheets (`Sheet!A1` refs) — `shiftFormula` rewrites via
-  the formula tokenizer; a reference entirely deleted becomes `#REF!`, a partly deleted range clips.
-  `setStyle` keeps the directive list tidy (strips the keys from lines inside the range, merges into a
-  same-range line, writes `bold:off`/`color:none` only against a wider line that still sets it).
-  `addSheet` names the unnamed first sheet; `renameSheet` rewrites the other sheets' `Name!` refs;
-  `deleteSheet` keeps ≥ 1 sheet. An empty document's first edit creates `# Sheet1`. Changes come back
-  in ORIGINAL coordinates for CM (`{ text, changes }`), dispatched through `dsl-edit` so they land in the
-  editor's undo history — **the grid has no history of its own** (`editor-undo`/`editor-redo` events).
+  number), a formula result through its format / the sheet's `decimals` / General. **`sort` and
+  `filter` are a VIEW** (`viewRows`: header rows first, body filtered, stably sorted, blanks last,
+  hidden removed — addresses never change). The toolbar's A↓/Z↓ are a DATA sort (`edit.js sortRows`:
+  reorders the rows below the header; comments, heights, hidden flags, single-row styles ride along;
+  sequences are positional and stay; formulas are not rewritten, same as Excel).
+- **Edits (`edit.js`) are text → text.** Every op: parse → `toModel(sheet)` (cell texts + settings as
+  plain data; generated cells read as '') → mutate → `serializeModel` → replace exactly that sheet's
+  block. **The canonical form**: the front matter (name · header · freeze · width · height · decimals ·
+  sort · filter, then extra keys in their order), the remarks, a blank line, VALUE LINES (per column:
+  a run of ≥ 3 identical FORMULAS becomes one fill `D2:D9 =B*C`; then per row: contiguous segments of
+  the remaining non-empty cells, inner blanks as empty items — `A4:C4 Plums, , 2.50`; sorted by
+  position), a blank line, SETTING LINES (sequences, merges, widths, heights, hidden, styles — a style
+  whose range is exactly a value line's rides on it as `{…}` — rules, scales, comments). A canonical
+  file re-serializes byte-identically (= Alt-Shift-F / "Tidy" `alignSpreadsheet`); a hand-written file
+  is normalised by its first grid edit. `insertRows/Cols`, `deleteRows/Cols` shift every setting
+  range (`shiftRange`, sequences included) AND every formula reference to the sheet — in THIS sheet
+  and in OTHER sheets (`Sheet!A1` refs; a fill's cells share ONE source span, so those replacements
+  are deduped) — via `shiftFormula`; an entirely deleted reference becomes `#REF!`. `setStyle` keeps
+  the list tidy (strips keys from inner ranges, merges into a same-range entry, writes `bold: off`
+  only against a wider entry). `renameSheet` edits the `name:` line (adds one when absent) and
+  rewrites other sheets' `Name!` refs; `deleteSheet` keeps ≥ 1; `addSheet` appends a block. An empty
+  document's first edit creates `---\nname: Sheet1\n---`. Changes come back in ORIGINAL coordinates
+  for CM, dispatched through `dsl-edit` → the editor's undo history (the grid has NO history of its
+  own: `editor-undo`/`editor-redo`).
 - **The grid (`ui/sheet-grid.js`).** ONE instance per preview host (WeakMap), `update(book)` re-renders
   the table from `render.js renderSheetHtml` (same markup as the HTML export + the quine's static
   preview, + `extraRows/extraCols` blank room to grow) and keeps only VIEW state: active sheet,
   selection (`{r1,c1,r2,c2, anchor, head, mode: cells|rows|cols|all}`), scroll, an edit in progress.
   Every op reads `state.currentContent` fresh (never a cached model — the preview's 300 ms debounce
-  would make a cached one stale between quick commits) and redraws immediately from the result; the
-  preview's own render follows and finds the same text. Gestures: type = replace, Enter/Tab move,
-  F2/dbl-click edit in place, Delete clears, Shift+arrows/click extend, Ctrl+arrows jump, letters/numbers
-  = whole col/row, corner = all, right-click / touch long-press = context menu, drag a column edge =
-  `width`, dbl-click the edge = default, copy/cut/paste = TSV of the cells' TEXT (formulas travel as
-  formulas; the `copy/cut/paste` DOM events, so no clipboard permission), Ctrl+B/I/U, Ctrl+Z/Y → the
-  editor. Popovers (`.uf-ss-pop`, one element): format list + custom, colour swatches + `<input
-  type=color>`, borders, filter form, comment, conditional-format rules (list + delete + new rule),
-  colour scale, the ⋯ menu (freeze, header rows, view sort, hide/unhide, widths/heights, sheets, tidy).
+  would make one stale between quick commits) and redraws at once from the result; the preview's own
+  render follows and finds the same text. Gestures: type = replace, Enter/Tab move, F2/dbl-click edit
+  in place, Delete clears, Shift+arrows/click extend, Ctrl+arrows jump, letters/numbers = whole
+  col/row, corner = all, right-click / touch long-press = context menu, drag a column edge = width,
+  dbl-click the edge = default, the header's ▾ (when `filter: on`) = view sort / filter menu,
+  copy/cut/paste = TSV of the cells' TEXT (formulas travel as formulas; the DOM `copy/cut/paste`
+  events, no clipboard permission), Ctrl+B/I/U, Ctrl+Z/Y → the editor. Popovers (`.uf-ss-pop`, one
+  element): format list + custom, colour swatches + `<input type=color>`, borders, filter form,
+  comment, conditional-format rules (list + delete + new), colour scale, the ⋯ menu (freeze, header
+  rows, view sort, filter buttons on/off, hide/unhide, widths/heights, a sequence fill, sheets, tidy).
   Sheet tabs: click / dbl-click rename / right-click / `+`. **Editor ↔ grid sync**: selecting a cell
-  emits `dsl-select` with `focus: false` (editor.js: the editor mirrors the selection WITHOUT taking
-  focus — the grid keeps the keyboard); the editor caret moving (`editor-select`) selects that cell in
-  the grid silently. The grid root `stopPropagation`s clicks so preview.js's generic click-back never
+  emits `dsl-select` with `focus: false` (editor.js mirrors the selection WITHOUT taking focus);
+  the editor caret moving (`editor-select`) selects that cell in the grid silently (a fill line's
+  caret → its first cell). The grid root `stopPropagation`s clicks so preview.js's click-back never
   fires. Frozen rows/cols = `position: sticky` with offsets measured after render (`_applyFrozen`;
-  header rows count as frozen). Phones: the grid fills the render pane, the bubble's render-view verbs
-  come from `dsl.renderActions` (`actions.js` hook, `sheet-grid-action` event: undo/redo/bold/insert/
-  delete/merge/comment/clear), tap = `undo` by default.
+  header rows count as frozen). Phones: the grid fills the render pane, the bubble's render-view
+  verbs come from `dsl.renderActions` (`actions.js` hook, `sheet-grid-action` event), tap = `undo`.
 - **CSS**: `.uf-ss*` in app.css; the grid breaks out of the prose column and fills the pane
-  (`100cqw`/`100cqh` + negative margins against `.preview-content`'s padding). Rules, scales and
-  `style` land as INLINE styles on the cells (user colours apply in either theme).
-- **Editor (text side)**: a `StreamLanguage` tokenizer (rows: pipes recede, formulas tinted; directives:
-  keyword / range / props / strings / colours); lint = `book.problems` + formula errors on their cells;
-  completion = function names after `=`, directive keywords at line start, props after `style`/`then`,
-  condition words after `if`/`filter`. `alignSource` = `alignSpreadsheet`.
-- **Exports**: `.xlsx` (`xlsx.js`: a `StyleTable` of fonts/fills/borders/numFmts/alignment → one xf per
-  distinct static style, `dxfs` for rules, `<conditionalFormatting>` cellIs/containsText/beginsWith/
-  endsWith/containsBlanks/top10/duplicateValues/expression/colorScale, merges, widths, heights, hidden
-  rows/cols, frozen panes, autoFilter, and cell NOTES as legacy VML `comments<n>.xml` +
-  `vmlDrawing<n>.vml` — every reader shows them), CSV (the grid's active sheet), HTML (every sheet,
-  static), PDF (print window, landscape). Tests in `test/sheet.test.mjs` cover parse, styles,
-  conditions, formats, the computed view, every edit op (incl. reference shifting), rendering and the
-  .xlsx parts.
-- **Not done / ideas**: no dates/times (no serial numbers, no DATE functions), no data bars, no
-  multi-line cells, no drag-fill handle, no column-letter-based move/reorder, no charts, no .xlsx IMPORT
-  (Open from device reads `.uni` text only), virtualisation (a sheet of thousands of rows re-renders the
-  whole table per edit).
+  (`100cqw`/`100cqh` + negative margins against `.preview-content`'s padding). Styles land as INLINE
+  styles on the cells (user colours apply in either theme).
+- **Editor (text side)**: a `StreamLanguage` tokenizer (fences + `key: value` front matter, remarks,
+  cell lines: the range as a heading, values, formulas, strings, `{…}` settings with their keys);
+  lint = `book.problems` + formula errors on their cells; completion = front matter keys at a line
+  start inside the fences, function names after `=`, setting / property names inside `{…}`.
+  `alignSource` = `alignSpreadsheet`.
+- **Exports**: `.xlsx` (`xlsx.js`: a `StyleTable` → one xf per distinct static style, `dxfs` for
+  rules, `<conditionalFormatting>` cellIs/containsText/beginsWith/endsWith/containsBlanks/top10/
+  duplicateValues/expression/colorScale, merges, widths, heights, hidden rows/cols, frozen panes, the
+  autoFilter when `filter: on`, generated cells as values, and cell comments as legacy VML
+  `comments<n>.xml` + `vmlDrawing<n>.vml`), CSV (the grid's active sheet), HTML (every sheet, static),
+  PDF (print window, landscape). Tests in `test/sheet.test.mjs` cover lexing, parsing, sequences,
+  styles, conditions, formats, the computed view, every edit op (incl. reference shifting and the
+  exact canonical serialization), rendering and the .xlsx parts.
+- **Not done / ideas**: no date arithmetic in formulas (sequences generate ISO dates as text), no data
+  bars, no multi-line cells, no drag-fill handle, no charts, no .xlsx IMPORT, no virtualisation (a
+  sheet of thousands of rows re-renders the whole table per edit).
 
 ## Mobile / iOS (hard-won — read before touching layout)
 

@@ -26,7 +26,7 @@ export function escHtml(s) {
 export const CHAR_PX = 8;
 export const DEFAULT_COL_PX = 96;
 export const DEFAULT_ROW_PX = 26;
-export const colPx = (sheet, c) => sheet.widths.has(c) ? Math.round(sheet.widths.get(c) * CHAR_PX + 12) : DEFAULT_COL_PX;
+export const colPx = (sheet, c) => sheet.widths.has(c) ? Math.round(sheet.widths.get(c) * CHAR_PX + 12) : (sheet.defaultWidth ? Math.round(sheet.defaultWidth * CHAR_PX + 12) : DEFAULT_COL_PX);
 
 /**
  * @param {object} opts  { rulers: true, docOffsets: true, view: true (apply sort/filter/hidden),
@@ -44,7 +44,7 @@ export function renderSheetHtml(book, sheet, opts = {}) {
   out.push('<colgroup>' + (rulers ? '<col class="uf-ss-rulercol">' : '') + colsShown.map(c => `<col style="width:${colPx(sheet, c)}px">`).join('') + '</colgroup>');
   if (rulers) {
     out.push('<thead><tr class="uf-ss-cols"><th class="uf-ss-corner" data-corner="1"></th>');
-    for (const c of colsShown) out.push(`<th class="uf-ss-col${c < sheet.freeze.cols ? ' is-frozen' : ''}" data-col="${c}">${colLetter(c)}<span class="uf-ss-colgrip" data-grip-col="${c}"></span></th>`);
+    for (const c of colsShown) out.push(`<th class="uf-ss-col${c < sheet.freeze.cols ? ' is-frozen' : ''}" data-col="${c}">${colLetter(c)}${sheet.filterOn ? `<span class="uf-ss-filterbtn${sheet.filters.some(f => f.col === c) ? ' is-on' : ''}" data-filter-col="${c}" title="Sort / filter">▾</span>` : ''}<span class="uf-ss-colgrip" data-grip-col="${c}"></span></th>`);
     out.push('</tr></thead>');
   }
   out.push('<tbody>');
@@ -52,7 +52,7 @@ export function renderSheetHtml(book, sheet, opts = {}) {
   for (const r of rowsShown) {
     const row = sheet.rows[r];
     const isHeader = r < sheet.headerRows;
-    const h = sheet.heights.get(r);
+    const h = sheet.heights.get(r) ?? sheet.defaultHeight;
     const attrs = [`class="${isHeader ? 'uf-ss-header' : ''}${r < sheet.freeze.rows || isHeader ? ' is-frozen' : ''}"`, `data-row="${r}"`, h ? `style="height:${h}px"` : '', row && docOffsets ? `data-doc-from="${row.from}" data-doc-to="${row.to}"` : ''].filter(Boolean).join(' ');
     out.push(`<tr ${attrs}>`);
     if (rulers) out.push(`<th class="uf-ss-row" data-row="${r}">${r + 1}<span class="uf-ss-rowgrip" data-grip-row="${r}"></span></th>`);
@@ -78,7 +78,7 @@ function cellHtml(book, sheet, cell, { isHeader, docOffsets, shownSet }) {
   const kind = book.kindOf(cell);
   const text = book.display(cell);
   const st = book.styleOf(cell);
-  const align = st.align ?? sheet.aligns[c] ?? (kind === 'num' || kind === 'bool' ? 'right' : (kind === 'error' ? 'center' : 'left'));
+  const align = st.align ?? (kind === 'num' || kind === 'bool' ? 'right' : (kind === 'error' ? 'center' : 'left'));
   const cls = ['uf-ss-cell', `is-${kind}`, cell.formula != null ? 'is-formula' : '', `al-${align}`, isHeader ? 'is-header' : ''].filter(Boolean).join(' ');
   // A span's rows/cols that are hidden shrink the span.
   let rowspan = 0, colspan = 0;
@@ -104,7 +104,6 @@ export function renderWorkbookHtml(book, opts = {}) {
     parts.push(`<section class="uf-ss-sheet" data-sheet-index="${s.index}">` +
       `<h2 class="uf-ss-name"${opts.docOffsets !== false ? ` data-doc-from="${s.nameFrom}" data-doc-to="${s.nameTo}"` : ''}>${escHtml(s.name)}</h2>` +
       `<div class="uf-ss-scroll">${renderSheetHtml(book, s, opts)}</div>` +
-      (s.notes.length ? `<div class="uf-ss-notes">${s.notes.map(n => `<p>${escHtml(n.text)}</p>`).join('')}</div>` : '') +
       `</section>`);
   }
   return parts.join('\n');
@@ -148,7 +147,7 @@ h2.uf-ss-name { font-size: 15px; margin: 28px 0 8px; color: #555; font-weight: 6
 .uf-ss-grid .al-right { text-align: right; } .uf-ss-grid .al-center { text-align: center; } .uf-ss-grid .al-left { text-align: left; }
 .uf-ss-grid .is-error { color: #b00020; }
 .uf-ss-grid tr.uf-ss-header td { font-weight: 600; background: #fafafa; }
-.uf-ss-grid .uf-ss-colgrip, .uf-ss-grid .uf-ss-rowgrip { display: none; }
+.uf-ss-grid .uf-ss-colgrip, .uf-ss-grid .uf-ss-rowgrip, .uf-ss-grid .uf-ss-filterbtn { display: none; }
 .uf-ss-notes { max-width: 70ch; color: #333; font-size: 14px; }
 @media print { body { padding: 0; } h2.uf-ss-name { page-break-after: avoid; } .uf-ss-grid tr { page-break-inside: avoid; } .uf-ss-sheet { page-break-after: always; } .uf-ss-sheet:last-child { page-break-after: auto; } }
 `;

@@ -53,7 +53,7 @@ export function computeWorkbook(text) {
       return sheet ? resolvers.get(sheet)(cell, { conditional: false }) : {};
     },
     valueOf(cell) { return cell ? (values.get(cell) ?? null) : null; },
-    display(cell) { return cellDisplay(cell, book.valueOf(cell), book.styleOf(cell), decimals); },
+    display(cell) { return cellDisplay(cell, book.valueOf(cell), book.styleOf(cell), wb.sheets[cell.sheet ?? 0]?.decimals ?? null); },
     kindOf(cell) { return valueKind(cell, book.valueOf(cell)); },
   };
   return book;

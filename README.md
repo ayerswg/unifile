@@ -7,7 +7,8 @@ the `{…}` signature (curly braces, monospaced): **`{document}`** `{¶}` Markdo
 **`{diagram}`** `{◇}` Mermaid, **`{compose}`** `{♪}` ABC music notation,
 **`{write}`** `{✎}` the Markdown book-writing app, **`{draft}`** `{⌂}` the
 blueprint drafting app, **`{slides}`** `{▭}` Marp-style slide decks, and
-**`{spreadsheet}`** `{▦}` a spreadsheet whose file is readable text — each
+**`{spreadsheet}`** `{▦}` a spreadsheet whose file is readable text (per-sheet
+YAML settings + one line per cell or range) — each
 bundling just what it needs. (Their build ids —
 `markdown`, `mermaid`, `abcjs`, `upub`, `udraft`, `slides`, `spreadsheet` — and the older codenames uPub /
 uDraft you may still meet in source comments are the same apps.) There is no universal multi-format build and no runtime plugins. Everything runs in the browser — **no server, no account, no

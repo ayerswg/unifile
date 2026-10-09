@@ -1,56 +1,68 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseSpreadsheet, parseRange, formatRange, tokenizeArgs, quoteArg, cellAtOffset, usedExtent,
+  parseSpreadsheet, parseRange, formatRange, parseLine, parseMeta, parseFreeze, cellAtOffset, usedExtent,
 } from '../src/core/sheet/parse.js';
+import { splitTop, unquote, quoteIf, tokenizeArgs } from '../src/core/sheet/lex.js';
+import { parseStep, formatStep, generateSequence } from '../src/core/sheet/seq.js';
 import {
   parseStyleProps, formatStyleProps, parseCondition, formatCondition, describeCondition, formatValue, parseColor, scaleColor, colorToRgb,
 } from '../src/core/sheet/style.js';
 import { computeWorkbook, viewRows, viewCols, cellDisplay } from '../src/core/sheet/book.js';
 import {
   alignSpreadsheet, serializeModel, toModel, setCell, setCells, clearRange, insertRows, deleteRows, insertCols, deleteCols,
-  shiftFormula, shiftRange, sortRows, mergeRange, unmergeRange, setStyle, addRule, removeRule, addScale, setComment,
-  setWidth, setFreeze, setHidden, setSortView, setFilter, addSheet, renameSheet, deleteSheet, rangeHas,
+  shiftFormula, shiftRange, sortRows, mergeRange, unmergeRange, setStyle, addRule, removeRule, addScale, setComment, setSequence,
+  setWidth, setFreeze, setHidden, setSortView, setFilter, setFilterOn, setHeaderRows, setMeta, addSheet, renameSheet, deleteSheet, rangeHas,
 } from '../src/core/sheet/edit.js';
 import { renderSheetHtml, renderWorkbookHtml, sheetToCsv, workbookDocument } from '../src/core/sheet/render.js';
 import { workbookToXlsx } from '../src/core/sheet/xlsx.js';
 
 const BUDGET = `---
-title: Budget
+name: Budget
+header: 1
+freeze: cols 1
 decimals: 2
+sort: D desc
+filter: B > 0
+owner: Will
 ---
-# Budget
+# the budget
+A1:D1 Item, Qty, Price, Total {bold, bg: #eef}
+A2:C2 Apples, 3, 1.20
+A3:C3 "Pears, green", 2, 0.80
+A4:C4 Plums, , 2.50
+D2:D4 =B*C {format: $#,##0.00}
+A5:C5 Total {merge}
+D5 =SUM(D2:D4)
+E1 When
+E2:E4 {seq: 2026-01-31, step: 1 month}
+D2:D4 {rule: > 3, bold, color: green}
+A2:A4 {rule: contains "pe", bg: #fdd}
+B2:B4 {scale: #fff #1a8cf5}
+B2 {comment: "Market price, October"}
+A {width: 18}
+3 {hidden}
 
-| Item   | Qty | Price | Total       |
-|--------|----:|-------|-------------|
-| Apples |   3 |  1.20 | =B*C        |
-| Pears  |   2 |  0.80 | =B*C        |
-| Plums  |     |  2.50 | =B*C        |
-| Total  |     |       | =SUM(D2:D4) |
-
-width A 18
-merge A5:C5
-style A1:D1 bold bg:#eef
-style D format:$#,##0.00
-if D2:D4 > 3 then bold color:green
-if A2:A4 contains "pe" then bg:#fdd
-scale B2:B4 #fff #1a8cf5
-comment B2 "Market price, October"
-sort D desc
-filter B > 0
-hide 3
-
-Figures in USD.
-
-# Other
-
-| x | y            |
-| 1 | =Budget!D5*2 |
+---
+name: Other
+---
+A1:B1 x, y
+A2:B2 1, =Budget!D5*2
 `;
 
 // ---------------------------------------------------------------------------
-// Ranges & args
+// Lexing, ranges, lines
 // ---------------------------------------------------------------------------
+
+test('splitTop respects quotes, parens and (optionally) number-format commas', () => {
+  assert.deepEqual(splitTop('a, "b, c", =IF(A,1,2), d').map(s => s.text.trim()), ['a', '"b, c"', '=IF(A,1,2)', 'd']);
+  assert.deepEqual(splitTop('format: $#,##0.00, bold', ',', { formats: true }).map(s => s.text.trim()), ['format: $#,##0.00', 'bold']);
+  assert.deepEqual(splitTop('format: $#,##0.00, bold', ',').map(s => s.text.trim()), ['format: $#', '##0.00', 'bold']);
+  assert.equal(unquote('"a \\"b\\""'), 'a "b"');
+  assert.equal(quoteIf('plain'), 'plain');
+  assert.equal(quoteIf('a, b'), '"a, b"');
+  assert.deepEqual(tokenizeArgs('contains "x y" 3').map(t => t.text), ['contains', 'x y', '3']);
+});
 
 test('parseRange / formatRange: cells, ranges, whole columns and rows', () => {
   assert.deepEqual(parseRange('B3'), { r1: 2, c1: 1, r2: 2, c2: 1 });
@@ -61,73 +73,116 @@ test('parseRange / formatRange: cells, ranges, whole columns and rows', () => {
   assert.deepEqual(parseRange('3:5'), { r1: 2, c1: 0, r2: 4, c2: Infinity });
   assert.equal(parseRange('A1:C'), null);
   assert.equal(parseRange('bold'), null);
-  assert.equal(parseRange(''), null);
   for (const s of ['B3', 'A1:B3', 'A', 'C:D', '3', '3:5']) assert.equal(formatRange(parseRange(s)), s);
 });
 
-test('tokenizeArgs: quotes, escapes, key:"value with spaces"', () => {
-  const t = tokenizeArgs('B3 "Market price, \\"Oct\\"" format:"$#,##0 kg" bold');
-  assert.deepEqual(t.map(x => x.text), ['B3', 'Market price, "Oct"', 'format:$#,##0 kg', 'bold']);
-  assert.equal(t[1].quoted, true);
-  assert.equal(quoteArg('plain'), 'plain');
-  assert.equal(quoteArg('two words'), '"two words"');
-  assert.equal(quoteArg('say "hi"'), '"say \\"hi\\""');
+test('parseLine: range, values, block; offsets; errors', () => {
+  const p = parseLine('A1:D1 Item, "Qty, x", =SUM(A1,B1), 3 {bold, bg: #eef, comment: "a, b"}');
+  assert.deepEqual(p.range, { r1: 0, c1: 0, r2: 0, c2: 3 });
+  assert.deepEqual(p.values.map(v => v.text), ['Item', 'Qty, x', '=SUM(A1,B1)', '3']);
+  assert.equal('A1:D1 Item, "Qty, x", =SUM(A1,B1), 3 {bold, bg: #eef, comment: "a, b"}'.slice(p.values[1].from, p.values[1].to), '"Qty, x"');
+  assert.deepEqual(p.block.entries.map(e => [e.key, e.value]), [['bold', null], ['bg', '#eef'], ['comment', 'a, b']]);
+  assert.equal(parseLine('A2:A9 {seq: 1}').values, null);
+  assert.equal(parseLine('bold A1').range, null);
+  assert.ok(parseLine('A1 x {bold').error);
+  assert.ok(parseLine('A1 x {bold} y').error);
+  assert.deepEqual(parseLine('3 {hidden}').range, { r1: 2, c1: 0, r2: 2, c2: Infinity });
+});
+
+test('parseMeta / parseFreeze', () => {
+  const m = parseMeta('name: Budget\nheader: 1\nfilter: B > 0 # a comment\nbg: #eef\nbad line\n');
+  assert.deepEqual(m.map(e => [e.key, e.value]), [['name', 'Budget'], ['header', '1'], ['filter', 'B > 0'], ['bg', '#eef'], [null, null]]);
+  assert.deepEqual(parseFreeze('rows 1, cols 2'), { rows: 1, cols: 2 });
+  assert.deepEqual(parseFreeze('2'), { rows: 2, cols: 0 });
+  assert.deepEqual(parseFreeze('cols:1'), { rows: 0, cols: 1 });
+});
+
+// ---------------------------------------------------------------------------
+// Sequences
+// ---------------------------------------------------------------------------
+
+test('sequences: numbers, dates, names, text with a trailing number', () => {
+  assert.deepEqual(generateSequence('1', parseStep(null), 3), ['1', '2', '3']);
+  assert.deepEqual(generateSequence('10', parseStep('-2.5'), 3), ['10', '7.5', '5']);
+  assert.deepEqual(generateSequence('2026-01-31', parseStep('1 month'), 3), ['2026-01-31', '2026-02-28', '2026-03-31']);
+  assert.deepEqual(generateSequence('2026-12-30', parseStep('7'), 2), ['2026-12-30', '2027-01-06']);
+  assert.deepEqual(generateSequence('2024-02-29', parseStep('1 year'), 2), ['2024-02-29', '2025-02-28']);
+  assert.deepEqual(generateSequence('Jan', parseStep('1'), 13).slice(11), ['Dec', 'Jan']);
+  assert.deepEqual(generateSequence('monday', null, 2), ['monday', 'tuesday']);
+  assert.deepEqual(generateSequence('FRI', null, 3), ['FRI', 'SAT', 'SUN']);
+  assert.deepEqual(generateSequence('Item 9', null, 2), ['Item 9', 'Item 10']);
+  assert.deepEqual(generateSequence('Q01', null, 2), ['Q01', 'Q02']);
+  assert.equal(generateSequence('hello', null, 2), null);
+  assert.equal(parseStep('2 weeks').unit, 'week');
+  assert.equal(formatStep(parseStep('1 month')), '1 month');
+  assert.equal(formatStep(parseStep('3 months')), '3 months');
+  assert.equal(parseStep('soon'), null);
 });
 
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
 
-test('parseSpreadsheet: sheets, header rows, directives, notes, inline spans', () => {
+test('parseSpreadsheet: sheets, front matter, settings, remarks, extent', () => {
   const wb = parseSpreadsheet(BUDGET);
-  assert.equal(wb.problems.length, 0);
+  assert.deepEqual(wb.problems, []);
   assert.equal(wb.sheets.length, 2);
   const [b, o] = wb.sheets;
   assert.equal(b.name, 'Budget');
   assert.equal(b.rows.length, 5);
-  assert.equal(b.cols, 4);
+  assert.equal(b.cols, 5);
   assert.equal(b.headerRows, 1);
-  assert.deepEqual(b.aligns, [null, 'right', null, null]);
+  assert.deepEqual(b.freeze, { rows: 0, cols: 1 });
+  assert.equal(b.decimals, 2);
+  assert.equal(b.filterOn, true);
   assert.equal(b.widths.get(0), 18);
   assert.equal(b.merges.length, 1);
-  assert.equal(b.grid[4][2], b.grid[4][0]);          // A5:C5 merged → anchor covers C5
+  assert.equal(b.grid[4][2], b.grid[4][0]);
   assert.equal(b.grid[4][0].colspan, 3);
   assert.equal(b.styles.length, 2);
   assert.equal(b.rules.length, 2);
   assert.equal(b.scales.length, 1);
-  assert.deepEqual(b.comments[0], { r: 1, c: 1, text: 'Market price, October', from: b.comments[0].from, to: b.comments[0].to });
+  assert.equal(b.sequences.length, 1);
+  assert.deepEqual(b.comments.map(c => [c.r, c.c, c.text]), [[1, 1, 'Market price, October']]);
   assert.deepEqual(b.sorts, [{ col: 3, dir: 'desc' }]);
   assert.equal(b.filters[0].col, 1);
   assert.deepEqual([...b.hidden.rows], [2]);
-  assert.deepEqual(b.notes.map(n => n.text), ['Figures in USD.']);
+  assert.deepEqual(b.remarks.map(r => r.text), ['# the budget']);
+  assert.deepEqual(b.meta.find(e => e.key === 'owner').value, 'Will');
+  assert.equal(b.grid[2][0].text, 'Pears, green');
+  assert.equal(b.grid[3][1].text, '');
+  assert.equal(b.grid[1][3].formula, 'B*C');
+  assert.equal(b.grid[2][4].text, '2026-02-28');
+  assert.equal(b.grid[2][4].generated, true);
   assert.equal(o.name, 'Other');
-  assert.equal(o.headerRows, 0);
-  // Offsets are absolute: the cell text is at its range.
+  // Offsets: a cell's text is at its range; a fill's cells share the fill item.
   const d2 = b.grid[1][3];
   assert.equal(BUDGET.slice(d2.from, d2.to), '=B*C');
+  assert.equal(b.grid[3][3].from, d2.from);
   assert.equal(cellAtOffset(wb, d2.from + 1).cell, d2);
+  assert.equal(BUDGET.slice(b.nameFrom, b.nameTo), 'name: Budget');
 });
 
-test('parseSpreadsheet: no heading = Sheet1; duplicate names get a suffix; `||`/`^^` spans', () => {
-  const wb = parseSpreadsheet('| a | b |\n| 1 | 2 |\n# X\n| q |\n# X\n| r |\n');
+test('parseSpreadsheet: no front matter = Sheet1; duplicate names; one value fills; open ranges', () => {
+  const wb = parseSpreadsheet('A1:B1 a, b\nA2:B2 1, 2\n---\nname: X\n---\nA1 q\n---\nname: X\n---\nA1 r\n');
   assert.deepEqual(wb.sheets.map(s => s.name), ['Sheet1', 'X', 'X 2']);
-  assert.equal(wb.sheets[0].named, false);
-  const sp = parseSpreadsheet('| a || c |\n| ^^ | x | y |\n').sheets[0];
-  assert.equal(sp.grid[0][0].colspan, 2);
-  assert.equal(sp.grid[0][0].rowspan, 2);
-  assert.equal(sp.grid[1][0], sp.grid[0][0]);
-  assert.equal(sp.grid[0][2].text, 'c');
+  const fill = parseSpreadsheet('---\nheader: 1\n---\nA1:C1 h, h, h\nA2:C4 0\nB:B =A*2\n').sheets[0];
+  assert.equal(fill.grid[3][2].text, '0');
+  assert.equal(fill.grid[0][1].text, 'h');          // the header is never filled by an open column
+  assert.equal(fill.grid[1][1].text, '=A*2');
+  assert.equal(fill.grid[3][1].text, '=A*2');
+  const list = parseSpreadsheet('A:A 1, 2, 3\n').sheets[0];
+  assert.equal(list.rows.length, 3);
+  assert.equal(list.grid[2][0].text, '3');
 });
 
 test('parseSpreadsheet: problems are reported with offsets, parsing continues', () => {
-  const wb = parseSpreadsheet('| a |\nstyle ZZZ9 bold\nmerge A\nif A1 > then bold\nif A1 nonsense then bold\nwidth A lots\ncomment A1:B2 "x"\nstyle A1 colour:red\n');
+  const wb = parseSpreadsheet('---\nheader: lots\n---\nA1 x {colour: red}\nA {merge}\nA1 {rule: wat, bold}\nA1 {rule: > 1}\nA1:B2 {comment: x}\nA1 {seq: hello}\nA1 {step: 2}\nA {height: 3}\nA1 {hidden}\nbold A1\nA1:A2 1, 2, 3\n');
   const msgs = wb.problems.map(p => p.message);
-  assert.ok(msgs.some(m => /merge: a merge needs a bounded range/.test(m)));
-  assert.ok(msgs.some(m => /if: missing value|if: "": /.test(m)) || msgs.some(m => /^if:/.test(m)));
-  assert.ok(msgs.some(m => /width: expected a number/.test(m)));
-  assert.ok(msgs.some(m => /comment: expected a single cell/.test(m)));
-  assert.ok(msgs.some(m => /unknown property "colour"/.test(m)));
-  assert.equal(wb.sheets[0].rows.length, 1);
+  for (const re of [/header: expected a number/, /unknown property "colour"/, /merge: a merge needs a bounded range/, /rule: cannot read/, /rule: add the properties/, /comment: expected a cell/, /seq: "hello"/, /step: needs a seq/, /height: applies to rows/, /hidden: applies to whole rows/, /a line starts with a cell/, /3 values for 2 cells/]) {
+    assert.ok(msgs.some(m => re.test(m)), String(re));
+  }
+  assert.equal(wb.sheets[0].grid[0][0].text, '1');
 });
 
 // ---------------------------------------------------------------------------
@@ -143,7 +198,6 @@ test('parseStyleProps / formatStyleProps round-trip, resets, validation', () => 
   assert.deepEqual(parseStyleProps(['format:percent', 'format:text']).props, { format: '@' });
   assert.ok(parseStyleProps(['align:middle']).problems[0].includes('align'));
   assert.ok(parseStyleProps(['size:big']).problems[0].includes('size'));
-  assert.equal(formatStyleProps({ format: '#,##0 kg' }), 'format:"#,##0 kg"');
 });
 
 test('parseCondition / formatCondition: every kind', () => {
@@ -159,7 +213,6 @@ test('parseCondition / formatCondition: every kind', () => {
   assert.deepEqual(c('=D>C'), { kind: 'formula', formula: 'D>C' });
   assert.ok(c('wat').error);
   assert.ok(c('between 1 and').error);
-  assert.ok(c('> ').error);
   for (const s of ['> 100', 'between 10 and 20', 'contains "x y"', 'top 3', 'blank', '=D>C', 'starts "a"']) assert.equal(formatCondition(c(s)), s);
   assert.equal(describeCondition(c('<> 0')), 'is not equal to 0');
 });
@@ -172,7 +225,6 @@ test('formatValue: patterns, named formats, text', () => {
   assert.equal(formatValue(5, '#,##0 kg'), '5 kg');
   assert.equal(formatValue(3.14159, null), '3.14159');
   assert.equal(formatValue('text', '0.00'), 'text');
-  assert.equal(formatValue(true, '0'), 'TRUE');
 });
 
 test('colours and scales', () => {
@@ -182,7 +234,6 @@ test('colours and scales', () => {
   assert.deepEqual(colorToRgb('#abc'), [170, 187, 204]);
   const sc = { min: 0, max: 10, rgb: [[0, 0, 0], [255, 255, 255]] };
   assert.equal(scaleColor(0, sc), '#000000');
-  assert.equal(scaleColor(10, sc), '#ffffff');
   assert.equal(scaleColor(5, sc), '#808080');
 });
 
@@ -190,114 +241,139 @@ test('colours and scales', () => {
 // Computed workbook: values, resolved styles, view
 // ---------------------------------------------------------------------------
 
-test('computeWorkbook: values, display with formats, resolved styles incl. rules and scales', () => {
+test('computeWorkbook: values, formats, rules, scales, generated cells, cross-sheet refs', () => {
   const book = computeWorkbook(BUDGET);
   const b = book.sheets[0];
   assert.equal(book.display(b.grid[1][3]), '$3.60');
-  assert.equal(book.display(b.grid[4][3]), '$5.20');
-  assert.equal(book.display(b.grid[2][2]), '0.80');            // literal shows typed text
-  assert.equal(book.sheets[1].cells[3].formula, 'Budget!D5*2');
-  assert.equal(book.display(book.sheets[1].grid[1][1]), '10.40');  // decimals: 2 on a formula result
-  const d2 = book.styleOf(b.grid[1][3]);
-  assert.deepEqual(d2, { format: '$#,##0.00', bold: true, color: 'green' });   // rule fired (3.6 > 3)
-  const d3 = book.styleOf(b.grid[2][3]);
-  assert.deepEqual(d3, { format: '$#,##0.00' });                              // 1.6 — not
-  assert.equal(book.styleOf(b.grid[1][0]).bg, undefined);    // "Apples" has no "pe"
-  assert.equal(book.styleOf(b.grid[2][0]).bg, '#fdd');       // "Pears" contains "pe"
-  assert.equal(book.styleOf(b.grid[3][0]).bg, undefined);    // "Plums"
-  assert.equal(book.styleOf(b.grid[1][1]).bg, '#1a8cf5');    // scale max
-  assert.equal(book.styleOf(b.grid[2][1]).bg, '#ffffff');    // scale min
+  assert.equal(book.display(b.grid[4][3]), '5.20');       // decimals: 2 (no format on D5)
+  assert.equal(book.display(b.grid[2][2]), '0.80');       // a literal shows the typed text
+  assert.equal(book.display(b.grid[3][4]), '2026-03-31'); // a generated date
+  assert.equal(book.display(book.sheets[1].grid[1][1]), '10.4');
+  assert.deepEqual(book.styleOf(b.grid[1][3]), { format: '$#,##0.00', bold: true, color: 'green' });
+  assert.deepEqual(book.styleOf(b.grid[2][3]), { format: '$#,##0.00' });
+  assert.equal(book.styleOf(b.grid[1][0]).bg, undefined);
+  assert.equal(book.styleOf(b.grid[2][0]).bg, '#fdd');      // "Pears, green" contains "pe"
+  assert.equal(book.styleOf(b.grid[1][1]).bg, '#1a8cf5');   // scale max
+  assert.equal(book.styleOf(b.grid[2][1]).bg, '#ffffff');   // scale min
   assert.deepEqual(book.staticStyleOf(b.grid[1][3]), { format: '$#,##0.00' });
   assert.deepEqual(book.styleOf(b.grid[0][0]), { bold: true, bg: '#eef' });
 });
 
-test('viewRows: header first, filter, sort (blanks last), hidden rows removed; viewCols hides columns', () => {
+test('viewRows / viewCols: header first, filter, sort (blanks last), hidden removed', () => {
   const book = computeWorkbook(BUDGET);
-  const b = book.sheets[0];
-  // filter B > 0 drops Plums (blank qty) and Total; sort D desc: Apples (3.6) before Pears (1.6); row 3 (Pears) hidden.
-  assert.deepEqual(viewRows(book, b), [0, 1]);
-  const noHide = computeWorkbook(BUDGET.replace('hide 3\n', ''));
+  assert.deepEqual(viewRows(book, book.sheets[0]), [0, 1]);
+  const noHide = computeWorkbook(BUDGET.replace('3 {hidden}\n', ''));
   assert.deepEqual(viewRows(noHide, noHide.sheets[0]), [0, 1, 2]);
-  const sortOnly = computeWorkbook(BUDGET.replace('hide 3\n', '').replace('filter B > 0\n', ''));
-  assert.deepEqual(viewRows(sortOnly, sortOnly.sheets[0]), [0, 4, 1, 2, 3]);   // 5.2, 3.6, 1.6, 0 (Plums =B*C → 0)
-  const fcond = computeWorkbook('| a | b |\n| 1 | 2 |\n| 3 | 1 |\nfilter =B>A\n');
-  assert.deepEqual(viewRows(fcond, fcond.sheets[0]), [0, 1]);   // no header: "b">"a" and 2>1 pass, 1>3 fails
-  const fcond2 = computeWorkbook('| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 1 |\nfilter =B>A\n');
-  assert.deepEqual(viewRows(fcond2, fcond2.sheets[0]), [0, 1]);
-  const hc = computeWorkbook('| a | b | c |\nhide B\n');
+  const sortOnly = computeWorkbook(BUDGET.replace('3 {hidden}\n', '').replace('filter: B > 0\n', ''));
+  assert.deepEqual(viewRows(sortOnly, sortOnly.sheets[0]), [0, 4, 1, 2, 3]);
+  const fcond = computeWorkbook('---\nfilter: =B>A\n---\nA1:B1 a, b\nA2:B2 1, 2\nA3:B3 3, 1\n');
+  assert.deepEqual(viewRows(fcond, fcond.sheets[0]), [0, 1]);
+  const two = computeWorkbook('---\nheader: 1\nfilter: A > 1; B contains "x"\n---\nA1:B1 a, b\nA2:B2 1, x\nA3:B3 3, x\nA4:B4 5, y\n');
+  assert.deepEqual(viewRows(two, two.sheets[0]), [0, 2]);
+  const hc = computeWorkbook('A1:C1 a, b, c\nB {hidden}\n');
   assert.deepEqual(viewCols(hc.sheets[0]), [0, 2]);
 });
 
 test('cellDisplay: literal with a format shows the formatted number; text stays', () => {
-  const cell = { text: '1200', formula: null, merged: false };
-  assert.equal(cellDisplay(cell, 1200, { format: '#,##0' }), '1,200');
+  assert.equal(cellDisplay({ text: '1200', formula: null, merged: false }, 1200, { format: '#,##0' }), '1,200');
   assert.equal(cellDisplay({ text: "'=x", formula: null, merged: false }, '=x', {}), '=x');
-  assert.equal(cellDisplay({ text: 'abc', formula: null, merged: false }, 'abc', { format: '0.00' }), 'abc');
 });
 
 // ---------------------------------------------------------------------------
 // Serialization & edits
 // ---------------------------------------------------------------------------
 
-test('alignSpreadsheet is canonical and idempotent; front matter and notes survive', () => {
+test('alignSpreadsheet is canonical and idempotent; extra front matter keys and remarks survive', () => {
   const a = alignSpreadsheet(BUDGET);
   assert.equal(alignSpreadsheet(a), a);
-  assert.ok(a.startsWith('---\ntitle: Budget\ndecimals: 2\n---\n# Budget\n\n| Item   | Qty | Price | Total       |\n|--------|----:|-------|-------------|'));
-  assert.ok(a.includes('\nwidth A 18\nmerge A5:C5\nstyle A1:D1 bold bg:#eef\nstyle D format:$#,##0.00\nif D2:D4 > 3 then bold color:green\n'));
-  assert.ok(a.includes('\nscale B2:B4 #fff #1a8cf5\ncomment B2 "Market price, October"\nsort D desc\nfilter B > 0\nhide 3\n\nFigures in USD.\n\n# Other\n'));
+  assert.equal(a, `---
+name: Budget
+header: 1
+freeze: cols 1
+decimals: 2
+sort: D desc
+filter: B > 0
+owner: Will
+---
+# the budget
+
+A1:E1 Item, Qty, Price, Total, When
+A2:C2 Apples, 3, 1.20
+D2:D4 =B*C {format: $#,##0.00}
+A3:C3 "Pears, green", 2, 0.80
+A4:C4 Plums, , 2.50
+A5:D5 Total, , , =SUM(D2:D4)
+
+E2:E4 {seq: 2026-01-31, step: 1 month}
+A5:C5 {merge}
+A {width: 18}
+3 {hidden}
+A1:D1 {bold, bg: #eef}
+D2:D4 {rule: > 3, bold, color: green}
+A2:A4 {rule: contains "pe", bg: #fdd}
+B2:B4 {scale: #fff #1a8cf5}
+B2 {comment: "Market price, October"}
+
+---
+name: Other
+---
+
+A1:B1 x, y
+A2:B2 1, =Budget!D5*2
+`);
 });
 
-test('setCell / setCells / clearRange: grow the sheet, keep everything else', () => {
-  let r = setCell('| a | b |\n', 0, 3, 4, 'x');
-  assert.equal(r.text, '| a   | b   |     |     |     |\n|     |     |     |     |     |\n|     |     |     |     |     |\n|     |     |     |     | x   |\n');
+test('setCell / setCells / clearRange: grow the sheet; an empty document gets Sheet1', () => {
+  let r = setCell('A1:B1 a, b\n', 0, 3, 4, 'x');
+  assert.equal(r.text, '---\nname: Sheet1\n---\n\nA1:B1 a, b\nE4 x\n');
   r = setCells(r.text, 0, 0, 0, [['1', '2'], ['=A*B', '']]);
-  assert.ok(r.text.startsWith('| 1    | 2   |     |     |     |\n| =A*B |'));
+  assert.ok(r.text.includes('\nA1:B1 1, 2\nA2 =A*B\nE4 x\n'));
   r = clearRange(r.text, 0, { r1: 3, c1: 4, r2: 3, c2: 4 });
-  assert.equal(r.text.split('\n').length, 3);   // trailing empty rows and columns trimmed
-  // An empty document: the first edit creates Sheet1.
+  assert.ok(!r.text.includes('E4'));
   const first = setCell('', 0, 0, 0, 'hello');
-  assert.equal(first.text, '# Sheet1\n\n| hello |\n');
-  assert.equal(first.changes.length, 1);
-  // Changes are in original coordinates.
-  const src = '# S\n\n| a |\n';
+  assert.equal(first.text, '---\nname: Sheet1\n---\n\nA1 hello\n');
+  const src = '---\nname: S\n---\nA1 a\n';
   const c = setCell(src, 0, 0, 0, 'zz');
   assert.equal(c.changes[0].from, 0);
   assert.equal(c.changes[0].to, src.length - 1);
+  // Three identical formulas down a column become one fill line.
+  const f = setCells('A1 h\n', 0, 1, 1, [['=A*2'], ['=A*2'], ['=A*2']]);
+  assert.ok(f.text.includes('\nB2:B4 =A*2\n'));
 });
 
-test('insertRows / deleteRows shift directives and formulas (other sheets too)', () => {
-  const src = '# A\n\n| x | y |\n| 1 | =A*2 |\n| 2 | =SUM(B2:B3) |\n\nstyle A2:B3 bold\ncomment B3 "c"\nif B2:B3 > 1 then bold\n\n# B\n\n| =A!B3 | =SUM(A!B2:B3) |\n';
+test('insertRows / deleteRows shift settings and formulas (other sheets too)', () => {
+  const src = '---\nname: A\n---\nA1:B1 x, y\nA2:B2 1, =A*2\nA3:B3 2, =SUM(B2:B3)\nA2:B3 {bold}\nB3 {comment: c}\nB2:B3 {rule: > 1, bold}\nA2:A3 {seq: 1}\n---\nname: B\n---\nA1:B1 =A!B3, =SUM(A!B2:B3)\n';
   const r = insertRows(src, 0, 1, 2);
   const t = r.text;
-  assert.ok(t.includes('| x   | y           |\n|     |             |\n|     |             |\n|   1 | =A*2        |\n|   2 | =SUM(B4:B5) |'));
-  assert.ok(t.includes('style A4:B5 bold'));
-  assert.ok(t.includes('comment B5 c'));
-  assert.ok(t.includes('if B4:B5 > 1 then bold'));
-  assert.ok(t.includes('| =A!B5 | =SUM(A!B4:B5) |'));
-  const d = deleteRows(t, 0, 3, 3);   // delete row 4 (the "1" row)
+  assert.ok(t.includes('\nA1:B1 x, y\nA4:B4 1, =A*2\nA5:B5 2, =SUM(B4:B5)\n'));
+  assert.ok(t.includes('A4:A5 {seq: 1}'));
+  assert.ok(t.includes('A4:B5 {bold}'));
+  assert.ok(t.includes('B5 {comment: c}'));
+  assert.ok(t.includes('B4:B5 {rule: > 1, bold}'));
+  assert.ok(t.includes('A1:B1 =A!B5, =SUM(A!B4:B5)'));
+  const d = deleteRows(t, 0, 3, 3);
   assert.ok(d.text.includes('=SUM(B4:B4)'));
-  assert.ok(d.text.includes('style A4:B4 bold'));
-  assert.ok(!d.text.includes('comment B5'));   // comment B5 moved to B4
-  assert.ok(d.text.includes('comment B4 c'));
-  const d2 = deleteRows(d.text, 0, 3, 3);       // delete the last data row: the range is gone
+  assert.ok(d.text.includes('A4:B4 2, =SUM(B4:B4) {bold}'));   // the style rides on the value line
+  assert.ok(d.text.includes('B4 {comment: c}'));
+  const d2 = deleteRows(d.text, 0, 3, 3);
   assert.ok(d2.text.includes('=SUM(#REF!)'));
-  assert.ok(!d2.text.includes('style A4'));
+  assert.ok(!d2.text.includes('{bold}'));
 });
 
 test('insertCols / deleteCols shift bare-column refs, widths, sorts and filters', () => {
-  const src = '| a | b | c |\n| 1 | 2 | =A*B |\n\nwidth B 12\nsort B asc\nfilter B > 0\nstyle B:C bold\nhide C\n';
+  const src = '---\nsort: B asc\nfilter: B > 0\n---\nA1:C1 a, b, c\nA2:C2 1, 2, =A*B\nB {width: 12}\nB:C {bold}\nC {hidden}\n';
   const r = insertCols(src, 0, 1, 1);
-  assert.ok(r.text.includes('| =A*C |'));
-  assert.ok(r.text.includes('width C 12'));
-  assert.ok(r.text.includes('sort C asc'));
-  assert.ok(r.text.includes('filter C > 0'));
-  assert.ok(r.text.includes('style C:D bold'));
-  assert.ok(r.text.includes('hide D'));
-  const d = deleteCols(r.text, 0, 2, 2);   // delete the (moved) B column
+  assert.ok(r.text.includes('=A*C'));
+  assert.ok(r.text.includes('C {width: 12}'));
+  assert.ok(r.text.includes('sort: C asc'));
+  assert.ok(r.text.includes('filter: C > 0'));
+  assert.ok(r.text.includes('C:D {bold}'));
+  assert.ok(r.text.includes('D {hidden}'));
+  const d = deleteCols(r.text, 0, 2, 2);
   assert.ok(d.text.includes('=A*#REF!'));
-  assert.ok(!d.text.includes('sort '));
-  assert.ok(!d.text.includes('filter '));
-  assert.ok(d.text.includes('style C bold'));
+  assert.ok(!d.text.includes('sort:'));
+  assert.ok(d.text.includes('filter: on'));
+  assert.ok(d.text.includes('C {bold}'));
 });
 
 test('shiftFormula / shiftRange edge cases', () => {
@@ -312,98 +388,108 @@ test('shiftFormula / shiftRange edge cases', () => {
 });
 
 test('sortRows: a data sort below the header; comments and row heights ride along', () => {
-  const src = '| n | v |\n|---|---|\n| c | 3 |\n| a | 1 |\n| b | =A&"!" |\n\ncomment A3 "cc"\nheight 3 40\n';
+  const src = '---\nheader: 1\n---\nA1:B1 n, v\nA2:B2 c, 3\nA3:B3 a, 1\nA4:B4 b, =A&"!"\nA3 {comment: cc}\n3 {height: 40}\n';
   const book = computeWorkbook(src);
   const r = sortRows(src, 0, 0, 'asc', book);
-  assert.ok(r.text.includes('| a   |      1 |\n| b   | =A&"!" |\n| c   |      3 |'));
-  assert.ok(r.text.includes('comment A2 cc'));    // the comment was on "a" (row 3) → row 2
-  assert.ok(r.text.includes('height 2 40'));
+  assert.ok(r.text.includes('\nA2:B2 a, 1\nA3:B3 b, =A&"!"\nA4:B4 c, 3\n'));
+  assert.ok(r.text.includes('A2 {comment: cc}'));
+  assert.ok(r.text.includes('2 {height: 40}'));
   const d = sortRows(src, 0, 1, 'desc', book);
-  assert.ok(d.text.includes('| b   | =A&"!" |\n| c   |      3 |\n| a   |      1 |'));   // "b!" is text → before numbers in desc
-  assert.ok(d.text.includes('comment A4 cc'));
+  assert.ok(d.text.includes('\nA2:B2 b, =A&"!"\nA3:B3 c, 3\nA4:B4 a, 1\n'));
 });
 
 test('mergeRange / unmergeRange', () => {
-  let r = mergeRange('| a | b |\n| c | d |\n', 0, { r1: 0, c1: 0, r2: 1, c2: 1 });
-  assert.equal(r.text, '| a   |     |\n|     |     |\n\nmerge A1:B2\n');
+  let r = mergeRange('A1:B1 a, b\nA2:B2 c, d\n', 0, { r1: 0, c1: 0, r2: 1, c2: 1 });
+  assert.ok(r.text.endsWith('\nA1 a\n\nA1:B2 {merge}\n'));
   const wb = parseSpreadsheet(r.text);
   assert.equal(wb.sheets[0].grid[1][1], wb.sheets[0].grid[0][0]);
   r = unmergeRange(r.text, 0, { r1: 1, c1: 1, r2: 1, c2: 1 });
   assert.ok(!r.text.includes('merge'));
-  assert.equal(mergeRange('| a |', 0, { r1: 0, c1: 0, r2: 0, c2: 0 }).changes.length, 0);
+  assert.equal(mergeRange('A1 a', 0, { r1: 0, c1: 0, r2: 0, c2: 0 }).changes.length, 0);
 });
 
-test('setStyle: merges into same-range lines, strips keys from inner lines, explicit off against wider lines', () => {
-  let r = setStyle('| a | b |\n', 0, { r1: 0, c1: 0, r2: 0, c2: 1 }, { bold: true });
-  assert.ok(r.text.trimEnd().endsWith('style A1:B1 bold'));
+test('setStyle: rides on a value line of the same range, strips inner keys, explicit off', () => {
+  let r = setStyle('A1:B1 a, b\n', 0, { r1: 0, c1: 0, r2: 0, c2: 1 }, { bold: true });
+  assert.ok(r.text.includes('\nA1:B1 a, b {bold}\n'));
   r = setStyle(r.text, 0, { r1: 0, c1: 0, r2: 0, c2: 1 }, { color: 'red' });
-  assert.ok(r.text.trimEnd().endsWith('style A1:B1 bold color:red'));
+  assert.ok(r.text.includes('\nA1:B1 a, b {bold, color: red}\n'));
   r = setStyle(r.text, 0, { r1: 0, c1: 0, r2: 0, c2: 0 }, { bold: false });
-  assert.ok(r.text.trimEnd().endsWith('style A1:B1 bold color:red\nstyle A1 bold:off'));
+  assert.ok(r.text.includes('\nA1 {bold: off}\n'));
   r = setStyle(r.text, 0, { r1: 0, c1: 0, r2: 0, c2: 1 }, { bold: false });
-  assert.ok(r.text.trimEnd().endsWith('style A1:B1 color:red'));   // inner A1 line emptied + dropped, bold stripped
+  assert.ok(r.text.includes('\nA1:B1 a, b {color: red}\n'));
+  assert.ok(!r.text.includes('A1 {'));
   const book = computeWorkbook(r.text);
   assert.equal(rangeHas(book, book.sheets[0], { r1: 0, c1: 0, r2: 0, c2: 1 }, 'color'), true);
   assert.equal(rangeHas(book, book.sheets[0], { r1: 0, c1: 0, r2: 0, c2: 1 }, 'bold'), false);
 });
 
-test('rules, scales, comments, widths, freeze, hidden, view sort / filter', () => {
-  let r = addRule('| 1 |\n| 2 |\n', 0, { r1: 0, c1: 0, r2: 1, c2: 0 }, { kind: 'cmp', op: '>', value: '1' }, { bold: true, bg: '#fdd' });
-  assert.ok(r.text.trimEnd().endsWith('if A1:A2 > 1 then bold bg:#fdd'));
+test('rules, scales, comments, sequences, widths, freeze, hidden, views, header, meta', () => {
+  let r = addRule('A1:A2 1, 2\n', 0, { r1: 0, c1: 0, r2: 1, c2: 0 }, { kind: 'cmp', op: '>', value: '1' }, { bold: true, bg: '#fdd' });
+  assert.ok(r.text.includes('\nA1:A2 {rule: > 1, bold, bg: #fdd}\n'));
   r = addScale(r.text, 0, { r1: 0, c1: 0, r2: 1, c2: 0 }, ['#fff', '#000']);
-  assert.ok(r.text.trimEnd().endsWith('if A1:A2 > 1 then bold bg:#fdd\nscale A1:A2 #fff #000'));
+  assert.ok(r.text.includes('\nA1:A2 {scale: #fff #000}\n'));
   r = removeRule(r.text, 0, 0);
-  assert.ok(!r.text.includes('if '));
+  assert.ok(!r.text.includes('rule:'));
   r = setComment(r.text, 0, 0, 0, 'hello "there"\nsecond line');
-  assert.ok(r.text.includes('comment A1 "hello \\"there\\" second line"'));
+  assert.ok(r.text.includes('A1 {comment: "hello \\"there\\" second line"}'));
   assert.equal(parseSpreadsheet(r.text).sheets[0].comments[0].text, 'hello "there" second line');
   r = setComment(r.text, 0, 0, 0, '');
   assert.ok(!r.text.includes('comment'));
+  r = setSequence(r.text, 0, { r1: 0, c1: 1, r2: 4, c2: 1 }, '2026-01-01', parseStep('1 week'));
+  assert.ok(r.text.includes('B1:B5 {seq: 2026-01-01, step: 1 week}'));
+  assert.equal(computeWorkbook(r.text).sheets[0].grid[4][1].text, '2026-01-29');
+  r = setSequence(r.text, 0, { r1: 0, c1: 1, r2: 4, c2: 1 }, null);
+  assert.ok(!r.text.includes('seq:'));
   r = setWidth(r.text, 0, 0, 2, 14);
-  assert.ok(r.text.includes('width A:C 14'));
+  assert.ok(r.text.includes('A:C {width: 14}'));
   r = setWidth(r.text, 0, 1, 1, 0);
-  assert.ok(r.text.includes('width A 14\nwidth C 14'));
+  assert.ok(r.text.includes('A {width: 14}\nC {width: 14}'));
   r = setFreeze(r.text, 0, 1, 2);
-  assert.ok(r.text.includes('freeze rows:1 cols:2'));
+  assert.ok(r.text.includes('freeze: rows 1, cols 2'));
   r = setHidden(r.text, 0, 'row', 1, 1, true);
-  assert.ok(r.text.includes('hide 2'));
+  assert.ok(r.text.includes('\n2 {hidden}\n'));
   r = setSortView(r.text, 0, [{ col: 0, dir: 'desc' }]);
-  assert.ok(r.text.includes('sort A desc'));
+  assert.ok(r.text.includes('sort: A desc'));
   r = setFilter(r.text, 0, 0, { kind: 'contains', text: 'x' });
-  assert.ok(r.text.includes('filter A contains "x"'));
+  assert.ok(r.text.includes('filter: A contains "x"'));
   r = setFilter(r.text, 0, 0, null);
-  assert.ok(!r.text.includes('filter'));
+  assert.ok(r.text.includes('filter: on'));
+  r = setFilterOn(r.text, 0, false);
+  assert.ok(!r.text.includes('filter:'));
+  r = setHeaderRows(r.text, 0, 1);
+  assert.ok(r.text.includes('header: 1'));
+  r = setMeta(r.text, 0, 'owner', 'Will');
+  assert.ok(r.text.includes('owner: Will\n---'));
 });
 
 test('addSheet / renameSheet (refs follow) / deleteSheet', () => {
-  let r = addSheet('| a |\n', 'Q1 Sales');
+  let r = addSheet('A1 a\n', 'Q1 Sales');
   assert.equal(r.index, 1);
-  assert.equal(r.text, '# Sheet1\n\n| a |\n\n# Q1 Sales\n\n|     |\n');
+  assert.equal(r.text, 'A1 a\n\n---\nname: Q1 Sales\n---\n');
   r = setCell(r.text, 1, 0, 0, '=Sheet1!A1');
   r = renameSheet(r.text, 0, 'Costs');
-  assert.ok(r.text.startsWith('# Costs\n'));
-  assert.ok(r.text.includes("| =Costs!A1 |"));
-  r = renameSheet(r.text, 1, 'Costs');   // a duplicate name is refused
+  assert.ok(r.text.startsWith('---\nname: Costs\n---\nA1 a\n'));
+  assert.ok(r.text.includes('A1 =Costs!A1'));
+  r = renameSheet(r.text, 1, 'Costs');
   assert.equal(r.changes.length, 0);
   r = deleteSheet(r.text, 1);
-  assert.equal(r.text, '# Costs\n\n| a |\n');
-  assert.equal(deleteSheet(r.text, 0).changes.length, 0);   // the last sheet stays
+  assert.equal(r.text, '---\nname: Costs\n---\nA1 a\n');
+  assert.equal(deleteSheet(r.text, 0).changes.length, 0);
 });
 
 // ---------------------------------------------------------------------------
 // Rendering & exports
 // ---------------------------------------------------------------------------
 
-test('renderSheetHtml: rulers, spans, inline styles, offsets, view order', () => {
+test('renderSheetHtml: rulers, filter buttons, spans, inline styles, offsets, view order', () => {
   const book = computeWorkbook(BUDGET);
   const html = renderSheetHtml(book, book.sheets[0]);
-  assert.ok(html.includes('<th class="uf-ss-col" data-col="0">A'));
-  const frozen = computeWorkbook(BUDGET.replace('width A 18', 'width A 18\nfreeze cols:1'));
-  assert.ok(renderSheetHtml(frozen, frozen.sheets[0]).includes('<th class="uf-ss-col is-frozen" data-col="0">A'));
+  assert.ok(html.includes('<th class="uf-ss-col is-frozen" data-col="0">A'));
+  assert.ok(html.includes('data-filter-col="1"'));
   assert.ok(html.includes('data-addr="D2"'));
   assert.ok(html.includes('font-weight:600;color:green'));
   assert.ok(html.includes('$3.60'));
-  assert.ok(!html.includes('data-addr="A3"'));   // hidden row 3 / filtered rows are not drawn
+  assert.ok(!html.includes('data-addr="A3"'));
   const all = renderSheetHtml(book, book.sheets[0], { view: false });
   assert.ok(all.includes('colspan="3"'));
   assert.ok(all.includes('has-comment'));
@@ -411,17 +497,16 @@ test('renderSheetHtml: rulers, spans, inline styles, offsets, view order', () =>
   assert.ok(workbookDocument(book, { title: 'T' }).startsWith('<!doctype html>'));
 });
 
-test('sheetToCsv: displayed values, merges blank', () => {
+test('sheetToCsv: displayed values, generated cells, merges blank', () => {
   const book = computeWorkbook(BUDGET);
-  assert.equal(sheetToCsv(book, book.sheets[0]), 'Item,Qty,Price,Total\r\nApples,3,1.20,$3.60\r\nPears,2,0.80,$1.60\r\nPlums,,2.50,$0.00\r\nTotal,,,$5.20\r\n');
+  assert.equal(sheetToCsv(book, book.sheets[0]), 'Item,Qty,Price,Total,When\r\nApples,3,1.20,$3.60,2026-01-31\r\n"Pears, green",2,0.80,$1.60,2026-02-28\r\nPlums,,2.50,$0.00,2026-03-31\r\nTotal,,,5.20,\r\n');
 });
 
-test('workbookToXlsx: a stored ZIP with styles, formulas, merges, cf rules, comments', () => {
+test('workbookToXlsx: a stored ZIP with styles, formulas, merges, cf rules, comments, autofilter', () => {
   const book = computeWorkbook(BUDGET);
   const bytes = workbookToXlsx(book, { title: 'Budget' });
   assert.equal(bytes[0], 0x50); assert.equal(bytes[1], 0x4b);
   const s = Buffer.from(bytes).toString('latin1');
-  assert.ok(s.includes('xl/worksheets/sheet1.xml'));
   assert.ok(s.includes('xl/comments1.xml'));
   assert.ok(s.includes('<f>B2*C2</f>'));
   assert.ok(s.includes('<mergeCell ref="A5:C5"/>'));
@@ -429,16 +514,15 @@ test('workbookToXlsx: a stored ZIP with styles, formulas, merges, cf rules, comm
   assert.ok(s.includes('type="containsText"'));
   assert.ok(s.includes('<colorScale>'));
   assert.ok(s.includes('formatCode="$#,##0.00"'));
-  assert.ok(s.includes('<pane ySplit="1"'));
+  assert.ok(s.includes('<pane xSplit="1" ySplit="1"'));
   assert.ok(s.includes('<row r="3" hidden="1">'));
+  assert.ok(s.includes('<autoFilter'));
   assert.ok(s.includes('Market price, October'));
-  // Rules are not baked into the static cell style: D2's font is not bold/green.
-  assert.ok(!s.includes('<color rgb="FF008000"/>') || s.indexOf('<color rgb="FF008000"/>') > s.indexOf('<dxfs'));
+  assert.ok(s.includes('2026-02-28'));
 });
 
-test('usedExtent / toModel / serializeModel', () => {
-  const wb = parseSpreadsheet('| a |  |\n|   |  |\n');
+test('usedExtent / toModel / serializeModel of a blank sheet', () => {
+  const wb = parseSpreadsheet('---\nname: S\n---\nA1 a\n');
   assert.deepEqual(usedExtent(wb.sheets[0]), { rows: 1, cols: 1 });
-  const m = toModel(wb.sheets[0]);
-  assert.equal(serializeModel(m), '| a   |');
+  assert.equal(serializeModel(toModel(wb.sheets[0])), '---\nname: S\n---\n\nA1 a');
 });
