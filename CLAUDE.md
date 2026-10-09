@@ -69,6 +69,10 @@ src/
                      resolution, save-time pruning — Marpit-free so app.js can import it in every build
     slides/          The {slides} deck engine (pure, Node-tested): deck.js (Marpit render, `---`/`===` split, exports'
                      standalone documents), themes.js (GENERATED — the three Marp themes as offline CSS)
+    tables/          {document} TABLE FORMULAS engine (pure, Node-tested `test/tables.test.mjs`): grid.js (Markdown
+                     tables → sheets, `||`/`^^` merges, A1 addresses, `alignTables`), formula.js (Excel grammar +
+                     ~70 functions, `evaluateWorkbook`), render.js (the grid HTML, CSV, a real .xlsx, HTML/print)
+    zip.js           Stored-only ZIP writer (EPUB, the .xlsx, the multi-sheet CSV export)
     hash.js, crypto.js
     brand.js         `{name}` / `{glyph}` per app — THE naming source (site, manifests, icons, title bar)
     build-info.js    The running build's identity (version · commit · channel from the defines) + the
@@ -76,10 +80,11 @@ src/
     (assets/piano-soundfont.js — committed FluidR3 acoustic grand, ~2.5MB, note→dataURI)
   dsl/               One module per format; self-registers via registry.js
     markdown.js, abcjs.js, mermaid.js, slides.js, fountain.js
+    markdown-tables.js  Tables with formulas inside {document}: the marked block extension, DOCX/XLSX, editor pieces
     registry.js      registerDSL / getDSL / listDSLs
     abcjs-piano-loader.js  CommonJS drop-in for abcjs's ./load-note (offline soundfont)
   upub/              The uPub variant's own shell (no CodeMirror — see "uPub")
-    main.js, app.js, editor.js, syntax.js, epub.js, zip.js, preview.js, guide-content.js
+    main.js, app.js, editor.js, syntax.js, epub.js, preview.js, guide-content.js
     comments.js      Inline comments for the custom editor (overlay highlights + card) — uDraft reuses it
     library.js       `ShellLibrary`: the library for the uPub-style shells (boot/persist/sheet/save/open verbs) — uDraft reuses it
     (editor.js = the SHARED custom line editor: `syntax:` option plugs in a
@@ -92,8 +97,8 @@ src/
   ui/                App shell + everything DOM
     app.js           App singleton: shell, mounting, init, save, mobile panes, data file load/save
     state.js         AppState (EventBus): state.update/emit/on, VIEW_MODES, PANELS, diff, pendingCommit
-    editor.js        CodeMirror 6 setup: per-section highlighting, inline-comment gestures, no gutter
-    editor-sections.js  Collapsible front-matter bar (default-collapsed on load; the only section kind)
+    editor.js        CodeMirror 6 setup: per-section highlighting, inline-comment gestures, no gutter, ONE plain
+                     text surface (the collapsible front-matter bar / section bars were removed 2026-10)
     preview.js       Renders the active model/DSL to the preview pane
     topbar.js        Desktop top bar: ‹ library toggle, menu, title, Save pill (shows the NEXT version) / version pill; the
                      history list (pending node = note + major switch + Save, the versions, the "on device" marker; mounted
@@ -172,7 +177,7 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 **Editor (`editor.js`)** — CodeMirror 6, styled as **the iA Writer surface (2026-10)**: ONE monospaced size (16px desktop / 17px phone, line-height 1.7, `--editor-font-size` / `--editor-pad-x` in app.css), a tall 2px caret in the accent (`.cm-cursor` padding on a content-box extends CM's glyph-high caret by the half-leading), **NO gutter and no active-line tint** (the v0.2–v0.4 comment rail with its M/S marks is gone; `highlightActiveLineGutter` too), the text starting at a plain 24px margin with a 40vh bottom pad so the last line scrolls up to eye level. Headings are bold in the text colour and the Markdown marks (`#`, `**`, `-`, `>`) recede to grey — `--hl-heading: var(--text)`, `--hl-meta` muted; code DSLs keep a quiet palette. `editor-theme.js` is entirely `var(--…)` tokens (no per-theme hex, no `!important` forced overrides — dark/light/auto all come from app.css). **Per-section syntax highlighting** (`sectionSyntaxField`) runs each section's DSL parser through `editorHighlight`; the front-matter block is highlighted as YAML instead of the DSL. **Comments are inline range comments** (see below). **Line wrapping is a per-DSL choice**: abcjs turns it on in its `getEditorExtensions()` (`EditorView.lineWrapping` — music wraps, no horizontal scroll, 2026-09); the other DSLs still scroll horizontally. **Vertical (column) selection** via CM's `rectangularSelection()` + `crosshairCursor()` (Alt+drag, the VS Code/Sublime convention; multiple selections were already enabled). The updateListener also emits **`editor-type` `{pos, ch}`** for single-character `input.type` insertions (multi-char inserts = paste-like, deliberately silent) — consumed by the abcjs note audition (below).
 
-**Collapsible front matter (`editor-sections.js`)** — the leading `---`…`---` block (recognised once the closing fence exists) gets a labelled, collapsible bar (styled like the blame view's commit-group headers): expanded = a thin bar above it (block widget, `side:-1`); collapsed = a block-`replace` bar showing the label + line count. **Block `replace` must end at a line END, not the next line's start** — ending on the next line's start collides with an adjacent expanded header widget (anchored there, `side:-1`) and CM drops it, so the collapse backs up over the block's trailing newline. **On load the front matter is collapsed**; `resetCollapseEffect` (dispatched from `Editor.setValue`) re-applies this on checkout/branch-switch/open. A block that becomes valid *while typing* is NOT auto-collapsed (it's not in the collapsed set) so it appears expanded as you write it. Collapse state is a per-editor `Set` of section ids toggled by clicking the bar. **Bars are suppressed entirely in landscape phone** (`landscapePhoneMql` — no vertical room); `detectSections` returns `[]` there while the collapse `Set` is preserved, and `refreshSectionsEffect` (dispatched on the mql `change`) rebuilds so rotating back to portrait restores the previous state. **The ABC tune header / music split was removed (2026-09)** — an ABC tune is edited as one piece of text; the front matter is the only section kind now (the module keeps a list so another kind can slot in). This is deliberately NOT the old generic `@codemirror/language` fold (removed as "too confusing", see Mobile section).
+**No section bars (2026-10).** The editor is ONE plain text surface: the collapsible front-matter bar (`editor-sections.js`, block widgets that folded the `---`…`---` block on load) was removed as noise — the front matter is just the first lines of the text, highlighted as YAML. `Editor.setValue` only closes the comment card now. Do not re-add folding of any kind (the generic `@codemirror/language` fold went for the same reason, see Mobile section).
 
 **ABC "one measure per line" formatter (`dsl/abc-align.js`, `alignSource` on the abcjs DSL; Alt-Shift-F, the mobile FAB `.uf-align-btn`, the landscape dock `.ps-align`)** — reflows every music line so each measure sits on its own source line (2026-09; it replaced the column-padding voice aligner, which drifted once lines wrap). **Staff-line breaks are preserved** with the ABC ` \` line continuation: every measure except the last of its original line ends in ` \`, and both engines honour it (abc2svg joins continued lines; abcjs rewrites `\`+newline in place, so `startChar` offsets stay stable and a following `w:` lyric line still binds to the joined line). Idempotent. Fields/comments/`#!`/front matter pass through; the `buildVoiceMap` char→voice lookup is unaffected because a continuation line inherits the last `[V:]`/`V:` boundary before it. Unit-tested in `test/abc-align.test.mjs`.
 
@@ -757,6 +762,76 @@ slides layout) is untouched and unrelated.
   shared `fm-schema.js` autocomplete/lint (theme enum = the vendored theme names).
   `marp: true` is accepted and ignored (pasted Marp decks).
 
+## {document} tables with formulas (`src/dsl/markdown-tables.js` + `src/core/tables/`, 2026-10)
+
+**Every `| … |` table in a {document} is a small spreadsheet** — it started as a separate
+{sheet} app and was folded into {document} the same day (the user's call: it is a table syntax,
+not an app). Every extension is an existing Markdown convention, so a GitHub table pastes in
+unchanged:
+
+- **Formulas**: a cell starting with `=` (Excel grammar: `=B2*C2`, `=SUM(D2:D9)`,
+  `=IF(B2>10,"big","small")`, `=SUM(B:B)`; `+ - * / ^ &`, comparisons, `%`). **A bare column
+  letter is the cell in THIS row** (`=B*C`) — the one non-Excel addition, so a column formula
+  is written once per row with no renumbering; `formulaForExcel` expands it (`B5*C5`) for the
+  .xlsx. `'=…` (apostrophe) forces text. **Across tables**: the heading right above a table
+  names it (`=Budget!D4`, `='Q1 Sales'!A1`; no heading → `Sheet1`, `Sheet2`…).
+- **Merges = the MultiMarkdown conventions**: `||` with NOTHING between the pipes extends the
+  previous cell across one more column (`| |` with a space is an empty cell); `^^` as a cell's
+  whole content merges it into the cell above. Both survive into the .docx and .xlsx exports.
+- **Addresses are Excel's**: columns A…Z, AA…; rows count pipe rows from 1 — the `|---|`
+  separator is NOT a row, so the header row is row 1 (as in Excel). Rows above the separator
+  are header rows; no separator → no header. `:--`/`--:`/`:-:` align; default numbers right,
+  text left. Literal cells show what was typed; their VALUE is what they read as (`1,200`,
+  `$3.50`, `12%` → 0.12, `(5)` → −5, `TRUE`). Formula results show General (10 significant
+  digits, `formatNumber`) or `decimals: N` from the front matter; `TEXT(x, fmt)` covers
+  `0.00` / `#,##0` / `0%` / `$#,##0.00`.
+- **The text is the source of truth** — results are never written back, so diffs are what you
+  typed. `evaluateWorkbook` is memoised per cell, dependency-driven, cycle-safe (`#CIRC!`);
+  errors are Excel's (`#DIV/0! #NAME? #VALUE! #REF! #N/A #NUM!`) and propagate through ranges.
+  Coercion follows Excel: empty = 0 / "", numeric text counts in arithmetic but SUM/AVERAGE/
+  COUNT over a RANGE skip text and booleans, `IF`/`IFERROR` branches are lazy.
+- **Engine (`core/tables/`, pure, `test/tables.test.mjs`)**: `grid.js` (`parseWorkbook` → sheets
+  with `grid[r][c]` → the anchor cell, `cells[]` with `from/to` = the trimmed content and
+  `rawFrom/rawTo` = pipe to pipe, `blocks[]` in document order — `prose` / `name` / `sheet`;
+  `alignTables` pads every column, idempotent; `tsvToTable` for a pasted spreadsheet block),
+  `formula.js` (tokenizer → Pratt parser → AST → `evaluate`; `FUNCTIONS` ~70 Excel names,
+  `FUNCTION_NAMES` feeds the completion), `render.js` (`renderSheetHtml` = the grid, with the
+  Excel-style rulers — corner, column letters, row numbers — only when `headings` is asked,
+  colspan/rowspan, `data-addr`, `data-doc-from/to` on every cell for click-back; CSV; the
+  **.xlsx writer** — inline strings, `<f>` + cached `<v>` so Excel/Numbers/Sheets show values at
+  once and recalc on edit, `<mergeCells>`, bold header style, sheet names clipped to Excel's 31
+  chars). `src/core/zip.js` (moved from `upub/`) is the stored-only ZIP both EPUB and XLSX use.
+- **The glue (`dsl/markdown-tables.js`)**: `workbookFor(text)` caches parse+eval per document
+  text. **marked**: `markedTablesExtension` is a BLOCK extension that claims every table whose
+  rows all have leading + trailing pipes (anything else falls through to marked's own GFM
+  table) and renders it via `renderSheetHtml` — rulers only on a table that holds a formula
+  (`hasFormula`), so a plain table keeps the document look. **Values come from the WHOLE
+  document**: markdown.js calls `setTableContext(fullText)` before every parse
+  (`state.currentContent` in `render()` — layouts parse the document in SLICES and a slice
+  cannot compute `=Budget!D4` — the export's content in `renderToString`/`exportDocx`), and the
+  renderer matches a token to its sheet by raw text, identical tables in document order; an
+  unmatched table is computed on its own. `_annotateClickback` still sees one block element
+  per token (the `.uf-sheet-block` wrapper); the cells inside carry ABSOLUTE offsets (DOMPurify
+  keeps `data-*`). The caret's cell is outlined live (`_markActiveCell` on `'editor-select'`,
+  and after a content change on a short delay — no re-render). **DOCX**: `case 'ufTable'` →
+  `tableTokenToDocx` (docx `columnSpan` / `verticalMerge` restart+continue, computed values,
+  bold header). **Exporters**: `xlsx` ("Tables as Excel") added to {document}'s list.
+  **Editor** (spread into `getEditorExtensions`): `Prec.high` Tab / Shift-Tab = next /
+  previous CELL (selects the content; returns false outside a table row so Tab still
+  indents; past the last cell inserts a new row of the same width; the separator row is
+  skipped), a ViewPlugin tinting `=`/refs/functions/strings and the `||`/`^^` spans
+  (`cm-sheet-*` classes), hover = the computed value, formula errors merged into
+  `markdownLint`, `tableComplete` (function names with one-line details, after `=`, or
+  Ctrl-Space right after `=`) ahead of the emoji completion in `markdownComplete`, a `paste`
+  handler turning TSV into a table. `alignSource: alignTables` (Alt-Shift-F) and
+  `actions` = Insert table · Align table columns (⋯ menu + phone bubble). `decimals` lives in
+  `markdownFrontMatterSchema` via `tablesFrontMatterSchema`. Help: the "Tables" section +
+  the "Table formulas" group in `DSL_HELP.markdown`. CSS: `.uf-sheet*` in app.css (the
+  rulers' look is gated on `.has-rulers`), `TABLE_EXPORT_CSS` appended to markdown's
+  `EXPORT_CSS` for HTML/PDF.
+- **Not done / ideas**: no date functions, no number-format row (use `TEXT()` or `decimals:`),
+  no CSV import, no charts.
+
 ## Mobile / iOS (hard-won — read before touching layout)
 
 The app is a `100dvh`-ish flex column. On phones (`@media max-width:640px`, OR landscape `(orientation: landscape) and (max-height: 500px) and (pointer: coarse)`) **the desktop top bar is hidden entirely** (`#uf-topbar { display:none }`) and the **phone top bar (`#uf-pane-switch`, `src/ui/pane-switch.js`) is the sole top chrome**, sitting directly below the site-nav (if present) under the safe-area inset (which lives on `#unifile-app` padding-top). Only the active one of three panes (**commit-log · editor · render**) is displayed; `App._setupMobilePanes()` tracks the pane into `#unifile-app[data-mobile-pane]`.
@@ -825,7 +900,7 @@ Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`
 
 ## Conventions & workflows
 
-- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site; add the app to `src/core/brand.js` + `npm run gen:icons` (commit only the new `templates/icons/<abbrev>/`); list the new `pwa-<abbrev>` in `sync-site.mjs` and `render-site.mjs` (`TYPE_TO_ICON` + the copy list). A DSL that owns the whole document sets `wholeDocument: true` (see {slides}); `actions: [{id,label,glyph,run}]` puts verbs on the ⋯ menu and the phone bubble.
+- **Adding a DSL:** create `src/dsl/<id>.js` that `registerDSL(...)`; add an entry to `DSL_META` in `build.mjs` to give it a dedicated build; import it in `main.js` for dev; add a hub page + `types.yml`/`apps.yml` entries to surface it on the site; add the app to `src/core/brand.js` + `npm run gen:icons` (commit only the new `templates/icons/<abbrev>/` — the run regenerates every app's PNGs byte-differently, `git checkout` the others); list the new `pwa-<abbrev>` in `sync-site.mjs` and `render-site.mjs` (`TYPE_TO_ICON` + the copy list); a help entry in `topbar.js DSL_HELP`. Before adding an app, ask whether it is really a FEATURE of an existing one — the table formulas (2026-10) were built as a {sheet} app first and folded into {document}. A DSL that owns the whole document sets `wholeDocument: true` (see {slides}); `actions: [{id,label,glyph,run}]` puts verbs on the ⋯ menu and the phone bubble.
 - **Verifying UI changes:** use the preview tools against a build (`node build/build.mjs --dsl=abcjs --no-pwa`, serve `dist/` — see `.claude/launch.json`, port 8765). Resize to 375px for mobile. **Always build the variant you're testing.** In the PWA build the app object is NOT on `window.__unifile` (quines only); drive it through `globalThis.__uf.state` (`state.emit('checkout', {content})` sets the editor text). Playwright lives in `/opt/node-tools/node_modules/playwright` (not a project dependency); the pre-install banner (`#uf-install-banner`) covers the phone title bar in a browser tab — remove it before tapping.
 - **Deploying is automatic on push:** Cloudflare Pages rebuilds from source (`build:site && site:preview`) on every push to `main`, so a source-only commit deploys correctly — no need to pre-run `build:site` for the deployed site to be current (that old footgun is gone). You still build the specific variant locally to *test* UI changes in the preview.
 - **Branches — `dev` is the working branch; `main` only ever receives `dev`.** Every change is

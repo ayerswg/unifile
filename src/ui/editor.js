@@ -43,8 +43,6 @@ import {
   mapThreadPositions,
   clampThreadPositions
 } from './comments.js';
-import { sectionCollapseExtension, resetCollapseEffect,
-         refreshSectionsEffect, landscapePhoneMql } from './editor-sections.js';
 
 // ---------------------------------------------------------------------------
 // DSL-source range highlight
@@ -386,10 +384,6 @@ const baseExtensions = [
   // Shebang line decoration (#! section headers appear muted/italic)
   shebangDecoField,
 
-  // Collapsible front-matter section (default-collapsed on load so the body is
-  // what you see first).
-  sectionCollapseExtension,
-
   // Inject the highlight CSS rules so sectionSyntaxField's
   // Decoration.mark({ class }) spans get styled. Using the StyleModule directly
   // (instead of syntaxHighlighting(editorHighlight)) injects the CSS without
@@ -630,12 +624,6 @@ export class Editor {
 
     this._unsub.push(state.on('checkout',     ({ content }) => this.setValue(content)));
 
-    // Rotating between portrait/landscape suppresses or restores the section
-    // bars (see editor-sections.js). Rebuild them without disturbing the
-    // per-section collapse state.
-    landscapePhoneMql.addEventListener('change', () => {
-      this._view?.dispatch({ effects: refreshSectionsEffect.of(null) });
-    });
     this._unsub.push(state.on('view-mode-change', () => this._updateVisibility()));
 
     this._unsub.push(state.on('panel-change', () => {
@@ -1003,11 +991,10 @@ export class Editor {
     if (!this._view) return;
     const current = this._view.state.doc.toString();
     if (current === text) return;
-    // Loading a different document (checkout / branch switch / open) re-applies
-    // the load-time section collapse defaults.
+    // Loading a different document (checkout / restore / open).
     this._view.dispatch({
       changes: { from: 0, to: current.length, insert: text ?? '' },
-      effects: [resetCollapseEffect.of(null), closeCommentEffect.of(null)],
+      effects: [closeCommentEffect.of(null)],
       annotations: docReplaceAnnotation.of(true),
     });
   }

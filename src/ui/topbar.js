@@ -712,10 +712,69 @@ console.log(x);
       {
         title: 'Tables',
         content: `<pre><code>| Name   | Age |
-|--------|-----|
-| Alice  | 30  |
-| Bob    | 25  |</code></pre>
-<p class="help-note">Alignment: <code>:---</code> left, <code>:---:</code> center, <code>---:</code> right</p>`
+|--------|----:|
+| Alice  |  30 |
+| Bob    |  25 |</code></pre>
+<p class="help-note">Rows above the <code>|---|</code> line are the header. Alignment: <code>:---</code> left, <code>:---:</code> center, <code>---:</code> right; by default numbers sit right and text left. <strong>Tab / Shift-Tab</strong> move between cells (past the last cell: a new row), <strong>Alt-Shift-F</strong> (⋯ → Align table columns) lines the pipes up, ⋯ → <strong>Insert table</strong> drops in a blank 3×3, and a block copied from a spreadsheet pastes as a table. A table is also a small spreadsheet — see <em>Table formulas</em>.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Formulas',
+        content: `<pre><code>| Item   | Qty | Price | Total       |
+|--------|----:|------:|------------:|
+| Apples |   3 |  1.20 | =B*C        |
+| Pears  |   2 |  0.80 | =B*C        |
+| Total  |     |       | =SUM(D2:D3) |</code></pre>
+<p class="help-note">A cell that starts with <code>=</code> is a formula (Excel's grammar): <code>=B2*C2</code>, <code>=SUM(D2:D9)</code>, <code>=SUM(B:B)</code>, <code>=IF(B2&gt;10, "big", "small")</code>. <strong>A bare column letter means this row</strong> — <code>=B*C</code> on every row, no renumbering. Columns are A, B, C…; rows count from 1 at the first row (the header is row 1, as in Excel; the <code>|---|</code> line is not a row). A table with a formula shows the letters and numbers in the preview; hover a formula in the text for its value. <code>'=</code> (an apostrophe) forces text.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Across Tables',
+        content: `<pre><code># Budget
+| … |
+
+# Summary
+| Spent | =Budget!D4       |
+| Avg   | ='Q1 Sales'!B9   |</code></pre>
+<p class="help-note">The heading above a table is its name: <code>=Budget!D4</code> reads cell D4 of the table under <em># Budget</em> (quote a name with spaces). Tables with no heading are <code>Sheet1</code>, <code>Sheet2</code>… Results are shown, never written into the text, so a diff is only what you typed.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Functions',
+        content: `<pre><code>SUM AVERAGE MIN MAX COUNT COUNTA COUNTBLANK PRODUCT MEDIAN STDEV
+SUMIF COUNTIF AVERAGEIF SUMPRODUCT LARGE SMALL RANK
+IF IFERROR AND OR NOT ISBLANK ISNUMBER ISTEXT ISERROR
+ROUND ROUNDUP ROUNDDOWN INT TRUNC CEILING FLOOR ABS MOD POWER SQRT
+EXP LN LOG LOG10 PI
+LEN UPPER LOWER PROPER TRIM LEFT RIGHT MID FIND SEARCH SUBSTITUTE
+CONCAT TEXTJOIN REPT TEXT VALUE N
+VLOOKUP HLOOKUP INDEX MATCH ROW COLUMN ROWS COLUMNS</code></pre>
+<p class="help-note">Type a few letters after <code>=</code> (or Ctrl-Space) for the completion menu with a one-line description of each. Operators: <code>+ - * / ^</code>, <code>&amp;</code> joins text, <code>= &lt;&gt; &lt; &gt; &lt;= &gt;=</code> compare, <code>%</code> is a percentage. Errors read as in Excel — <code>#DIV/0!</code>, <code>#NAME?</code>, <code>#VALUE!</code>, <code>#REF!</code>, <code>#N/A</code>, <code>#CIRC!</code> (circular) — and are underlined in the text.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Merged Cells',
+        content: `<pre><code>| Region   | Q1 | Q2 |
+|----------|---:|---:|
+| North    ||  5 |        North spans TWO columns
+| Total    |  8 ||       the 8 spans Q1 and Q2
+| ^^       |  1 |  2 |   ^^ merges with the cell above</code></pre>
+<p class="help-note"><code>||</code> (nothing between the pipes) extends the cell before it across the next column — <code>| |</code> with a space is an empty cell. <code>^^</code> as a cell's whole content merges it into the cell above. Merges survive into the Word and Excel exports.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Values & Formatting',
+        content: `<pre><code>| 1,200 | $3.50 | 12% | TRUE | (5) |     read as 1200 · 3.5 · 0.12 · TRUE · -5
+| =TEXT(D4, "#,##0.00") | =ROUND(D4, 1) |
+| **bold** | *italic* | \`code\` | a \\| b |</code></pre>
+<p class="help-note">A literal cell shows exactly what you typed; its <em>value</em> in a formula is the number it reads as. <code>TEXT(x, "0.00")</code>, <code>"#,##0"</code>, <code>"0%"</code>, <code>"$#,##0.00"</code> format a result; <code>decimals: 2</code> in the front matter rounds every non-integer result for display. Markdown inline formatting works inside a cell; <code>\\|</code> is a literal pipe.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Exports',
+        content: `<pre><code>Tables as Excel (.xlsx)   every table a sheet; formulas kept, cells merged
+Word (.docx) · HTML · PDF  computed values, merged cells</code></pre>
+<p class="help-note">The .xlsx opens in Excel, Numbers, LibreOffice and Google Sheets with live formulas; column formulas (<code>=B*C</code>) are written out per row (<code>=B2*C2</code>).</p>`
       },
       {
         title: 'Blockquotes',
