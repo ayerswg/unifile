@@ -31,15 +31,19 @@ export const colPx = (sheet, c) => sheet.widths.has(c) ? Math.round(sheet.widths
 
 /**
  * @param {object} opts  { rulers: true, docOffsets: true, view: true (apply sort/filter/hidden),
- *                         extraRows: 0, extraCols: 0 (blank rows/cols past the data, the live grid's room to grow) }
+ *                         extraRows: 0, extraCols: 0 (blank rows/cols past the data),
+ *                         minRows: 0, minCols: 0 (the grid is at least this big — blank rows/cols
+ *                         pad the data's extent up to it; the live grid's 50×5 floor) }
  */
 export function renderSheetHtml(book, sheet, opts = {}) {
   const rulers = opts.rulers !== false;
   const docOffsets = opts.docOffsets !== false;
-  const totalCols = sheet.cols + (opts.extraCols ?? 0);
+  const extraCols = Math.max(opts.extraCols ?? 0, (opts.minCols ?? 0) - sheet.cols);
+  const extraRows = Math.max(opts.extraRows ?? 0, (opts.minRows ?? 0) - sheet.rows.length);
+  const totalCols = sheet.cols + extraCols;
   const colsShown = opts.view === false ? Array.from({ length: totalCols }, (_, i) => i) : viewCols(sheet, totalCols);
   const rowsData = opts.view === false ? sheet.rows.map((_, r) => r) : viewRows(book, sheet);
-  let rowsShown = rowsData.concat(Array.from({ length: opts.extraRows ?? 0 }, (_, i) => sheet.rows.length + i));
+  let rowsShown = rowsData.concat(Array.from({ length: extraRows }, (_, i) => sheet.rows.length + i));
   // Windowing (the live grid on tall sheets): rows outside [from, to) become
   // spacer rows of their summed height; frozen rows always render.
   let spacerBefore = 0, spacerAfter = 0;

@@ -334,6 +334,10 @@ export function withSheet(text, index, op, book = null) {
   const model = sheet ? toModel(sheet) : emptyModel(index === 0 ? 'Sheet1' : `Sheet${index + 1}`);
   const result = op(model, sheet, wb) ?? {};
   if (result.cancel) return { text, changes: [], ...result };
+  // An op that changed nothing (an insert past the data, a merge already
+  // there) is no edit: it must not rewrite a hand-written file into the
+  // canonical form on its own.
+  if (sheet && serializeModel(model) === serializeModel(toModel(sheet))) return { text, changes: [], ...result };
   const applied = applyModel(text, wb, index, model);
   return { ...applied, ...result };
 }
@@ -467,7 +471,11 @@ function structural(text, index, axis, at, n, book, mutate) {
   // fill: dedupe so one replacement goes out per span.
   const seen = new Set();
   const deduped = changes.filter(ch => { const k = ch.from + ':' + ch.to; if (seen.has(k)) return false; seen.add(k); return true; });
-  deduped.push({ from: sheet.from, to: sheet.to, insert: serializeModel(m) });
+  const body = serializeModel(m);
+  // Inserting past the data (a blank row / column the text cannot describe)
+  // changes nothing: no edit, no normalisation of a hand-written file.
+  if (!deduped.length && body === serializeModel(toModel(sheet))) return { text, changes: [] };
+  deduped.push({ from: sheet.from, to: sheet.to, insert: body });
   return finish(text, deduped);
 }
 

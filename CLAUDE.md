@@ -904,8 +904,20 @@ sparse and large): it is a per-sheet YAML front matter + one LINE PER CELL OR RA
   own: `editor-undo`/`editor-redo`).
 - **The grid (`ui/sheet-grid.js`).** ONE instance per preview host (WeakMap), `update(book)` re-renders
   the table from `render.js renderSheetHtml` (same markup as the HTML export + the quine's static
-  preview, + `extraRows/extraCols` blank room to grow) and keeps only VIEW state: active sheet,
+  preview) and keeps only VIEW state: active sheet,
   selection (`{r1,c1,r2,c2, anchor, head, mode: cells|rows|cols|all}`), scroll, an edit in progress.
+  **The grid's size (2026-10) = the larger of a 5 columns × 50 rows floor and the sheet's extent**
+  (the farthest row / column the text describes — a formula in `I60` shows A…I × 60;
+  `renderSheetHtml`'s `minRows/minCols`, `MIN_ROWS/MIN_COLS` in sheet-grid.js). A blank row or column
+  past the extent is purely visual — the DSL cannot describe one — so **Insert row/column past the
+  data, or an arrow past the edge, grows the VIEW** (`_viewRows/_viewCols`, reset on a sheet switch,
+  `_growView`), never the text: `edit.js` `structural` and `withSheet` return NO change when the
+  op's canonical form equals the untouched sheet's (an insert past the data used to rewrite a
+  hand-written file into canonical form for nothing). Ops that reach into those blank cells
+  (merge, insert) take `_shownRange()` (bounded by what is DRAWN); `_boundedRange()` (bounded by
+  the DATA) stays for copy/fill/style — the data-bounded range collapsed a merge of blank cells
+  to one cell, which `mergeRange` cancels, so "merge didn't work" (real bug). The context menu
+  refocuses the grid after its action, so typing right after an insert lands in the cell.
   Every op reads `state.currentContent` fresh (never a cached model — the preview's 300 ms debounce
   would make one stale between quick commits) and redraws at once from the result; the preview's own
   render follows and finds the same text. Gestures: type = replace, Enter/Tab move, F2/dbl-click edit
