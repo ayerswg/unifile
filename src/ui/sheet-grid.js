@@ -35,8 +35,13 @@ import { chartData, renderChartSvg, CHART_DEFAULT_SIZE } from '../core/sheet/cha
 import { CHART_TYPES } from '../core/sheet/parse.js';
 import { isFormula, operandSlotAt, completionAt, signatureAt, acceptCompletion, insertRef, refText, formulaRefs } from '../core/sheet/formula-edit.js';
 
-const EXTRA_ROWS = 40;
-const EXTRA_COLS = 6;
+// The grid shows at least this many rows × columns, or the sheet's extent
+// (the farthest row / column the text describes), whichever is larger.  A
+// blank row or column past the extent is purely visual — the DSL has
+// nothing to say about it — so inserting one there, or moving past the
+// edge, grows the VIEW (`_viewRows` / `_viewCols`) rather than the text.
+const MIN_ROWS = 50;
+const MIN_COLS = 5;
 // Rows past this many are windowed: only the visible band (+ a buffer) is in
 // the DOM; spacer rows keep the scroll height honest.
 const VIRTUAL_FROM = 150;
@@ -71,6 +76,9 @@ export class SheetGrid {
     this.book = null;
     this.sheetIndex = 0;
     this.sel = { r1: 0, c1: 0, r2: 0, c2: 0, anchor: { r: 0, c: 0 }, head: { r: 0, c: 0 }, mode: 'cells' };
+    this._viewRows = 0;       // rows / cols the user grew the grid to (view state, per sheet)
+    this._viewCols = 0;
+    this._viewFor = 0;        // the sheet index the view growth belongs to
     this.editing = null;      // { r, c }
     this._drag = null;
     this._clip = null;        // internal clipboard fallback
@@ -161,6 +169,29 @@ export class SheetGrid {
     const rows = Math.max(1, sh?.rows.length ?? 1), cols = Math.max(1, sh?.cols ?? 1);
     return { r1: R.r1, c1: R.c1, r2: Math.min(R.r2, Math.max(rows - 1, R.r1)), c2: Math.min(R.c2, Math.max(cols - 1, R.c1)) };
   }
+  /**
+   * The selection bounded by the GRID (what is drawn), not the data: a merge
+   * or an insert reaching into the blank cells past the extent keeps its
+   * whole range (the data-bounded range collapsed a merge of blank cells to
+   * one cell, which cancelled it — real bug).
+   */
+  _shownRange() {
+    const R = this._range();
+    return { r1: R.r1, c1: R.c1, r2: Math.min(R.r2, Math.max(this._shownRowCount() - 1, R.r1)), c2: Math.min(R.c2, Math.max(this._shownColCount() - 1, R.c1)) };
+  }
+  /** How many columns / rows the grid draws: the floor, the extent, or what the user grew it to. */
+  _shownColCount() { return Math.max(MIN_COLS, this.sheet?.cols ?? 1, this._viewCols); }
+  _shownRowCount() { return Math.max(MIN_ROWS, this.sheet?.rows.length ?? 1, this._viewRows); }
+  /** Make sure the grid draws at least `rows` × `cols`; re-renders when it grew. */
+  _growView(rows, cols) {
+    const before = [this._shownRowCount(), this._shownColCount()];
+    if (rows > this._viewRows) this._viewRows = rows;
+    if (cols > this._viewCols) this._viewCols = cols;
+    if (this._shownRowCount() === before[0] && this._shownColCount() === before[1]) return false;
+    this._renderTable();
+    this._paint();
+    return true;
+  }
   /** The range as written in a directive: whole rows / columns stay open. */
   _directiveRange() {
     const R = this._range();
@@ -193,15 +224,17 @@ export class SheetGrid {
   _renderTable() {
     const sheet = this.sheet;
     const top = this.scroll.scrollTop, left = this.scroll.scrollLeft;
+    if (this._viewFor !== this.sheetIndex) { this._viewFor = this.sheetIndex; this._viewRows = 0; this._viewCols = 0; }
     if (!sheet) {
       // An empty document: a blank grid to type into (the first edit creates Sheet1).
       const blank = computeWorkbook(ops.starterText('Sheet1'));
-      this.tableWrap.innerHTML = renderSheetHtml(blank, blank.sheets[0], { extraRows: EXTRA_ROWS, extraCols: EXTRA_COLS + 2, docOffsets: false });
+      this.tableWrap.innerHTML = renderSheetHtml(blank, blank.sheets[0], { minRows: this._shownRowCount(), minCols: this._shownColCount(), docOffsets: false });
       this._shown = null;
     } else {
-      this._shown = viewRows(this.book, sheet).concat(Array.from({ length: EXTRA_ROWS }, (_, i) => sheet.rows.length + i));
+      const rows = this._shownRowCount(), cols = this._shownColCount();
+      this._shown = viewRows(this.book, sheet).concat(Array.from({ length: rows - sheet.rows.length }, (_, i) => sheet.rows.length + i));
       const win = this._window();
-      this.tableWrap.innerHTML = renderSheetHtml(this.book, sheet, { extraRows: EXTRA_ROWS, extraCols: EXTRA_COLS, window: win, rowHeight: this._rowH });
+      this.tableWrap.innerHTML = renderSheetHtml(this.book, sheet, { minRows: rows, minCols: cols, window: win, rowHeight: this._rowH });
     }
     this.table = this.tableWrap.querySelector('table');
     this._renderedWindow = this._shown && this._shown.length > VIRTUAL_FROM ? this._window() : null;
@@ -292,7 +325,7 @@ export class SheetGrid {
     const rulerW = 40;
     // Columns: left offsets accumulate the widths of the frozen columns before.
     let left = rulerW;
-    const shownCols = sheet ? viewCols(sheet, sheet.cols + EXTRA_COLS) : [];
+    const shownCols = sheet ? viewCols(sheet, this._shownColCount()) : [];
     for (const c of shownCols) {
       if (c >= frozenCols) break;
       const w = colPx(sheet, c);
@@ -449,12 +482,14 @@ export class SheetGrid {
     // Hidden rows / columns are skipped.
     const sheet = this.sheet;
     if (sheet) {
-      while (dr && sheet.hidden.rows.has(r) && r >= 0 && r < sheet.rows.length + EXTRA_ROWS) r += Math.sign(dr);
-      while (dc && sheet.hidden.cols.has(c) && c >= 0 && c < sheet.cols + EXTRA_COLS) c += Math.sign(dc);
+      while (dr && sheet.hidden.rows.has(r) && r >= 0 && r < this._shownRowCount()) r += Math.sign(dr);
+      while (dc && sheet.hidden.cols.has(c) && c >= 0 && c < this._shownColCount()) c += Math.sign(dc);
       r = Math.max(0, r); c = Math.max(0, c);
     }
     const target = this._cell(r, c);
     if (target && !extend) { r = target.r; c = target.c; }
+    // Stepping past the edge grows the grid by that row / column (Excel never stops you).
+    this._growView(r + 1, c + 1);
     this._select(r, c, { extend });
     this._scrollCellIntoView(r, c);
   }
@@ -707,7 +742,7 @@ export class SheetGrid {
     const wr = this.tableWrap.getBoundingClientRect();
     const shown = this._shown ?? [];
     const lastRow = shown.length ? shown[shown.length - 1] : 0;
-    const lastCol = (this.sheet?.cols ?? 1) + EXTRA_COLS - 1;
+    const lastCol = this._shownColCount() - 1;
     const colours = new Map();
     let html = '';
     for (const ref of formulaRefs(v)) {
@@ -739,13 +774,20 @@ export class SheetGrid {
     const text = state.currentContent ?? result.text;
     this.update(computeWorkbook(text));
     if (select) {
-      if (select.range) { this.sel = { ...this.sel, ...select.range, anchor: { r: select.range.r1, c: select.range.c1 }, head: { r: select.range.r1, c: select.range.c1 }, mode: select.mode ?? 'cells' }; this._paint(); this._mirrorToEditor(); }
+      if (select.range) this._selectRange(select);
       else this._select(select.r, select.c);
     } else {
       this._paint();
       this._mirrorToEditor();
     }
     return true;
+  }
+
+  /** Select a whole range (`{ range, mode }`) and mirror it to the editor. */
+  _selectRange(select) {
+    this.sel = { ...this.sel, ...select.range, anchor: { r: select.range.r1, c: select.range.c1 }, head: { r: select.range.r1, c: select.range.c1 }, mode: select.mode ?? 'cells' };
+    this._paint();
+    this._mirrorToEditor();
   }
 
   // ---------------------------------------------------------------------------
@@ -784,22 +826,30 @@ export class SheetGrid {
       case 'border': this._openBorderPop(ev.target); return;
       case 'merge': {
         const cell = this._cell(head.r, head.c);
+        const S = this._shownRange();
         if (cell && (cell.colspan > 1 || cell.rowspan > 1)) this._apply(ops.unmergeRange(this.text, this.sheetIndex, { r1: cell.r, c1: cell.c, r2: cell.r, c2: cell.c }, this.book), { select: { r: cell.r, c: cell.c } });
-        else this._apply(ops.mergeRange(this.text, this.sheetIndex, R, this.book), { select: { r: R.r1, c: R.c1 } });
+        else this._apply(ops.mergeRange(this.text, this.sheetIndex, S, this.book), { select: { r: S.r1, c: S.c1 } });
         return;
       }
       case 'insert-row': case 'insert-row-above': case 'insert-row-below': {
         const above = id === 'insert-row-above' || (id === 'insert-row' && ev.shiftKey);
-        const n = R.r2 - R.r1 + 1;
-        const at = above ? R.r1 : R.r2 + 1;
-        this._apply(ops.insertRows(this.text, this.sheetIndex, at, n, this.book), { select: { range: { r1: at, r2: at + n - 1, c1: 0, c2: Infinity }, mode: 'rows' } });
+        const S = this._shownRange();
+        const n = S.r2 - S.r1 + 1;
+        const at = above ? S.r1 : S.r2 + 1;
+        const select = { range: { r1: at, r2: at + n - 1, c1: 0, c2: Infinity }, mode: 'rows' };
+        // Past the data a new row is only visual: the grid grows, the text does not.
+        this._growView(at + n, 0);
+        if (!this._apply(ops.insertRows(this.text, this.sheetIndex, at, n, this.book), { select })) this._selectRange(select);
         return;
       }
       case 'insert-col': case 'insert-col-left': case 'insert-col-right': {
         const leftOf = id === 'insert-col-left' || (id === 'insert-col' && ev.shiftKey);
-        const n = R.c2 - R.c1 + 1;
-        const at = leftOf ? R.c1 : R.c2 + 1;
-        this._apply(ops.insertCols(this.text, this.sheetIndex, at, n, this.book), { select: { range: { r1: 0, r2: Infinity, c1: at, c2: at + n - 1 }, mode: 'cols' } });
+        const S = this._shownRange();
+        const n = S.c2 - S.c1 + 1;
+        const at = leftOf ? S.c1 : S.c2 + 1;
+        const select = { range: { r1: 0, r2: Infinity, c1: at, c2: at + n - 1 }, mode: 'cols' };
+        this._growView(0, at + n);
+        if (!this._apply(ops.insertCols(this.text, this.sheetIndex, at, n, this.book), { select })) this._selectRange(select);
         return;
       }
       case 'delete-row': this._apply(ops.deleteRows(this.text, this.sheetIndex, R.r1, R.r2, this.book), { select: { r: R.r1, c: head.c } }); return;
@@ -1145,7 +1195,8 @@ export class SheetGrid {
     const sheet = this.sheet;
     if (!sheet) return null;
     let left = 40, c = 0;
-    while (c < sheet.cols + EXTRA_COLS) { if (sheet.hidden.cols.has(c)) { c++; continue; } const w = colPx(sheet, c); if (x < left + w) break; left += w; c++; }
+    const nCols = this._shownColCount();
+    while (c < nCols) { if (sheet.hidden.cols.has(c)) { c++; continue; } const w = colPx(sheet, c); if (x < left + w) break; left += w; c++; }
     let top = this.table?.tHead?.offsetHeight ?? 0, i = 0;
     const shown = this._shown ?? [];
     while (i < shown.length) { const h = this._rowHeight(shown[i]); if (y < top + h) break; top += h; i++; }
@@ -1311,6 +1362,9 @@ export class SheetGrid {
       const id = b.dataset.menu;
       this._closePop();
       this._act(id, { target: this.bar.querySelector(`[data-act="${id}"]`) ?? this.bar });
+      // The menu button took the focus; give it back to the grid so typing
+      // lands in the cell (unless the action opened a popover or an edit).
+      if (!this.editing && this.pop.hidden) this.root.focus({ preventScroll: true });
     });
   }
 

@@ -714,3 +714,41 @@ B3 {comment: big month}
   assert.ok(importCsv('a;b\n1;2\n').includes('A1:B1 a, b'));
   assert.ok(importCsv('a\tb\n1\t2\n').includes('A2:B2 1, 2'));
 });
+
+test('renderSheetHtml: minRows / minCols pad the extent up to a floor, never below it', () => {
+  const small = computeWorkbook('---\nname: S\n---\nA1:B2 1, 2, 3, 4');
+  const html = renderSheetHtml(small, small.sheets[0], { minRows: 50, minCols: 5 });
+  assert.equal((html.match(/<th class="uf-ss-col/g) || []).length, 5, 'five columns for a 2-column sheet');
+  assert.equal((html.match(/<tr [^>]*data-row=/g) || []).length, 50, 'fifty rows for a 2-row sheet');
+  assert.ok(html.includes('data-addr="E50"'));
+  // A formula out in column I at row 60 sets the extent past the floor.
+  const wide = computeWorkbook('---\nname: S\n---\nA1 1\nI60 =A1*2');
+  const h2 = renderSheetHtml(wide, wide.sheets[0], { minRows: 50, minCols: 5 });
+  assert.equal((h2.match(/<th class="uf-ss-col/g) || []).length, 9, 'through column I');
+  assert.equal((h2.match(/<tr [^>]*data-row=/g) || []).length, 60, 'through row 60');
+  assert.ok(!h2.includes('data-addr="J1"'));
+  // The static render (no floor) stays the bare extent.
+  const bare = renderSheetHtml(small, small.sheets[0]);
+  assert.equal((bare.match(/<th class="uf-ss-col/g) || []).length, 2);
+  assert.equal((bare.match(/<tr [^>]*data-row=/g) || []).length, 2);
+});
+
+test('mergeRange over blank cells past the extent writes the merge and grows the extent', () => {
+  const text = '---\nname: S\n---\nA1 x';
+  const res = mergeRange(text, 0, { r1: 3, c1: 1, r2: 4, c2: 2 }, computeWorkbook(text));
+  assert.ok(res.changes.length, 'a change');
+  assert.ok(res.text.includes('B4:C5 {merge}'), res.text);
+  const book = computeWorkbook(res.text);
+  assert.equal(book.sheets[0].cols, 3);
+  assert.equal(book.sheets[0].rows.length, 5);
+  assert.equal(book.sheets[0].grid[3][1].colspan, 2);
+});
+
+test('an insert past the data, or a no-op merge, is no edit (a hand-written file is left as written)', () => {
+  const text = '---\nname: S\n---\nA1:B2 1, 2, 3, 4';
+  assert.equal(insertCols(text, 0, 5, 1).changes.length, 0);
+  assert.equal(insertRows(text, 0, 10, 2).changes.length, 0);
+  assert.equal(insertCols(text, 0, 1, 1).changes.length, 1, 'inside the data it is a real insert');
+  const merged = '---\nname: S\n---\nA1:B1 a, b\nA1:B1 {merge}';
+  assert.equal(mergeRange(merged, 0, { r1: 0, c1: 0, r2: 0, c2: 1 }).changes.length, 0);
+});
