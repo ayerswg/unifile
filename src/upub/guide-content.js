@@ -58,8 +58,12 @@ strikethrough, code, link, indent, outdent — plus undo and redo. A \`/\` insid
 (\`and/or\`), a URL, or a code block never opens the menu.
 
 On a hardware keyboard: **⌘B** bold, **⌘I** italic, **⌘K** link,
-**⌘Z / ⇧⌘Z** undo/redo, **Tab / ⇧Tab** indent/outdent in lists. On iOS,
-undo is also the system three-finger swipe (or shake).
+**⌘Z / ⇧⌘Z** undo/redo, **Tab / ⇧Tab** indent/outdent in lists, **⌘/**
+(Ctrl+/ on Windows and Linux) comments out the selected lines — they are
+wrapped in an HTML comment, \`<!-- … -->\`, which no reader or export shows;
+press it again to bring them back (inside the front matter it toggles a
+YAML \`#\` instead). On iOS, undo is also the system three-finger swipe (or
+shake).
 
 Pressing **Return** inside a list continues it (numbered lists renumber,
 task lists add a fresh \`[ ]\`). Pressing Return on an *empty* list item

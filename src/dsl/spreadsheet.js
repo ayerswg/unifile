@@ -339,6 +339,8 @@ const spreadsheetDSL = {
   name: 'Spreadsheet',
   extensions: ['.uni', '.txt'],
   editorMode: 'spreadsheet',
+  // Mod-/ (editor.js): `#` remark lines.
+  commentTokens: { line: '#' },
   wholeDocument: true,
 
   render,

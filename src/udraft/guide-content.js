@@ -10,6 +10,9 @@ blueprint. You write statements — one per line — and the plan draws itself:
 walls, door swings, window symbols, dimension strings, room labels with areas.
 
 Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
+A line starting with \`#\` is a comment the plan ignores; on a hardware
+keyboard **⌘/** (Ctrl+/ on Windows and Linux) comments out the selected
+lines and, pressed again, brings them back.
 **Example plan** in the ⋯ menu loads a complete three-floor cottage —
 stacked stairwell, kitchen island, a \`define\`d baby grand placed on two
 floors, an L-shaped desk — plus a **site plan** of its lakeside lot, to

@@ -4382,6 +4382,22 @@ noscript .noscript-wrap {
   padding: 0;
 }
 
+/* The generated "Keyboard → Shortcuts" section: chord | what it does */
+.dsl-help-section-body table.help-keys {
+  border-collapse: collapse; width: 100%; font-size: 12px; line-height: 1.5;
+}
+.dsl-help-section-body table.help-keys td {
+  padding: 3px 10px 3px 0; vertical-align: top; border-bottom: 1px solid var(--border);
+}
+.dsl-help-section-body table.help-keys td:first-child { white-space: nowrap; width: 1%; }
+.dsl-help-section-body kbd {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text);
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px;
+}
+.dsl-help-section-body table.help-keys code {
+  font-family: var(--font-mono); font-size: 11px;
+}
+
 .dsl-help-section-body p.help-note {
   margin: 6px 0 0;
   font-size: 12px;

@@ -34,20 +34,22 @@
  *     shake-to-undo and keyboard undo key also emit) are intercepted.
  */
 
-import { classifyDoc, renderLineHtml, lineClass } from './syntax.js';
+import { classifyDoc, renderLineHtml, lineClass, commentTokens } from './syntax.js';
+import { toggleCommentEdits, commentSpecFor, applyEdits, mapOffset } from '../core/line-comment.js';
 
 const UNDO_LIMIT = 500;
 const UNDO_COALESCE_MS = 900;
 
-const markdownSyntax = { classifyDoc, renderLineHtml, lineClass };
+const markdownSyntax = { classifyDoc, renderLineHtml, lineClass, commentTokens };
 
 export class UPubEditor {
   /**
    * @param {HTMLElement} host      element the editor mounts into
    * @param {object}   opts
    * @param {Function} [opts.onChange]  fired (debounced by caller) after any model change
-   * @param {object}   [opts.syntax]    { classifyDoc, renderLineHtml, lineClass } —
-   *   pluggable line classifier/renderer (defaults to uPub's Markdown module).
+   * @param {object}   [opts.syntax]    { classifyDoc, renderLineHtml, lineClass, commentTokens } —
+   *   pluggable line classifier/renderer (defaults to uPub's Markdown module);
+   *   `commentTokens` is the syntax Mod-/ comments lines out with.
    *   uDraft passes its own; the Markdown-specific commands and the swipe
    *   gesture are gated on line types other syntaxes never emit, so they stay
    *   inert.  The one invariant every syntax must hold:
@@ -286,6 +288,35 @@ export class UPubEditor {
     for (let i = a; i <= b; i++) this.lines[i] = next[i - a];
     this._render();
     if (selAfter) this._setSelOffsets(selAfter.start, selAfter.end);
+    this._emitEdit(before);
+    this.onChange();
+    this._notifySlash();
+    return true;
+  }
+
+  /**
+   * Mod-/ — comment out the selected lines (or uncomment them) in the syntax's
+   * own comment tokens, YAML's `#` inside the front matter
+   * (core/line-comment.js — the same rules as the CodeMirror apps).  A
+   * selection ending at a line start leaves that line out.  One undo step.
+   * Returns true when the text changed.
+   */
+  toggleComment() {
+    const sel = this._selOffsets(); if (!sel) return false;
+    const a = this._lineAt(sel.start).lineIdx;
+    const end = this._lineAt(sel.end);
+    const b = end.lineIdx > a && end.col === 0 && sel.end > sel.start ? end.lineIdx - 1 : end.lineIdx;
+    const spec = commentSpecFor(this.lines, a, b, this.syntax.commentTokens);
+    const res = toggleCommentEdits(this.lines, a, b, spec);
+    if (!res) return false;
+    const before = this.getValue();
+    const start = mapOffset(this.lines, res.edits, sel.start);
+    const stop = mapOffset(this.lines, res.edits, sel.end);
+    this._pushUndo('format');
+    this._lastUndoKind = 'format';
+    this.lines = applyEdits(this.lines, res.edits);
+    this._render();
+    this._setSelOffsets(start, stop);
     this._emitEdit(before);
     this.onChange();
     this._notifySlash();
@@ -933,6 +964,7 @@ export class UPubEditor {
       if (k === 'b') { e.preventDefault(); this.wrapSelection('**'); return; }
       if (k === 'i') { e.preventDefault(); this.wrapSelection('*'); return; }
       if (k === 'k') { e.preventDefault(); this.insertLink(); return; }
+      if (k === '/') { e.preventDefault(); this.toggleComment(); return; }
     }
   }
 

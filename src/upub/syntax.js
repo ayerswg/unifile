@@ -41,6 +41,9 @@ const RE_HR      = /^\s{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})
  *          hr | fm-fence | fm | text
  *   hang — hanging-indent width in characters (prefix that wrapped text aligns after)
  */
+/** Mod-/ (editor.js toggleComment): Markdown has no line comment — the lines are wrapped in one HTML comment. */
+export const commentTokens = { block: { open: '<!--', close: '-->' } };
+
 export function classifyDoc(lines) {
   const infos = new Array(lines.length);
   let inFence = false;

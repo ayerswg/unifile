@@ -442,6 +442,8 @@ const slidesDSL = {
   name: 'Slides',
   extensions: ['.md'],
   editorMode: 'markdown',
+  // Mod-/ (editor.js): an HTML comment — Marpit hides it (a `<!-- _class: … -->` directive is the same syntax).
+  commentTokens: { block: { open: '<!--', close: '-->' } },
 
   // The full document is the deck — preview.js bypasses the section/layout
   // machinery and calls render() with everything.
