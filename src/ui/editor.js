@@ -17,17 +17,17 @@
 import { EditorView, keymap, Decoration, drawSelection,
          rectangularSelection, crosshairCursor,
          highlightSpecialChars } from '@codemirror/view';
-import { EditorState, Compartment, StateField, StateEffect, Transaction, Annotation, RangeSetBuilder, Text } from '@codemirror/state';
+import { EditorState, Compartment, StateField, StateEffect, Transaction, Annotation, RangeSetBuilder, Text, Prec } from '@codemirror/state';
 import { history, defaultKeymap, historyKeymap, indentWithTab, undo, redo, indentMore, indentLess } from '@codemirror/commands';
 import { indentOnInput, bracketMatching, Language } from '@codemirror/language';
-import { autocompletion, completionKeymap, closeBrackets,
+import { autocompletion, completionKeymap, acceptCompletion, closeBrackets,
          closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap } from '@codemirror/search';
 
 import { editorTheme, editorHighlight } from './editor-theme.js';
 import { highlightTree } from '@lezer/highlight';
 import { state, VIEW_MODES, PANELS } from './state.js';
-import { getDSL } from '../dsl/registry.js';
+import { getDSL, listDSLs } from '../dsl/registry.js';
 import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
@@ -343,6 +343,29 @@ const sectionSyntaxField = StateField.define({
 });
 
 // ---------------------------------------------------------------------------
+// `#!dsl` section shebang completion — shared by every DSL
+// ---------------------------------------------------------------------------
+
+/**
+ * `#!` at the start of a line offers the DSL ids a section may declare: the
+ * registered DSLs that render sections (a `wholeDocument` DSL — {slides},
+ * {spreadsheet} — owns the whole text, so its build offers nothing).
+ */
+function shebangComplete(context) {
+  const line = context.state.doc.lineAt(context.pos);
+  const before = line.text.slice(0, context.pos - line.from);
+  const m = /^#!([\w-]*)$/.exec(before);
+  if (!m) return null;
+  let dsls;
+  try { dsls = listDSLs(); } catch { return null; }
+  const own = state.data?.dslType;
+  if (dsls.some(d => d.id === own && d.wholeDocument)) return null;
+  const options = dsls.filter(d => !d.wholeDocument)
+    .map(d => ({ label: `#!${d.id}`, type: 'keyword', detail: d.name, info: `A section rendered as ${d.name}.`, apply: `#!${d.id}\n` }));
+  return options.length ? { from: line.from, options, validFor: /^#![\w-]*$/ } : null;
+}
+
+// ---------------------------------------------------------------------------
 // Static base extensions — same for every DSL
 // ---------------------------------------------------------------------------
 
@@ -368,6 +391,16 @@ const baseExtensions = [
   bracketMatching(),
   closeBrackets(),
   autocompletion(),
+  // Tab accepts the open completion (the IDE convention; CodeMirror's own
+  // completion keymap binds Enter only).  Prec.highest so it runs ahead of
+  // the table-cell Tab (Prec.high in markdown-tables.js) and indentWithTab;
+  // acceptCompletion returns false when no list is open, so Tab still moves
+  // between cells / indents then.
+  Prec.highest(keymap.of([{ key: 'Tab', run: acceptCompletion }])),
+  // `#!` at a line start → the section DSLs this build can render.  A global
+  // languageData provider, so every DSL's own completion source keeps working
+  // beside it.
+  EditorState.languageData.of(() => [{ autocomplete: shebangComplete }]),
   // NOTE: line wrapping is a per-DSL choice — abcjs turns it on in its
   // getEditorExtensions() (music wraps; one measure per line via the formatter).
   // Other DSLs keep horizontal scrolling inside cm-scroller.

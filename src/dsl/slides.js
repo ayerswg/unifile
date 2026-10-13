@@ -32,7 +32,7 @@
 
 import { markdown as cmMarkdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
 import { keymap, EditorView, Decoration, WidgetType, ViewPlugin } from '@codemirror/view';
-import { StateField, StateEffect, RangeSetBuilder } from '@codemirror/state';
+import { EditorState, StateField, StateEffect, RangeSetBuilder } from '@codemirror/state';
 import { linter } from '@codemirror/lint';
 import { observe as observeMarpitSvg } from '@marp-team/marpit-svg-polyfill';
 import { registerDSL } from './registry.js';
@@ -340,6 +340,34 @@ const slidesFrontMatterSchema = {
   marp:            { type: 'enum', values: ['true'], doc: 'Accepted for Marp compatibility — has no effect here.' },
 };
 
+// Marp image keywords: `![bg left:40% w:300 blur](photo.jpg)`.
+const MARP_IMAGE_KEYWORDS = [
+  ['bg', 'Background image of the slide'], ['left', 'Split background: left side'], ['right', 'Split background: right side'],
+  ['vertical', 'Stack split backgrounds vertically'], ['fit', 'Scale the background to fit'], ['cover', 'Scale the background to cover'],
+  ['contain', 'Scale the background to contain'], ['auto', 'Natural background size'],
+  ['w:', 'Width, e.g. w:300'], ['h:', 'Height, e.g. h:200'], ['width:', 'Width'], ['height:', 'Height'],
+  ['blur', 'Filter: blur (blur:10px)'], ['brightness', 'Filter: brightness (brightness:.8)'], ['contrast', 'Filter: contrast'],
+  ['drop-shadow', 'Filter: drop shadow'], ['grayscale', 'Filter: grayscale'], ['hue-rotate', 'Filter: hue rotation'],
+  ['invert', 'Filter: invert'], ['opacity', 'Filter: opacity (opacity:.5)'], ['saturate', 'Filter: saturation'], ['sepia', 'Filter: sepia'],
+];
+// Marp directives inside `<!-- … -->`: `_x` applies to this slide only, `x` from here on.
+const MARP_DIRECTIVES = [
+  ['_class', 'CSS class for THIS slide: lead, invert …'], ['_backgroundColor', 'Background colour for this slide'],
+  ['_backgroundImage', 'Background image for this slide (CSS url())'], ['_color', 'Text colour for this slide'],
+  ['_footer', 'Footer for this slide'], ['_header', 'Header for this slide'], ['_paginate', 'Page number on this slide: true / false / skip'],
+  ['class', 'CSS class from this slide on'], ['paginate', 'Page numbers from this slide on: true / false / skip / hold'],
+  ['header', 'Header from this slide on'], ['footer', 'Footer from this slide on'],
+  ['backgroundColor', 'Background colour from this slide on'], ['backgroundImage', 'Background image from this slide on'],
+  ['backgroundPosition', 'Background position'], ['backgroundRepeat', 'Background repeat'], ['backgroundSize', 'Background size'],
+  ['color', 'Text colour from this slide on'],
+];
+const MARP_CLASSES = ['lead', 'invert', 'gaia'];
+
+/**
+ * Completion: the front-matter schema in the block; in the deck, Marp image
+ * keywords inside `![ … ]`, the document's asset names inside `](`, and the
+ * `<!-- _class: … -->` directives.
+ */
 function slidesComplete(context) {
   try {
     const doc = context.state.doc.toString();
@@ -347,6 +375,32 @@ function slidesComplete(context) {
     if (region && context.pos <= region.bodyFrom) {
       return schemaCompletions(slidesFrontMatterSchema, region, context.pos, context.explicit);
     }
+    const line = context.state.doc.lineAt(context.pos);
+    const before = line.text.slice(0, context.pos - line.from);
+    // `![bg le…` → the image keywords
+    const img = /!\[([^\]]*)$/.exec(before);
+    if (img) {
+      const w = /[\w:-]*$/.exec(img[1])[0];
+      if (!w && !context.explicit) return null;
+      return { from: context.pos - w.length, validFor: /^[\w:-]*$/,
+               options: MARP_IMAGE_KEYWORDS.map(([label, info]) => ({ label, type: 'keyword', info })) };
+    }
+    // `![alt](pho…` → the asset names
+    const ref = /!\[[^\]]*\]\(([^)\s]*)$/.exec(before);
+    if (ref) {
+      const names = Object.keys(state.data?.assets || {});
+      return names.length ? { from: context.pos - ref[1].length, validFor: /^[^)\s]*$/,
+                              options: names.map(label => ({ label, type: 'constant', detail: 'asset' })) } : null;
+    }
+    // `<!-- _cl…` → the directives; `_class: le…` → the theme classes
+    const dir = /<!--\s*(_?[\w]*)$/.exec(before);
+    if (dir) {
+      if (!dir[1] && !context.explicit) return null;
+      return { from: context.pos - dir[1].length, validFor: /^_?\w*$/,
+               options: MARP_DIRECTIVES.map(([label, info]) => ({ label, type: 'property', info, apply: label + ': ' })) };
+    }
+    const cls = /<!--\s*_?class:\s*([\w-]*)$/.exec(before);
+    if (cls) return { from: context.pos - cls[1].length, validFor: /^[\w-]*$/, options: MARP_CLASSES.map(label => ({ label, type: 'constant', apply: label + ' -->' })) };
   } catch { /* ignore */ }
   return null;
 }
@@ -365,7 +419,10 @@ function getEditorExtensions() {
   const md = cmMarkdown({ base: markdownLanguage });
   return [
     md,
-    md.language.data.of({ autocomplete: slidesComplete }),
+    // A GLOBAL languageData provider, not `md.language.data`: lang-markdown
+    // mounts its HTML parser inside `<!-- … -->` blocks, so a source attached
+    // to the Markdown language never runs where the Marp directives live.
+    EditorState.languageData.of(() => [{ autocomplete: slidesComplete }]),
     keymap.of(markdownKeymap),
     linter(slidesLint, { delay: 500 }),
     imageWidgetField,

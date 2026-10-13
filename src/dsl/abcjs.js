@@ -73,27 +73,43 @@ const abcLanguage = StreamLanguage.define({
     }
 
     // ── Music body tokens ────────────────────────────────────────────────────
+    // Inline fields `[K:G]` `[V:1]` `[M:3/4]` `[L:1/8]` `[r: remark]` — a field
+    // like the header's, so its letters must not read as pitches.
+    if (stream.match(/\[[A-Za-z]:[^\]\n]*\]/)) return 'keyword';
+
     // Decorations / dynamics / keyswitch marks: !staccato! !f! !legato! !pizzicato! …
     // Match the whole `!…!` as one token so its inner letters aren't mis-read as
-    // note pitches (e.g. the g/a in !legato!).
-    if (stream.match(/![^!\n]*!/)) return 'meta';
+    // note pitches (e.g. the g/a in !legato!).  `+…+` is the older spelling.
+    if (stream.match(/![^!\n]*!|\+[a-z][^+\n]*\+/)) return 'meta';
 
-    // Barlines
-    if (stream.match(/\|\||\|:|:\||\||\[|\]/)) return 'separator';
+    // Chord symbols / annotations in double quotes ("Am", "^text")
+    if (stream.match(/"[^"\n]*"/)) return 'string';
 
-    // Rests and note lengths
-    if (stream.match(/[zZ]\d*/)) return 'atom';
+    // Barlines and repeats: |] [| || |: :| :: | and the endings |1 [2
+    if (stream.match(/\|\]|\[\||\|\||\|:+|:+\||::|\|\d?|\[\d/)) return 'separator';
 
-    // Note pitches: A-G (optionally #, b, =) followed by octave markers
-    if (stream.match(/[A-Ga-g][#b=]?[,'']*/)) return 'atom';
+    // Chord brackets `[CEG]` and grace notes `{ab}`
+    if (stream.match(/[[\]{}]/)) return 'punctuation';
 
-    // Ties, slurs, beams
-    if (stream.match(/[-()~]/)) return 'punctuation';
+    // Rests (z, x = invisible, Z/X = whole measures) with their length
+    if (stream.match(/[zxZX](?:\d+\/?\d*|\/+\d*)?/)) return 'atom';
 
-    // Chord symbols in double-quotes
-    if (stream.match(/"[^"]*"/)) return 'string';
+    // Notes: accidental (^ ^^ _ __ =) + pitch A–G / a–g + octave marks (, ') +
+    // length (2, /2, 3/2, /).  NOTE `b` after a pitch is the NEXT note (B below
+    // middle C), never a flat — ABC writes flats as `_B`.
+    if (stream.match(/[\^_=]{1,2}[A-Ga-g][,']*(?:\d+\/?\d*|\/+\d*)?|[A-Ga-g][,']*(?:\d+\/?\d*|\/+\d*)?/)) return 'atom';
 
-    // Numbers (time signatures, repeat counts, etc.)
+    // Single-character decorations before a note: . staccato  ~ roll  H fermata
+    // L accent  M mordent  O coda  P mordent  S segno  T trill  u / v bows
+    if (stream.match(/[.~HLMOPSTuv](?=[\^_=]*[A-Ga-g[(])/)) return 'meta';
+
+    // Tuplets `(3`, `(3:2:3`; broken rhythm > <; ties, slurs, beams
+    if (stream.match(/\(\d+(?::\d*){0,2}|[<>]+|[-()~]/)) return 'punctuation';
+
+    // Line continuation
+    if (stream.match(/\\\s*$/)) return 'meta';
+
+    // Numbers (repeat counts, etc.)
     if (stream.match(/\d+/)) return 'number';
 
     stream.next();
@@ -2717,8 +2733,8 @@ function abcBodyComplete(context) {
     }
   }
 
-  // After "K:" → key signatures and clefs.
-  const km = before.match(/^\s*K:\s*(\S*)$/);
+  // After "K:" / "[K:" (inline, anywhere in a music line) → key signatures and clefs.
+  const km = before.match(/(?:^\s*|\[)K:\s*(\S*)$/);
   if (km) {
     return {
       from: context.pos - km[1].length,
@@ -2728,6 +2744,44 @@ function abcBodyComplete(context) {
       ],
       validFor: /^[\w#+=-]*$/,
     };
+  }
+
+  // `clef=` anywhere on a V: / K: line → the clef names.
+  const cm = before.match(/\bclef=([\w+-]*)$/);
+  if (cm) return { from: context.pos - cm[1].length, options: ABC_CLEFS.map(c => ({ label: c, type: 'constant', detail: 'clef' })), validFor: /^[\w+-]*$/ };
+
+  // After "V:" / "[V:" → the voices the tune already declares; after the id,
+  // the voice properties (`clef=`, `name=`, …).
+  const vm = before.match(/(?:^\s*|\[)V:\s*([^\s\]]*)$/);
+  if (vm) {
+    const ids = abcVoiceIds(cmState.doc.toString()).filter(id => id !== vm[1]);
+    return ids.length ? { from: context.pos - vm[1].length, options: ids.map(id => ({ label: id, type: 'variable', detail: 'voice' })), validFor: /^[^\s\]]*$/ } : null;
+  }
+  const vp = before.match(/(?:^\s*|\[)V:\s*[^\s\]]+(?:\s+[^\s\]]+)*\s+([a-z]*)$/);
+  if (vp) {
+    return { from: context.pos - vp[1].length, validFor: /^[a-z]*$/,
+             options: ABC_VOICE_PROPS.map(([label, info]) => ({ label, type: 'property', info, apply: label + '=' })) };
+  }
+
+  // After "M:" / "L:" / "Q:" (header or inline) → the usual values.
+  const fm = before.match(/(?:^\s*|\[)([MLQ]):\s*(\S*)$/);
+  if (fm) {
+    const vals = fm[1] === 'M' ? ABC_METERS : fm[1] === 'L' ? ABC_LENGTHS : ABC_TEMPOS;
+    return { from: context.pos - fm[2].length, options: vals.map(v => ({ label: v, type: 'constant' })), validFor: /^[\w/=|"]*$/ };
+  }
+
+  // `[` + a letter in the music → the inline fields.
+  const im = before.match(/\[([A-Za-z]?)$/);
+  if (im && (context.explicit || im[1])) {
+    return { from: context.pos - im[1].length, validFor: /^[A-Za-z]?:?$/,
+             options: ABC_INLINE_FIELDS.map(l => ({ label: `${l}:`, type: 'keyword', detail: 'inline field', info: ABC_HEADER_DOCS[l] })) };
+  }
+
+  // `%%` at a line start → the formatting / MIDI directives.
+  const dm = before.match(/^%%([\w-]*)$/);
+  if (dm) {
+    return { from: line.from + 2, validFor: /^[\w-]*$/,
+             options: Object.entries(ABC_DIRECTIVES).map(([label, info]) => ({ label, type: 'keyword', info, apply: label + ' ' })) };
   }
 
   // Header field letters (X:, T:, K:, …) — explicit only, so it never pops up
@@ -2742,6 +2796,58 @@ function abcBodyComplete(context) {
   }
   return null;
 }
+
+// Voice ids the document declares (`V:1`, `[V:T1]`), in order of appearance.
+function abcVoiceIds(text) {
+  const ids = [];
+  for (const m of text.matchAll(/(?:^|\[)V:\s*([^\s\]]+)/gm)) if (!ids.includes(m[1])) ids.push(m[1]);
+  return ids;
+}
+
+const ABC_VOICE_PROPS = [
+  ['clef', 'Clef: treble, bass, alto, tenor, perc, none; `treble+8`, `bass-8`.'],
+  ['name', 'Full staff name, e.g. name="Violin I".'],
+  ['sname', 'Short staff name (later systems).'],
+  ['transpose', 'Transposition in semitones for playback.'],
+  ['octave', 'Octave shift for the written notes.'],
+  ['stem', 'Stem direction: up / down.'],
+  ['middle', 'The note drawn on the middle line.'],
+];
+const ABC_INLINE_FIELDS = ['K', 'V', 'M', 'L', 'Q', 'P', 'I', 'r'];
+const ABC_METERS = ['4/4', '3/4', '2/4', '6/8', '9/8', '12/8', '2/2', '3/8', '5/4', '7/8', 'C', 'C|', 'none'];
+const ABC_LENGTHS = ['1/8', '1/4', '1/16', '1/2', '1/32', '1'];
+const ABC_TEMPOS = ['1/4=120', '1/4=100', '1/4=80', '1/4=60', '1/8=120', '3/8=60', '1/2=60', '"Allegro" 1/4=120', '"Andante" 1/4=76'];
+const ABC_DIRECTIVES = {
+  score: 'Staff layout: `%%score (1 2) 3` brackets voices on one staff, `{…}` braces staves.',
+  staves: 'Staff layout (older spelling of %%score).',
+  'MIDI program': 'Instrument for playback: `%%MIDI program 0` (piano) … 127.',
+  'MIDI channel': 'MIDI channel for the following voice.',
+  'MIDI transpose': 'Transpose playback by semitones.',
+  tablature: 'Add a tablature staff below the notation: `%%tablature guitar` / violin / mandolin / fiddle.',
+  strtab: 'Convert the voice into a tab staff (strings highest first): `%%strtab E4 B3 G3 D3 A2 E2`.',
+  pagewidth: 'Page width for the engraving, e.g. `%%pagewidth 21cm`.',
+  scale: 'Engraving scale factor, e.g. `%%scale 0.8`.',
+  staffsep: 'Space between staves.',
+  sysstaffsep: 'Space between systems.',
+  leftmargin: 'Left margin, e.g. `%%leftmargin 1cm`.',
+  rightmargin: 'Right margin.',
+  topmargin: 'Top margin.',
+  measurenb: 'Measure numbers every N bars (0 = first of each line).',
+  barnumbers: 'Measure numbers every N bars (abcjs spelling).',
+  stretchlast: 'Stretch the last line to full width (1) or not (0).',
+  continueall: 'Ignore line breaks in the source (1) — one measure per line in the text, flowing staves.',
+  titlefont: 'Title font: `%%titlefont Times-Bold 20`.',
+  vocalfont: 'Lyrics font.',
+  partsbox: 'Draw a box around part letters.',
+  'abc-version': 'The ABC standard version of this file.',
+  text: 'A line of free text in the score.',
+  center: 'A centred line of text.',
+  begintext: 'Start a block of text (end with %%endtext).',
+  endtext: 'End a text block.',
+  sep: 'A separator line.',
+  vskip: 'Vertical space, e.g. `%%vskip 1cm`.',
+  newpage: 'Start a new page (print).',
+};
 
 /** Build a small tooltip DOM node. */
 function _hoverDom(title, body) {

@@ -251,6 +251,21 @@ const META_OPTIONS = [
 ];
 const FUNCTION_OPTIONS = FUNCTION_NAMES.map(n => ({ label: n, type: 'function', apply: n + '(' }));
 
+/** The OTHER sheets of the document as `Name!` references (quoted when the name needs it). */
+function sheetNameOptions(text, pos) {
+  try {
+    const { sheets } = bookFor(text);
+    if (sheets.length < 2) return [];
+    // The sheet the caret is in = the last one whose block starts at or before it.
+    let here = null;
+    for (const s of sheets) if (typeof s.from === 'number' && s.from <= pos) here = s;
+    return sheets.filter(s => s !== here).map(s => {
+      const ref = /^[A-Za-z_][A-Za-z0-9_]*$/.test(s.name) ? `${s.name}!` : `'${s.name.replace(/'/g, "''")}'!`;
+      return { label: s.name, type: 'namespace', detail: 'sheet', apply: ref };
+    });
+  } catch { return []; }
+}
+
 function inFrontMatter(doc, lineNo) {
   let fm = false;
   for (let n = 1; n < lineNo; n++) if (/^---\s*$/.test(doc.line(n).text)) fm = !fm;
@@ -265,12 +280,14 @@ function complete(context) {
     if (/^[A-Za-z-]*$/.test(before)) return (!w && !context.explicit) ? null : { from: w ? w.from : context.pos, options: META_OPTIONS, validFor: /^[A-Za-z-]*$/ };
     return null;
   }
-  // Formula functions: after `=` in a value or a rule.
+  // Formula functions (and the other sheets' names, as `Name!`): after `=` in a value or a rule.
   const inFormula = /(?:^|[\s,{:])=[^,{}]*$/.test(before);
   if (inFormula) {
     const w = context.matchBefore(/[A-Za-z_][A-Za-z0-9_.]*/);
     if (!w && !context.explicit) return null;
-    return { from: w ? w.from : context.pos, options: FUNCTION_OPTIONS, validFor: /^[A-Za-z0-9_.]*$/ };
+    // A1-looking words are references being typed, not function names.
+    if (w && /^[A-Za-z]{1,3}\d+$/.test(w.text) && !context.explicit) return null;
+    return { from: w ? w.from : context.pos, options: [...FUNCTION_OPTIONS, ...sheetNameOptions(context.state.doc.toString(), context.pos)], validFor: /^[A-Za-z0-9_.]*$/ };
   }
   // Inside a `{ … }` block: the setting / property names.
   const open = before.lastIndexOf('{');

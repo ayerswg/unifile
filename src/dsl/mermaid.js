@@ -35,43 +35,38 @@ import { state } from '../ui/state.js';
 import { mountZoomStage } from './mermaid-zoom.js';
 import { loadFaIconSets } from './mermaid-icons.js';
 import { findFaRefs, lookupFaIcon, faIconNames } from '../core/fa-icons.js';
+import { tokenizeLine, createState, copyState, collectSymbols, diagramTypeOf, KEYWORDS, DIRECTIONS,
+         FLOW_LINKS, SEQUENCE_ARROWS, CLASS_RELATIONS, ER_RELATIONS } from '../core/mermaid-syntax.js';
 
 // ---------------------------------------------------------------------------
-// Simple Mermaid stream language for CodeMirror 6
-// Provides keyword, operator, string, and comment highlighting.
+// Mermaid stream language for CodeMirror 6
+//
+// The tokenizer itself is core/mermaid-syntax.js (pure, Node-tested): it
+// follows mermaid's own lexers per diagram family — flowchart node ids are
+// mermaid's NODE_STRING (`A-->B` is three tokens, `my-node` one), every link
+// form, shape labels, quoted / markdown labels that span lines, `@{ … }`
+// metadata, sequence arrows, class relations, ER crow's feet, gantt tasks …
+// This wrapper feeds each line through it and hands CodeMirror the spans;
+// the cross-line state (open string / label / block) rides in the parser
+// state so a label opened on one line keeps colouring the next.
 // ---------------------------------------------------------------------------
-
-// Every diagram keyword mermaid 12 detects (the first meaningful line).
-const MERMAID_KEYWORDS = /^(graph|flowchart|flowchart-elk|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|gantt|pie|journey|gitGraph|mindmap|quadrantChart|erDiagram|requirementDiagram|requirement|timeline|kanban|packet-beta|packet|architecture-beta|xychart-beta|xychart|sankey-beta|sankey|radar-beta|treemap-beta|treemap|block-beta|block|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment|usecase-beta|venn-beta|wardley-beta|railroad-beta|ishikawa-beta|treeView-beta|swimlane-beta|cynefin-beta|zenuml)\b/;
-
-// Keys of the `@{ shape: …, label: …, icon: … }` node-metadata syntax (mermaid ≥ 11.3).
-const MERMAID_NODE_ATTRS = /^(shape|label|icon|form|pos|h|w|constraint|img|dir)(?=\s*:)/;
 
 const mermaidLanguage = StreamLanguage.define({
   name: 'mermaid',
-  token(stream) {
-    // Comments
-    if (stream.match(/%%.*$/)) return 'comment';
-    // Diagram type keywords (at start of meaningful lines)
-    if (stream.sol() && stream.match(MERMAID_KEYWORDS)) return 'keyword';
-    // Subgraph / direction keywords
-    if (stream.match(/\b(subgraph|end|direction|LR|RL|TD|TB|BT)\b/)) return 'keyword';
-    // `A@{ shape: docs, label: "…" }` — the @ and the attribute names
-    if (stream.match(/@(?=\{)/)) return 'punctuation';
-    if (stream.match(MERMAID_NODE_ATTRS)) return 'propertyName';
-    // Edge labels and arrows
-    if (stream.match(/-->|==>|-\.->|--[^>]*-->|===[^>]*==>/)) return 'operator';
-    if (stream.match(/->|\|/)) return 'separator';
-    // Quoted strings
-    if (stream.match(/"[^"]*"/)) return 'string';
-    if (stream.match(/'[^']*'/)) return 'string';
-    // Node shape openers/closers
-    if (stream.match(/[\[\](){}><]/)) return 'punctuation';
-    // identifiers
-    if (stream.match(/[A-Za-z_][A-Za-z0-9_-]*/)) return 'name';
-    stream.next();
-    return null;
-  }
+  startState: () => ({ ...createState(), toks: null, i: 0 }),
+  copyState: (s) => ({ ...copyState(s), toks: null, i: 0 }),
+  token(stream, st) {
+    if (stream.sol()) { st.toks = tokenizeLine(stream.string, st); st.i = 0; }
+    const toks = st.toks ?? [];
+    while (st.i < toks.length && toks[st.i].to <= stream.pos) st.i++;
+    const t = toks[st.i];
+    if (!t) { stream.skipToEnd(); return null; }
+    if (t.from > stream.pos) { stream.pos = t.from; return null; }   // plain text up to the next span
+    stream.pos = t.to; st.i++;
+    return t.type;
+  },
+  // Keep the line counter (and any open string) in step on empty lines.
+  blankLine(st) { tokenizeLine('', st); },
 });
 
 // Initialise once at module load with the theme matching the current colour
@@ -385,44 +380,112 @@ const MERMAID_NODE_ATTR_DOCS = {
   img: 'Image URL / data URI for an image node.',
 };
 
-// In-diagram keywords → short docs (completion + hover).
+// Statement keywords that take arguments get a trailing space on accept.
+const NO_SPACE_AFTER = new Set(['end', 'autonumber', 'showData', 'inclusiveEndDates', 'topAxis', 'commit']);
+const ID_CHARS = /^[\p{L}\p{N}_.-]*$/u;
+// The identifier under the caret (what CodeMirror filters the options by).
+const MERMAID_WORD_RE = /[\p{L}\p{N}_][\p{L}\p{N}_.-]*$/u;
+
+// Docs for the completion rows (the hover reuses the same tables).
 const MERMAID_KEYWORD_DOCS = {
+  // flowchart
   subgraph: 'Group nodes into a labelled subgraph. Close it with `end`.',
-  end: 'Close a subgraph or block.',
+  end: 'Close a subgraph, block, loop, alt, par, note …',
   direction: 'Set flow direction inside a subgraph (TB, LR, …).',
-  classDef: 'Define a reusable node-style class.',
-  class: 'Apply a style class to one or more nodes.',
+  classDef: 'Define a reusable node-style class: `classDef big fill:#f9f`.',
+  class: 'Apply a style class to one or more nodes: `class A,B big`.',
   click: 'Attach a link or callback interaction to a node.',
-  style: 'Inline-style a single node.',
-  linkStyle: 'Style edges by index.',
+  style: 'Inline-style a single node: `style A fill:#f9f`.',
+  linkStyle: 'Style edges by index: `linkStyle 0 stroke:#f00`.',
+  // sequence
+  participant: 'Declare a participant (in display order): `participant A as Alice`.',
+  actor: 'Declare a participant drawn as a stick figure.',
+  activate: 'Start an activation bar on a participant.',
+  deactivate: 'End an activation bar.',
+  Note: '`Note left of A: text`, `Note right of A: text`, `Note over A,B: text`.',
+  note: 'A note: `note left of A: text` / `note for Class "text"`.',
+  loop: 'A loop block: `loop every minute … end`.',
+  alt: 'Alternative paths: `alt cond … else other … end`.',
+  else: 'The other branch of an `alt`.',
+  opt: 'An optional block: `opt cond … end`.',
+  par: 'Parallel blocks: `par a … and b … end`.',
+  and: 'Another parallel branch of a `par`.',
+  critical: 'A critical region: `critical … option … end`.',
+  option: 'An option of a `critical` region.',
+  break: 'A break block: `break cond … end`.',
+  rect: 'A background rectangle: `rect rgb(200,200,255) … end`.',
+  autonumber: 'Number every message.',
+  box: 'Group participants in a box: `box Purple Alice & Bob … end`.',
+  create: '`create participant X` — X comes into being at this message.',
+  destroy: '`destroy X` — X ends at this message.',
+  links: 'Attach a menu of links to a participant (JSON).',
+  link: 'Attach one link: `link A: Label @ url`.',
+  properties: 'Attach custom properties to a participant.',
+  title: 'The diagram title.',
+  // class / state / er
+  namespace: 'Group classes: `namespace Shapes { class Square }`.',
+  cssClass: 'Apply a class: `cssClass "A,B" name`.',
+  callback: 'Bind a callback: `callback A "fn" "tooltip"`.',
+  state: 'Declare a state: `state "Description" as s1`, `state Composite { … }`, `state f <<fork>>`.',
+  hide: '`hide empty description`.',
+  // gantt
+  dateFormat: 'The input date format (moment-style): `dateFormat YYYY-MM-DD`.',
+  axisFormat: 'The axis label format: `axisFormat %m-%d`.',
+  tickInterval: 'Axis ticks: `tickInterval 1week`.',
+  excludes: 'Days to skip: `excludes weekends`, `excludes 2024-01-01`.',
+  includes: 'Days to include despite `excludes`.',
+  todayMarker: '`todayMarker off` or a stroke style.',
+  section: 'Start a section.',
+  weekday: 'The first weekday of a week tick.',
+  // git
+  commit: 'A commit: `commit id: "x" tag: "v1" type: HIGHLIGHT`.',
+  branch: 'Create (and check out) a branch: `branch develop`.',
+  checkout: 'Switch to a branch.',
+  switch: 'Switch to a branch (alias of checkout).',
+  merge: 'Merge a branch into the current one.',
+  'cherry-pick': '`cherry-pick id: "commit-id"`.',
+  // pie / xychart / quadrant / radar
+  showData: 'Print the values beside the pie labels.',
+  'x-axis': 'The x axis: a title and / or `[categories]` or `min --> max`.',
+  'y-axis': 'The y axis: a title and / or `min --> max`.',
+  bar: 'A bar series: `bar [5, 6, 7]`.',
+  line: 'A line series: `line [5, 6, 7]`.',
+  // block / architecture
+  columns: 'The number of block columns.',
+  space: 'An empty block cell.',
+  group: 'An architecture group: `group api(cloud)[API]`.',
+  service: 'An architecture service: `service db(database)[Database] in api`.',
+  junction: 'An edge junction point.',
+  requirement: 'A requirement block: `requirement name { id: 1 text: … risk: high verifymethod: test }`.',
+  element: 'An element block: `element name { type: … docref: … }`.',
 };
 
-const MERMAID_DIRECTIONS = ['TB', 'TD', 'BT', 'RL', 'LR'];
-const MERMAID_WORD_RE = /[A-Za-z][\w-]*$/;
+const SEQ_NOTE_SIDES = ['left of', 'right of', 'over'];
+const CLASS_ANNOTATIONS = ['interface', 'abstract', 'service', 'enumeration'];
+const STATE_ANNOTATIONS = ['fork', 'join', 'choice'];
 
-/** Build a small tooltip DOM node. */
-function _hoverDom(title, body) {
-  const el = document.createElement('div');
-  el.className = 'cm-doc-tooltip';
-  const t = document.createElement('strong');
-  t.textContent = title;
-  el.appendChild(t);
-  if (body) { el.appendChild(document.createElement('br')); el.appendChild(document.createTextNode(body)); }
-  return el;
+/** The options CodeMirror shows: keywords / ids / classes, each with its kind and docs. */
+function _opts(labels, type, extra = {}) {
+  return labels.map(label => ({ label, type, info: MERMAID_KEYWORD_DOCS[label], ...extra }));
 }
-
-/** Absolute offset of the first non-blank, non-comment body line. */
-function _firstBodyLineFrom(cmDoc, bodyFrom) {
-  let pos = bodyFrom;
-  while (pos <= cmDoc.length) {
-    const line = cmDoc.lineAt(pos);
-    const t = line.text.trim();
-    if (t && !t.startsWith('%%')) return line.from;
-    if (line.to >= cmDoc.length) break;
-    pos = line.to + 1;
-  }
-  return bodyFrom;
+function _kw(labels) {
+  return labels.map(label => ({ label, type: 'keyword', info: MERMAID_KEYWORD_DOCS[label],
+                                apply: NO_SPACE_AFTER.has(label) ? label : label + ' ' }));
 }
+function _ids(syms, typed, { boost = 1 } = {}) {
+  return [...syms.names.keys()]
+    .filter(id => !(id === typed && syms.names.get(id) === 1))   // the id being typed right now
+    .map(label => ({ label, type: 'variable', detail: syms.subgraphs.has(label) ? 'subgraph' : 'id', boost }));
+}
+function _classes(syms, typed = '') {
+  return [...syms.classes.keys()]
+    .filter(c => !(c === typed && syms.classes.get(c) === 1))   // the name being typed right now
+    .map(label => ({ label, type: 'class', detail: 'class' }));
+}
+function _arrows(list) {
+  return list.map(([label, detail]) => ({ label, type: 'text', detail }));
+}
+const _result = (from, options, validFor = ID_CHARS) => options.length ? { from, options, validFor } : null;
 
 /** Unified completion source: front-matter schema + Mermaid body. */
 function mermaidComplete(context) {
@@ -436,12 +499,23 @@ function mermaidComplete(context) {
   } catch { return null; }
 }
 
+/**
+ * Body completion, by diagram family and by where the caret sits on the line:
+ *   - the header line: diagram types, then (flowchart) directions after the keyword;
+ *   - the start of a statement: the family's keywords + the ids already in the document;
+ *   - after a link / relation / arrow: the ids;
+ *   - a partial link (`A -`, `A ==`): the link forms;
+ *   - `:::` / `class A …`: the classDef names; `@{ … }`: attributes + shapes;
+ *   - never inside a label, an edge label or a string.
+ */
 function mermaidBodyComplete(context, bodyFrom) {
   const cmDoc = context.state.doc;
   const line = cmDoc.lineAt(context.pos);
   const before = line.text.slice(0, context.pos - line.from);
-  const word = before.match(MERMAID_WORD_RE);
-  const from = word ? context.pos - word[0].length : context.pos;
+  const word = MERMAID_WORD_RE.exec(before);
+  const typed = word ? word[0] : '';
+  const from = context.pos - typed.length;
+  const want = context.explicit || typed.length > 0;
 
   // A Font Awesome name being typed: `fa:fa-us…` in any label, or
   // `icon: "fab:gi…` inside `A@{ … }` → the bundled pack's icon names.
@@ -450,49 +524,168 @@ function mermaidBodyComplete(context, bodyFrom) {
   if (fa) return _faIconCompletions(context.pos - fa[2].length, fa[1]);
 
   // Inside `A@{ … }`: after `shape:` → the shape names; otherwise the attribute keys.
-  const meta = /@\{[^}]*$/.exec(before);
-  if (meta) {
+  if (/@\{[^}]*$/.test(before)) {
     const shapeVal = /\bshape\s*:\s*([\w-]*)$/.exec(before);
     if (shapeVal) {
-      return {
-        from: context.pos - shapeVal[1].length,
-        options: MERMAID_SHAPES.map(label => ({ label, type: 'constant', detail: 'shape' })),
-        validFor: /^[\w-]*$/,
-      };
+      return { from: context.pos - shapeVal[1].length,
+               options: MERMAID_SHAPES.map(label => ({ label, type: 'constant', detail: 'shape' })), validFor: /^[\w-]*$/ };
     }
-    if (context.explicit || (word && /[{,]\s*[\w-]*$/.test(before))) {
-      return {
-        from,
-        options: Object.entries(MERMAID_NODE_ATTR_DOCS).map(([label, info]) => ({ label, type: 'property', info, apply: `${label}: ` })),
-        validFor: /^[\w-]*$/,
-      };
+    if (/[{,]\s*[\w-]*$/.test(before) && want) {
+      return { from, options: Object.entries(MERMAID_NODE_ATTR_DOCS).map(([label, info]) => ({ label, type: 'property', info, apply: `${label}: ` })),
+               validFor: /^[\w-]*$/ };
     }
     return null;
   }
 
-  // First meaningful body line → diagram type.
-  if (line.from === _firstBodyLineFrom(cmDoc, bodyFrom) && (context.explicit || word)) {
-    return {
-      from,
-      options: Object.entries(MERMAID_DIAGRAM_TYPES)
-        .map(([label, info]) => ({ label, type: 'keyword', info })),
-      validFor: /^[\w-]*$/,
-    };
+  // Inside a quoted string / an unclosed shape label / an edge label → nothing.
+  if ((before.match(/"/g) ?? []).length % 2) return null;
+  const unbraced = before.replace(/[|}o][|o{]?(?:--|\.\.)[|{o][|o{]?/g, '');   // ER crow's feet carry braces
+  const opens = (unbraced.match(/[[({]/g) ?? []).length, closes = (unbraced.match(/[\])}]/g) ?? []).length;
+  if (opens > closes) return null;
+
+  const body = cmDoc.sliceString(bodyFrom);
+  const info = diagramTypeOf(body);
+  const headerLine = info ? cmDoc.lineAt(bodyFrom).number + info.line : null;
+  const lineStart = /^\s*[\p{L}\p{N}_.-]*$/u.test(before);   // the caret is in the first word
+
+  // The header line (or any line before the header exists): diagram types,
+  // then the direction after a flowchart keyword — never the diagram types
+  // again, which is what fuzzy-matched `LR` to `flowchart-elk`.
+  if (!info || line.number === headerLine) {
+    if (lineStart) {
+      if (!want) return null;
+      return { from, options: Object.entries(MERMAID_DIAGRAM_TYPES).map(([label, info]) => ({ label, type: 'keyword', info, apply: label + ' ' })),
+               validFor: /^[\w-]*$/ };
+    }
+    if (info?.family === 'flowchart' && /^\s*[\w-]+\s+[A-Za-z]*$/.test(before)) {
+      return _result(from, DIRECTIONS.map(label => ({ label, type: 'constant', detail: 'direction' })));
+    }
+    if (info?.family === 'pie' && /^\s*pie\s+[a-zA-Z]*$/.test(before)) return _result(from, _kw(['title', 'showData']));
+    return null;
   }
 
-  // Later lines → keywords + directions.  CodeMirror filters by the typed text,
-  // so node ids (no keyword match) simply won't show a popup.
-  if (context.explicit || word) {
-    return {
-      from,
-      options: [
-        ...Object.entries(MERMAID_KEYWORD_DOCS).map(([label, info]) => ({ label, type: 'keyword', info })),
-        ...MERMAID_DIRECTIONS.map(d => ({ label: d, type: 'constant', detail: 'direction' })),
-      ],
-      validFor: /^[\w-]*$/,
-    };
+  const family = info.family;
+  const syms = collectSymbols(body);
+  const kws = KEYWORDS[family] ?? KEYWORDS.generic;
+  // Inside a `{ … }` body (a class's members, an entity's attributes)?  ER
+  // crow's feet (`||--o{`, `}|..|{`) carry braces of their own — not blocks.
+  const above = cmDoc.sliceString(bodyFrom, line.from).replace(/[|}o][|o{]?(?:--|\.\.)[|{o][|o{]?/g, '');
+  const inBlock = (above.match(/\{/g) ?? []).length > (above.match(/\}/g) ?? []).length;
+
+  switch (family) {
+    case 'flowchart': {
+      if (/^\s*direction\s+[A-Za-z]*$/.test(before)) return _result(from, DIRECTIONS.map(label => ({ label, type: 'constant', detail: 'direction' })));
+      if (/:::[\w-]*$/.test(before)) return _result(context.pos - /[\w-]*$/.exec(before)[0].length, _classes(syms), /^[\w-]*$/);
+      if (/^\s*class\s+\S+\s+[\w-]*$/.test(before)) return _result(from, _classes(syms));
+      if (/^\s*class\s+[\w.,-]*$/.test(before)) return _result(context.pos - /[\w.-]*$/.exec(before)[0].length, _ids(syms, typed));
+      if (/^\s*(style|click)\s+[\w.-]*$/.test(before)) return _result(from, _ids(syms, typed));
+      if (/^\s*click\s+\S+\s+[a-z]*$/.test(before)) return _result(from, _kw(['href', 'call', 'callback']));
+      if (/^\s*(classDef|linkStyle|subgraph)\s/.test(before)) return null;   // a new definition
+      // A partial link: `A -`, `A --`, `A -.`, `A ==`, `A <`, `A ~`
+      const arrow = /(^|[\s\])}"])([<xo]?[-=.~][-=.~>xo|]*)$/.exec(before);
+      if (arrow) return _result(context.pos - arrow[2].length, _arrows(FLOW_LINKS), /^[-=.~<>xo| \w]*$/);
+      if (lineStart) return want ? _result(from, [..._kw(kws.start), ..._ids(syms, typed)]) : null;
+      // After a link or `&`: the ids
+      if (/(?:[-=.~>xo]|&|\|)\s*[\p{L}\p{N}_.-]*$/u.test(before)) return _result(from, _ids(syms, typed));
+      return want ? _result(from, [..._ids(syms, typed), ..._opts(kws.inline, 'keyword')]) : null;
+    }
+    case 'sequence': {
+      if (/:\s*[^:]*$/.test(before) && !/^\s*(links|link|properties)\b/.test(before)) return null;   // message text
+      if (/^\s*(create\s+)?(participant|actor)\s+\S*$/.test(before)) return null;        // a new name
+      if (/^\s*participant\s+\S+\s+[a-z]*$/.test(before)) return _result(from, _kw(['as']));
+      if (/^\s*[Nn]ote\s+(left of|right of|over)\s+[^:]*$/.test(before)) return _result(from, _ids(syms, typed));
+      const side = /^\s*[Nn]ote\s+([a-z ]*)$/.exec(before);
+      if (side) return _result(context.pos - side[1].length, SEQ_NOTE_SIDES.map(label => ({ label, type: 'keyword', apply: label + ' ' })), /^[a-z ]*$/);
+      if (/^\s*(activate|deactivate|destroy)\s+\S*$/.test(before)) return _result(from, _ids(syms, typed));
+      const arrow = /[^\s:]\s*((?:<<?)?-[-x>)]*)$/.exec(before);
+      if (arrow && !/^\s*(participant|actor|box|loop|alt|else|opt|par|and|critical|option|break|rect|title)\b/.test(before))
+        return _result(context.pos - arrow[1].length, _arrows(SEQUENCE_ARROWS), /^[-<>x)]*$/);
+      if (/(?:<<-->>|<<->>|-->>|->>|--x|-x|--\)|-\)|-->|->)[+-]?\s*[^:]*$/.test(before)) return _result(from, _ids(syms, typed));
+      if (lineStart) return want ? _result(from, [..._kw(kws.start), ..._ids(syms, typed)]) : null;
+      return null;
+    }
+    case 'class': {
+      if (/<<[a-z]*$/.test(before)) return _result(context.pos - /[a-z]*$/.exec(before)[0].length, CLASS_ANNOTATIONS.map(label => ({ label, type: 'keyword', apply: label + '>>' })), /^[a-z]*$/);
+      if (/:::[\w-]*$/.test(before)) return _result(context.pos - /[\w-]*$/.exec(before)[0].length, _classes(syms), /^[\w-]*$/);
+      if (/^\s*(class|namespace)\s+\S*$/.test(before)) return null;   // a new name
+      if (/^\s*note\s+[a-z]*$/.test(before)) return _result(from, _kw(['for']));
+      if (/^\s*(note\s+for|cssClass\s+"[^"]*"|style)\s+[\w~]*$/.test(before)) return _result(from, _classes(syms));
+      if (/:\s*[^:]*$/.test(before)) return null;   // a label / a member
+      if (inBlock) return null;                      // a member line inside `class X { … }`
+      const rel = /\s([<*o.-][<|*o.>-]*)$/.exec(before);
+      if (rel) return _result(context.pos - rel[1].length, _arrows(CLASS_RELATIONS), /^[<|*o.>-]*$/);
+      if (/(?:<\|--|--\|>|<\|\.\.|\.\.\|>|\*--|--\*|o--|--o|<--|-->|<\.\.|\.\.>|--|\.\.)\s*(?:"[^"]*"\s*)?[\w~]*$/.test(before)) return _result(from, _classes(syms, typed));
+      if (lineStart) return want ? _result(from, [..._kw(kws.start), ..._classes(syms, typed)]) : null;
+      return want ? _result(from, [..._classes(syms, typed), ..._opts(kws.inline, 'keyword')]) : null;
+    }
+    case 'state': {
+      if (/<<[a-z]*$/.test(before)) return _result(context.pos - /[a-z]*$/.exec(before)[0].length, STATE_ANNOTATIONS.map(label => ({ label, type: 'keyword', apply: label + '>>' })), /^[a-z]*$/);
+      if (/:::[\w-]*$/.test(before)) return _result(context.pos - /[\w-]*$/.exec(before)[0].length, _classes(syms), /^[\w-]*$/);
+      if (/:\s*[^:]*$/.test(before)) return null;
+      if (/^\s*state\s+"[^"]*"\s+[a-z]*$/.test(before)) return _result(from, _kw(['as']));
+      if (/^\s*state\s+\S*$/.test(before)) return null;
+      if (/^\s*note\s+(left of|right of)\s+[\w-]*$/.test(before)) return _result(from, _ids(syms, typed));
+      const side = /^\s*note\s+([a-z ]*)$/.exec(before);
+      if (side) return _result(context.pos - side[1].length, ['left of', 'right of'].map(label => ({ label, type: 'keyword', apply: label + ' ' })), /^[a-z ]*$/);
+      const star = { label: '[*]', type: 'constant', detail: 'start / end' };
+      if (/-->\s*[\p{L}\p{N}_[\]*-]*$/u.test(before)) return _result(context.pos - /[\p{L}\p{N}_[\]*-]*$/u.exec(before)[0].length, [..._ids(syms, typed), star], /^[\p{L}\p{N}_[\]*-]*$/u);
+      if (/\s(-[->]*)$/.test(before)) return _result(context.pos - /-[->]*$/.exec(before)[0].length, [{ label: '-->', type: 'text', detail: 'transition' }], /^[->]*$/);
+      if (lineStart) return want ? _result(context.pos - /[\p{L}\p{N}_[\]*-]*$/u.exec(before)[0].length, [..._kw(kws.start), ..._ids(syms, typed), star], /^[\p{L}\p{N}_[\]*-]*$/u) : null;
+      return want ? _result(from, _ids(syms, typed)) : null;
+    }
+    case 'er': {
+      if (/:\s*[^:]*$/.test(before)) return null;
+      if (inBlock) {
+        // An attribute line: `type name [PK|FK|UK] ["comment"]`
+        if (/^\s*\S+\s+\S+\s+[A-Z,\s]*$/.test(before)) return _result(from, _opts(['PK', 'FK', 'UK'], 'keyword'));
+        return null;
+      }
+      const rel = /\s([|}o][|o{.-]*)$/.exec(before);
+      if (rel) return _result(context.pos - rel[1].length, _arrows(ER_RELATIONS), /^[|}o{.-]*$/);
+      if (/(?:[|}o][|o{]?(?:--|\.\.)[|{o][|o{]?)\s*[\p{L}\p{N}_-]*$/u.test(before)) return _result(from, _ids(syms, typed));
+      if (lineStart) return want ? _result(from, [..._ids(syms, typed), ..._kw(kws.start)]) : null;
+      return want ? _result(from, _opts(kws.inline, 'keyword')) : null;
+    }
+    case 'gantt': {
+      if (/\b(after|until)\s+[\w-]*$/.test(before)) return _result(from, _ids(syms, typed));
+      if (/:[^:]*$/.test(before)) {
+        // The tags of a task: `name : done, crit, after a1, 2024-01-01, 3d`
+        if (!/,\s*[\w-]*$|:\s*[\w-]*$/.test(before)) return null;
+        return _result(from, [..._opts(['done', 'active', 'crit', 'milestone', 'vert'], 'keyword'), ..._kw(['after', 'until']), ..._ids(syms, typed)]);
+      }
+      if (/^\s*excludes\s+[a-z]*$/.test(before)) return _result(from, _opts(['weekends', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'], 'constant'));
+      if (lineStart) return want ? _result(from, _kw(kws.start)) : null;
+      return null;
+    }
+    case 'git': {
+      if (/^\s*(checkout|switch|merge)\s+[\w-]*$/.test(before)) return _result(from, _ids(syms, typed));
+      if (/\btype:\s*[A-Z]*$/.test(before)) return _result(from, _opts(['NORMAL', 'REVERSE', 'HIGHLIGHT'], 'constant'));
+      if (/^\s*(commit|merge|cherry-pick)\b.*\s[a-z]*$/.test(before)) return _result(from, ['id', 'tag', 'type', 'parent'].map(label => ({ label, type: 'property', apply: label + ': ' })));
+      if (/^\s*branch\s+\S*$/.test(before)) return null;
+      if (lineStart) return want ? _result(from, _kw(kws.start)) : null;
+      return null;
+    }
+    default: {
+      if (/:\s*[^:]*$/.test(before) && (family === 'pie' || family === 'timeline' || family === 'journey')) return null;
+      if (lineStart) {
+        const withIds = family === 'architecture' || family === 'block' || family === 'requirement' || family === 'kanban' || family === 'mindmap' || family === 'c4';
+        return want ? _result(from, [..._kw(kws.start), ...(withIds ? _ids(syms, typed) : [])]) : null;
+      }
+      if (want && kws.inline.length) return _result(from, _opts(kws.inline, 'keyword'));
+      return null;
+    }
   }
-  return null;
+}
+
+/** Build a small tooltip DOM node. */
+function _hoverDom(title, body) {
+  const el = document.createElement('div');
+  el.className = 'cm-doc-tooltip';
+  const t = document.createElement('strong');
+  t.textContent = title;
+  el.appendChild(t);
+  if (body) { el.appendChild(document.createElement('br')); el.appendChild(document.createTextNode(body)); }
+  return el;
 }
 
 /** Icon-name completions from the merged Font Awesome set of `prefix` (async: the packs load on first use). */
@@ -641,8 +834,7 @@ const mermaidDSL = {
   },
 
   detect(content) {
-    return /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|gitGraph|mindmap|timeline|kanban|quadrantChart|requirementDiagram|xychart|sankey|packet|architecture|block|radar|treemap|C4)/m
-      .test(content.trim());
+    return !!diagramTypeOf(content);
   }
 };
 
