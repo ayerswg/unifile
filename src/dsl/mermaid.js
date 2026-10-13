@@ -265,17 +265,24 @@ async function exportPNG(content) {
   const id = `mermaid-export-png-${Date.now()}`;
   const { svg } = await mermaid.render(id, _prepare(content).source);
 
+  // mermaid's svg is `width="100%"` + a viewBox, so as an <img> its natural
+  // size is the 300px default (every PNG came out 300 px wide) — size the
+  // raster from the viewBox instead, at 2× for a crisp export; drawImage
+  // re-rasterizes an svg at the destination size, so nothing is upscaled.
+  const vb = /viewBox="([^"]+)"/.exec(svg)?.[1].trim().split(/[\s,]+/).map(Number);
+  const vbW = vb?.[2] > 0 ? vb[2] : 800, vbH = vb?.[3] > 0 ? vb[3] : 600;
+  const scale = 2;
   const blob = await new Promise(resolve => {
     const img = new Image();
     const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth || 800;
-      canvas.height = img.naturalHeight || 600;
+      canvas.width = Math.round(vbW * scale);
+      canvas.height = Math.round(vbH * scale);
       const ctx = canvas.getContext('2d');
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(resolve, 'image/png');
     };
     img.src = url;
@@ -628,7 +635,9 @@ const mermaidDSL = {
 
   exporters: {
     svg: { label: 'SVG', mime: 'image/svg+xml', ext: '.svg', export: exportSVG },
-    png: { label: 'PNG', mime: 'image/png',     ext: '.png', export: exportPNG }
+    // `binary`: the dialog downloads the Blob as is — a text() round-trip
+    // corrupts PNG bytes (every {diagram} PNG export was unreadable before).
+    png: { label: 'PNG', mime: 'image/png',     ext: '.png', export: exportPNG, binary: true }
   },
 
   detect(content) {
