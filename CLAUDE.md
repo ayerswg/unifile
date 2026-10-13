@@ -189,6 +189,20 @@ esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 **Editor (`editor.js`)** — CodeMirror 6, styled as **the iA Writer surface (2026-10)**: ONE monospaced size (16px desktop / 17px phone, line-height 1.7, `--editor-font-size` / `--editor-pad-x` in app.css), a tall 2px caret in the accent (`.cm-cursor` padding on a content-box extends CM's glyph-high caret by the half-leading), **NO gutter and no active-line tint** (the v0.2–v0.4 comment rail with its M/S marks is gone; `highlightActiveLineGutter` too), the text starting at a plain 24px margin with a 40vh bottom pad so the last line scrolls up to eye level. Headings are bold in the text colour and the Markdown marks (`#`, `**`, `-`, `>`) recede to grey — `--hl-heading: var(--text)`, `--hl-meta` muted; code DSLs keep a quiet palette. `editor-theme.js` is entirely `var(--…)` tokens (no per-theme hex, no `!important` forced overrides — dark/light/auto all come from app.css). **Per-section syntax highlighting** (`sectionSyntaxField`) runs each section's DSL parser through `editorHighlight`; the front-matter block is highlighted as YAML instead of the DSL. **Comments are inline range comments** (see below). **Line wrapping is a per-DSL choice**: abcjs turns it on in its `getEditorExtensions()` (`EditorView.lineWrapping` — music wraps, no horizontal scroll, 2026-09); the other DSLs still scroll horizontally. **Vertical (column) selection** via CM's `rectangularSelection()` + `crosshairCursor()` (Alt+drag, the VS Code/Sublime convention; multiple selections were already enabled). The updateListener also emits **`editor-type` `{pos, ch}`** for single-character `input.type` insertions (multi-char inserts = paste-like, deliberately silent) — consumed by the abcjs note audition (below).
 
+**Completion & Tab (2026-10).** CodeMirror's own completion keymap binds Enter only, and
+`indentWithTab` sat in the same keymap — so Tab never accepted a completion. `baseExtensions`
+now carries `Prec.highest(keymap.of([{ key: 'Tab', run: acceptCompletion }]))`: ahead of the
+table-cell Tab (`Prec.high`, markdown-tables.js) and of `indentWithTab`, and since
+`acceptCompletion` returns false with no list open, Tab still moves between cells / indents
+then. (Playwright landmine: CM ignores accept keys for 75 ms after a list opens —
+`interactionDelay` — so a test must wait before pressing Tab.) **`#!` at a line start completes
+the section shebangs** (`shebangComplete`: the registered DSLs that are not `wholeDocument`;
+nothing in a `wholeDocument` build) — registered through the GLOBAL `EditorState.languageData`
+facet, so it runs beside every DSL's own `language.data.of({ autocomplete })` source. The same
+facet is the way to complete INSIDE a nested language: lang-markdown mounts its HTML parser in
+`<!-- … -->` blocks, so a source attached to the Markdown language never fires where the Marp
+directives live ({slides} registers its source globally for that reason).
+
 **No section bars (2026-10).** The editor is ONE plain text surface: the collapsible front-matter bar (`editor-sections.js`, block widgets that folded the `---`…`---` block on load) was removed as noise — the front matter is just the first lines of the text, highlighted as YAML. `Editor.setValue` only closes the comment card now. Do not re-add folding of any kind (the generic `@codemirror/language` fold went for the same reason, see Mobile section).
 
 **ABC "one measure per line" formatter (`dsl/abc-align.js`, `alignSource` on the abcjs DSL; Alt-Shift-F, the mobile FAB `.uf-align-btn`, the landscape dock `.ps-align`)** — reflows every music line so each measure sits on its own source line (2026-09; it replaced the column-padding voice aligner, which drifted once lines wrap). **Staff-line breaks are preserved** with the ABC ` \` line continuation: every measure except the last of its original line ends in ` \`, and both engines honour it (abc2svg joins continued lines; abcjs rewrites `\`+newline in place, so `startChar` offsets stay stable and a following `w:` lyric line still binds to the joined line). Idempotent. Fields/comments/`#!`/front matter pass through; the `buildVoiceMap` char→voice lookup is unaffected because a continuation line inherits the last `[V:]`/`V:` boundary before it. Unit-tested in `test/abc-align.test.mjs`.
@@ -326,6 +340,7 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
 - **iOS audio**: reuse ONE persistent AudioContext (never `close()` it), unlock with a silent buffer in the user gesture, and set `navigator.audioSession.type = 'playback'` so the hardware mute switch doesn't silence it.
 - **Unified `midi.map`** (front matter): maps any abcjs marking (dynamics `ff`/`pp`, accents `>`, articulations `legato`/`pizzicato`, custom names) to a MIDI action combining `note` (keyswitch), `cc`, `program`, and a `velocity` effect. `velocity: 112`=absolute level (sticky), `0.8`=scale, `+30`=per-note bump (accents). Per-voice overrides under `midi.voices.<n>` (channel/volume(CC7)/pan(CC10)/velocity scale/map). `midi.octave` = the octave middle-C (60) is called (`c3` default = Kontakt). See README/inline docs for the full schema.
 - **abcjs quirk:** it *drops* unknown `!name!` decorations, so we scan the rendered source (`_lastAbcSource`) ourselves for markings; and abcjs reports a note's `startChar` inconsistently vs its own leading decoration, so we match tokens to notes by walking events in source order with an `index < endChar` pointer, not `≤ startChar`.
+- **Editor tokenizer + completion (`abcLanguage` / `abcBodyComplete`, fixed 2026-10).** A note is `[\^_=]{0,2}[A-Ga-g][,']*` + its length (`2`, `/2`, `3/2`, `/`) — the old regex read `b` AFTER a pitch as a flat (`Ab` is TWO notes in ABC; flats are `_B`) and knew no `^`/`_`/`=` accidentals. Inline fields `[K:G]` `[V:2]` `[M:3/4]` are one `keyword` token (their letters must not read as pitches), chord brackets / grace braces are punctuation, rests cover `z x Z X`, bars cover `|] [| || |: :| ::` and the endings `|1 [2`, tuplets `(3`, broken rhythm `> <`, the one-letter decorations (`.` `~` `H L M O P S T u v` before a note) and `\` continuations are `meta`. Completion adds: `V:` / `[V:` → the voice ids the tune declares (`abcVoiceIds`), then the voice properties (`clef= name= …`), `clef=` → the clefs, `M:` / `L:` / `Q:` → the usual values (header or inline), `[` + a letter → the inline fields, `%%` at a line start → the formatting / MIDI directives (`ABC_DIRECTIVES`, with docs); `K:` and `!…!` as before.
 
 ---
 
@@ -426,12 +441,32 @@ radar-beta, treemap-beta, block-beta, …), `look: handDrawn` (roughjs), and BOT
   12 render (ELK warm-up, >300 ms minified) was still drawing into — the svg landed in a
   disconnected element and the pane kept the spinner (real bug, found on upgrade). The timer now
   snapshots `content.firstElementChild` and stands down when the renderer has already replaced it.
-- **Editor intelligence**: `@{` + attribute names are highlighted (`MERMAID_NODE_ATTRS`);
-  inside `@{ … }` the completion offers the attribute keys and, after `shape:`, every shape
-  short name + alias (`MERMAID_SHAPES`, scraped from mermaid's shape table — regenerate the list
-  when upgrading); diagram-type completion/hover covers the 12.x types; `detect()` too. The DSL
-  help modal (`topbar.js DSL_HELP.mermaid`) has "Node shapes @{ }", "Look, layout & theme" and the
-  newer diagram types.
+- **Editor intelligence = `src/core/mermaid-syntax.js` (pure, Node-tested
+  `test/mermaid-syntax.test.mjs`; rewritten 2026-10).** The tokenizer follows mermaid's own
+  lexers per diagram FAMILY (`DIAGRAM_FAMILY`: flowchart · sequence · class · state · er · gantt
+  · pie/git/mindmap/… generic): a flowchart node id is mermaid's NODE_STRING — `-` allowed only
+  when NOT followed by `>`/`-`/`.`, `=` not by `>`/`=`/`.` — so `A-->B` is three tokens and
+  `my-node` one (the old `[\w-]+` regex ate `A--` as a name: "spaceless links don't highlight");
+  every link form (`-->` `---` `--o` `--x` `<-->` `o--o` `-.->` `==>` `~~~`, `|label|` and
+  `-- label -->` edge text), the shape brackets with their label as a string, `@{ … }`, `:::`,
+  `&`, `%%{init}%%`; sequence arrows/participants/notes, class members and relations, ER crow's
+  feet and attribute blocks, gantt tasks. **Quoted and markdown-string labels may span lines**
+  (mermaid accepts them) — the tokenizer is `tokenizeLine(text, state)` with the open
+  string / label / `@{` block / edge text carried in `state`; `dsl/mermaid.js` wraps it in a
+  `StreamLanguage` (tokens per line computed at `sol()`, `blankLine` keeps the line counter).
+  `collectSymbols(body)` (ids with counts, `classDef`/class names, subgraph ids) feeds the
+  completion: **the header line offers diagram types, then — after a flowchart keyword — ONLY
+  the directions** (offering the types again fuzzy-matched `LR` to `flowchart-elk`); a statement
+  start offers the family's keywords + the document's ids; after a link / arrow / relation the
+  ids (minus the one being typed); a partial link (`A -`, `A ==`, `Bob-`) the link forms
+  (`FLOW_LINKS`, `SEQUENCE_ARROWS`, `CLASS_RELATIONS`, `ER_RELATIONS`); `:::` / `class A …` the
+  classDef names; `Note le…` the sides; `<<` the annotations; gantt tags + `after <task>`;
+  gitGraph branch names after `checkout`/`merge`. Never inside a label, an edge label or a
+  string (an unbalanced bracket / odd quote count on the line — ER crow's feet are stripped
+  before counting). `@{ … }` keeps its attribute keys + `MERMAID_SHAPES` after `shape:`
+  (regenerate the list when upgrading); `detect()` = `diagramTypeOf`. The DSL help modal
+  (`topbar.js DSL_HELP.mermaid`) has "Node shapes @{ }", "Look, layout & theme" and the newer
+  diagram types.
 - **Font Awesome 6 Free is bundled (2026-10): `src/dsl/mermaid-icons.js` + `src/core/fa-icons.js`
   (pure, `test/fa-icons.test.mjs`) + the generated `src/core/fa-aliases.js`.** mermaid draws
   icons from iconify sets registered by PREFIX and fetches nothing itself: `fa:fa-user` in a label
@@ -791,7 +826,13 @@ slides layout) is untouched and unrelated.
   is right for the app's own print.
 - **Front matter**: the standard collapsible YAML bar; `slidesFrontMatterSchema` feeds the
   shared `fm-schema.js` autocomplete/lint (theme enum = the vendored theme names).
-  `marp: true` is accepted and ignored (pasted Marp decks).
+  `marp: true` is accepted and ignored (pasted Marp decks). **Deck completion (2026-10,
+  `slidesComplete`)**: inside `![ … ]` the Marp image keywords (`bg left right fit w: h:` + the
+  filters), inside `](` the document's asset names, `<!-- ` the Marp directives (`_class`,
+  `_backgroundColor`, `paginate`, … — the `_` form is per slide), `_class:` the theme classes.
+  Registered via the GLOBAL `EditorState.languageData` facet, NOT `md.language.data` — see
+  "Completion & Tab" under Editor: inside an HTML comment the language is lang-markdown's
+  nested HTML, so a Markdown-attached source never runs there (real bug, found on the first try).
 
 ## {document} tables with formulas (`src/dsl/markdown-tables.js` + `src/core/tables/`, 2026-10)
 
@@ -983,8 +1024,10 @@ sparse and large): it is a per-sheet YAML front matter + one LINE PER CELL OR RA
 - **Editor (text side)**: a `StreamLanguage` tokenizer (fences + `key: value` front matter, remarks,
   cell lines: the range as a heading, values, formulas, strings, `{…}` settings with their keys);
   lint = `book.problems` + formula errors on their cells; completion = front matter keys at a line
-  start inside the fences, function names after `=`, setting / property names inside `{…}`.
-  `alignSource` = `alignSpreadsheet`.
+  start inside the fences, function names after `=` **plus the OTHER sheets' names as `Name!` /
+  `'Two words'!` references (`sheetNameOptions`, 2026-10; an A1-looking word is a reference being
+  typed and opens nothing)**, setting / property names inside `{…}`. `alignSource` =
+  `alignSpreadsheet`.
 - **Exports**: `.xlsx` (`xlsx.js`: a `StyleTable` → one xf per distinct static style, `dxfs` for
   rules, `<conditionalFormatting>` cellIs/containsText/beginsWith/endsWith/containsBlanks/top10/
   duplicateValues/expression/colorScale, merges, widths, heights, hidden rows/cols, frozen panes, the
