@@ -11,6 +11,7 @@ import { applyTheme } from './theme.js';
 import { checkForUpdate } from './update-check.js';
 
 import { BUILD, isDevChannel, formatBuild, formatCommitAt } from '../core/build-info.js';
+import { getDSL } from '../dsl/registry.js';
 
 export class SettingsPanel {
   /** @param {HTMLElement} container */
@@ -49,7 +50,11 @@ export class SettingsPanel {
   show() {
     const prefs = loadUserPrefs();
     const theme = prefs.theme ?? 'auto';
-    const isAbc = (state.activeDslId ?? state.data?.dslType) === 'abcjs';
+    const dslId = state.activeDslId ?? state.data?.dslType;
+    const isAbc = dslId === 'abcjs';
+    // Bundled third-party content the running build must credit (a DSL's `credits`).
+    let credits = [];
+    try { credits = getDSL(dslId).credits ?? []; } catch {}   // getDSL throws for an unknown id
     // Split layout is a desktop affair — phones show one pane at a time.
     const isPhone = window.matchMedia?.(
       '(max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse)'
@@ -153,7 +158,9 @@ export class SettingsPanel {
                 ? ` · <span class="settings-version">${escHtml(BUILD.commit)}</span>${BUILD.commitAt
                   ? ` · ${escHtml(formatCommitAt(BUILD.commitAt))}` : ''}` : ''}${isDevChannel()
                 ? ' · <span class="settings-channel">dev channel — every push updates</span>' : ''}
-            </p>
+            </p>${credits.map(c => `
+            <p class="settings-about settings-credit">Includes ${escHtml(c.what)}${c.license
+              ? ` (${c.url ? `<a href="${escHtml(c.url)}" target="_blank" rel="noopener">${escHtml(c.license)}</a>` : escHtml(c.license)})` : ''}.</p>`).join('')}
           </div>
 
           <div class="dialog-footer">

@@ -81,9 +81,13 @@ src/
     brand.js         `{name}` / `{glyph}` per app — THE naming source (site, manifests, icons, title bar)
     build-info.js    The running build's identity (version · commit · channel from the defines) + the
                      "is that build newer?" rule shared by every shell's update check (Node-tested)
+    fa-icons.js      {diagram}'s Font Awesome icon sets for mermaid (pure, Node-tested): merges the three
+                     @iconify-json/fa6-* packs per class prefix + legacy-name aliases (fa-aliases.js, GENERATED
+                     by build/gen-fa-aliases.mjs); `findFaRefs` feeds the editor's lint + completion
     (assets/piano-soundfont.js — committed FluidR3 acoustic grand, ~2.5MB, note→dataURI)
   dsl/               One module per format; self-registers via registry.js
     markdown.js, abcjs.js, mermaid.js, slides.js, spreadsheet.js, fountain.js
+    mermaid-icons.js  Registers the Font Awesome packs with mermaid (lazy import()) — see {diagram}
     markdown-tables.js  Tables with formulas inside {document}: the marked block extension, DOCX/XLSX, editor pieces
     registry.js      registerDSL / getDSL / listDSLs
     abcjs-piano-loader.js  CommonJS drop-in for abcjs's ./load-note (offline soundfont)
@@ -137,6 +141,8 @@ build/
   gen-soundfont.mjs  One-off: fetch FluidR3 piano → src/assets/piano-soundfont.js (network!)
   gen-slides-themes.mjs  One-off: vendor marp-core's default/gaia/uncover themes → src/core/slides/themes.js
                      (`npm i --no-save @marp-team/marp-core` first; web-font @imports stripped)
+  gen-fa-aliases.mjs  One-off: Font Awesome's legacy icon names (FA4/FA5 → FA6) → src/core/fa-aliases.js
+                     (network: `npm pack`s @fortawesome/fontawesome-free at the bundled pack's version)
 templates/           quine.html, pwa.html, sw.js, manifest.json, icons/<abbrev>/*.png
 docs/                The website (Cloudflare Pages; rendered by render-site.mjs) + committed build artifacts
 dist/                Build output (gitignored)
@@ -426,10 +432,29 @@ radar-beta, treemap-beta, block-beta, …), `look: handDrawn` (roughjs), and BOT
   when upgrading); diagram-type completion/hover covers the 12.x types; `detect()` too. The DSL
   help modal (`topbar.js DSL_HELP.mermaid`) has "Node shapes @{ }", "Look, layout & theme" and the
   newer diagram types.
-- **Icons are the one gap**: `@{ icon: … }` / architecture `(logos:…)` need an iconify pack via
-  `mermaid.registerIconPacks` (mermaid fetches nothing itself). No pack is bundled — only the
-  architecture built-ins (cloud/database/disk/internet/server) draw. Bundling a pack is a size
-  decision, not a code one.
+- **Font Awesome 6 Free is bundled (2026-10): `src/dsl/mermaid-icons.js` + `src/core/fa-icons.js`
+  (pure, `test/fa-icons.test.mjs`) + the generated `src/core/fa-aliases.js`.** mermaid draws
+  icons from iconify sets registered by PREFIX and fetches nothing itself: `fa:fa-user` in a label
+  (its `replaceIconSubstring` looks up `user` in the set named `fa` and emits an inline
+  `<svg class="label-icon">` — the `<i class="fa fa-user">` webfont fallback only when no set
+  answers), `@{ icon: "fab:github" }` nodes and architecture `(fa:server)`. The three
+  `@iconify-json/fa6-{solid,regular,brands}` packs (CC BY 4.0; ~1.45 MB JSON, ~470 KB gz) are
+  MERGED into one set per Font Awesome class prefix — `fa`/`fas` solid-first, `far`/`fal`
+  regular-first, `fab` brands-first — so every name draws under every prefix (FA4's `fa fa-github`
+  included); an icon merged from a pack with other default dimensions carries its own
+  `width/height` (brands are 448 wide, solid 512 — iconify fills a missing size from the SET's
+  defaults). Legacy FA4/FA5 names (`edit`, `bank`, `close`, `trash-alt` …) resolve through
+  `fa-aliases.js` (`old=new`, regenerate with `node build/gen-fa-aliases.mjs` — network, one-off
+  like the soundfont: it `npm pack`s Font Awesome at the installed pack's version and distils
+  `icon-families.json` + `shims.yml`), and the alias table is a Proxy that maps `fa-<name>` →
+  `<name>` (`icon: "fa:fa-user"` works). The packs are `import()`ed lazily — esbuild inlines them
+  into the single file but the JSON only evaluates on the first icon lookup, lint or completion.
+  The editor completes names after `fa:fa-` / `icon: "fa:` (async source) and the linter warns on
+  a name no set holds and on `fak:` (Kit icons — a user's own uploads, nothing offline can draw).
+  The icons are vector paths inside the rendered svg, so SVG/PNG exports carry them; mermaid's own
+  `.label-icon` CSS sizes them (1em, `currentColor`). No other iconify pack (`logos:`, `mdi:`) is
+  bundled — same size decision as before. `dsl.credits` → Settings → About prints the attribution
+  (a generic hook: any DSL bundling credited content lists it there).
 - mermaid 12 leaves its scratch container `#d<id>` in `<body>` after a parse error — `render()`'s
   catch removes `#<id>` AND `#d<id>`.
 - esbuild's IIFE build inlines mermaid's lazy `import()` chunks (no warnings); `npm test` is pure

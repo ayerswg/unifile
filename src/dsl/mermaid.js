@@ -12,9 +12,15 @@
  *            layout strips that block before the body reaches render().
  * Export:    SVG, PNG (via canvas)
  *
- * Icons (`@{ icon: … }`, architecture `(logos:…)`) need an iconify pack
- * registered via mermaid.registerIconPacks — mermaid fetches none itself; no
- * pack is bundled yet, so only mermaid's built-in architecture icons draw.
+ * Icons:     Font Awesome 6 Free is bundled (mermaid-icons.js registers the
+ *            @iconify-json/fa6-* packs under the `fa`/`fas`/`far`/`fab`/`fal`
+ *            prefixes mermaid looks up), so `fa:fa-user` label tokens,
+ *            `@{ icon: "fab:github" }` nodes and architecture `(fa:server)`
+ *            icons draw offline as inline svg paths — no webfont, no CSS, and
+ *            the icons travel inside the SVG / PNG exports.  The editor
+ *            completes icon names after `fa:fa-` / `icon: "fa:` and lints a
+ *            name the packs don't hold.  Other iconify packs (`logos:` …) are
+ *            not bundled — a size decision (core/fa-icons.js has the numbers).
  */
 
 import mermaid from 'mermaid';
@@ -27,6 +33,8 @@ import { schemaCompletions, schemaLint } from '../core/fm-schema.js';
 import { prepareMermaidSource } from '../core/mermaid-front-matter.js';
 import { state } from '../ui/state.js';
 import { mountZoomStage } from './mermaid-zoom.js';
+import { loadFaIconSets } from './mermaid-icons.js';
+import { findFaRefs, lookupFaIcon, faIconNames } from '../core/fa-icons.js';
 
 // ---------------------------------------------------------------------------
 // Simple Mermaid stream language for CodeMirror 6
@@ -361,7 +369,7 @@ const MERMAID_SHAPES = [
 const MERMAID_NODE_ATTR_DOCS = {
   shape: 'Node shape, e.g. `shape: docs` — see the Node shapes help.',
   label: 'Node text (quote it: `label: "Multiple Documents"`).',
-  icon: 'Iconify icon name (`icon: "fa:user"`) — needs a registered icon pack.',
+  icon: 'Icon node: a Font Awesome name — `icon: "fa:user"` (solid), `"far:bell"` (regular), `"fab:github"` (brands); built in, offline.',
   form: 'Icon / image node form: `square`, `circle` or `rounded`.',
   pos: 'Label position for icon / image nodes: `t` (top) or `b` (bottom).',
   h: 'Height for icon / image nodes.',
@@ -428,6 +436,12 @@ function mermaidBodyComplete(context, bodyFrom) {
   const word = before.match(MERMAID_WORD_RE);
   const from = word ? context.pos - word[0].length : context.pos;
 
+  // A Font Awesome name being typed: `fa:fa-us…` in any label, or
+  // `icon: "fab:gi…` inside `A@{ … }` → the bundled pack's icon names.
+  const fa = /\b(fa[bklrs]?):fa-([\w-]*)$/.exec(before)
+    || (/@\{[^}]*$/.test(before) && /\bicon\s*:\s*["']?(fa[bklrs]?):([\w-]*)$/.exec(before));
+  if (fa) return _faIconCompletions(context.pos - fa[2].length, fa[1]);
+
   // Inside `A@{ … }`: after `shape:` → the shape names; otherwise the attribute keys.
   const meta = /@\{[^}]*$/.exec(before);
   if (meta) {
@@ -472,6 +486,17 @@ function mermaidBodyComplete(context, bodyFrom) {
     };
   }
   return null;
+}
+
+/** Icon-name completions from the merged Font Awesome set of `prefix` (async: the packs load on first use). */
+async function _faIconCompletions(from, prefix) {
+  const sets = await loadFaIconSets();
+  const set = sets[prefix] ?? sets.fa;
+  return {
+    from,
+    options: faIconNames(set).map(label => ({ label, type: 'constant', detail: 'icon' })),
+    validFor: /^[\w-]*$/,
+  };
 }
 
 /** Hover docs for diagram-type and in-diagram keywords. */
@@ -543,6 +568,23 @@ async function mermaidLintSource(view) {
       diags.push({ from: line.from, to: line.to, severity: 'error',
                    message: `Mermaid: ${_mermaidReason(msg)}` });
     }
+
+    // Font Awesome references the bundled packs can't draw: mermaid falls back
+    // to an `<i class="fa fa-…">` (nothing, with no webfont) or the `?` icon
+    // without a word, so the editor says it.  The packs load on the first
+    // document that mentions one (never for a diagram without icons).
+    const refs = findFaRefs(body);
+    if (refs.length) {
+      const sets = await loadFaIconSets();
+      for (const r of refs) {
+        const set = sets[r.prefix];
+        const message = !set
+          ? `Font Awesome Kit icons (${r.prefix}:) are not available offline`
+          : lookupFaIcon(set, r.name) ? null
+          : `Unknown Font Awesome icon "${r.name}"`;
+        if (message) diags.push({ from: bodyFrom + r.from, to: bodyFrom + r.to, severity: 'warning', message });
+      }
+    }
   }
 
   return diags
@@ -577,6 +619,8 @@ const mermaidDSL = {
   // The theme is baked into each rendered svg — preview.js re-renders a
   // document that uses this DSL whenever the app's colour theme changes.
   themeAware: true,
+  // Shown in Settings → About (the bundled icon packs require attribution).
+  credits: [{ what: 'Font Awesome Free icons', license: 'CC BY 4.0', url: 'https://fontawesome.com/license/free' }],
 
   render,
   renderToString,
