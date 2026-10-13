@@ -3525,6 +3525,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   color: var(--text);
 }
 .settings-channel { color: var(--accent); }
+.settings-credit { margin-top: 4px; }
+.settings-credit a { color: inherit; }
 
 /* Theme toggle button group (Dark / Auto / Light) */
 .theme-toggle-group {

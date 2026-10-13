@@ -850,6 +850,15 @@ Content on page 2.</code></pre>
       },
       {
         group: 'Flowcharts',
+        title: 'Icons (Font Awesome)',
+        content: `<pre><code>flowchart LR
+    A[fa:fa-user Customer] --> B(fab:fa-github Repository)
+    B --> C@{ icon: "fa:bell", form: "circle", label: "Alerts", pos: "b" }
+    C --> D[far:fa-envelope Mail]</code></pre>
+<p class="help-note">Font Awesome 6 Free is built in — nothing is fetched, and the icons travel inside the SVG and PNG exports. In any label write <code>fa:fa-<em>name</em></code> (solid), <code>far:fa-<em>name</em></code> (regular) or <code>fab:fa-<em>name</em></code> (brands); as an icon node, <code>id@{ icon: "fa:<em>name</em>", form: square · circle · rounded, pos: t · b }</code>; in <code>architecture-beta</code>, <code>service db(fa:database)[Database]</code>. The names are Font Awesome 6's (<code>user</code>, <code>house</code>, <code>pen-to-square</code>, <code>github</code>) and the older Font Awesome 4/5 names (<code>edit</code>, <code>home</code>, <code>bank</code>, <code>close</code>) still resolve. Type <code>fa:fa-</code> for autocomplete; an unknown name is underlined.</p>`
+      },
+      {
+        group: 'Flowcharts',
         title: 'Look, layout & theme',
         content: `<pre><code>---
 title: Order flow
