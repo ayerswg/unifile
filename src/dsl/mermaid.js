@@ -816,6 +816,8 @@ const mermaidDSL = {
   name: 'Mermaid',
   extensions: ['.mmd', '.mermaid'],
   editorMode: 'mermaid',
+  // Mod-/ (editor.js): `%%` comments; a `%%{init}%%` directive is code and comments out as `%% %%{…`.
+  commentTokens: { line: '%%', directive: /^%%\{/ },
   // The theme is baked into each rendered svg — preview.js re-renders a
   // document that uses this DSL whenever the app's colour theme changes.
   themeAware: true,

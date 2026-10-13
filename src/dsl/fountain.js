@@ -822,6 +822,8 @@ const fountainDSL = {
   name:       'Fountain Screenplay',
   extensions: ['.fountain', '.spmd'],
   editorMode: 'fountain',
+  // Mod-/ (editor.js): the boneyard — Fountain's only comment.
+  commentTokens: { block: { open: '/*', close: '*/' } },
 
   render,
   renderToString,

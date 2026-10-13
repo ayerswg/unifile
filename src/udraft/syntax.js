@@ -47,6 +47,9 @@ const PATH_LETTERS = new Set(['m', 'l', 'h', 'v', 'c', 'q', 'z']);
  * @param {string[]} lines
  * @returns {Array<{type:string, hang:number, kw?:string}>}
  */
+/** Mod-/ (editor.js toggleComment): `#` comment lines. */
+export const commentTokens = { line: '#' };
+
 export function classifyDoc(lines) {
   const infos = new Array(lines.length);
   // Leading front matter: line 0 is exactly `---` and a closing `---` exists.

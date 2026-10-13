@@ -1433,6 +1433,8 @@ const markdownDSL = {
   name: 'Markdown',
   extensions: ['.md', '.markdown'],
   editorMode: 'markdown',
+  // Mod-/ (editor.js): Markdown has no line comment — the lines are wrapped in one HTML comment.
+  commentTokens: { block: { open: '<!--', close: '-->' } },
 
   render,
   renderToString,

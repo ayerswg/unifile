@@ -25,6 +25,7 @@
  */
 
 import { state } from './state.js';
+import { formatShortcut } from '../core/keys.js';
 import { computeWorkbook, viewRows, viewCols } from '../core/sheet/book.js';
 import * as ops from '../core/sheet/edit.js';
 import { renderSheetHtml, colPx } from '../core/sheet/render.js';
@@ -99,9 +100,9 @@ export class SheetGrid {
     root.dataset.dslHandled = '1';
     root.innerHTML = `
       <div class="uf-ss-bar" role="toolbar">
-        ${btn('undo', '↶', 'Undo (Ctrl+Z)')}${btn('redo', '↷', 'Redo (Ctrl+Y)')}
+        ${btn('undo', '↶', `Undo (${formatShortcut('Mod-z')})`)}${btn('redo', '↷', `Redo (${formatShortcut('Mod-y')})`)}
         <span class="uf-ss-sep"></span>
-        ${btn('bold', '<b>B</b>', 'Bold (Ctrl+B)')}${btn('italic', '<i>I</i>', 'Italic (Ctrl+I)')}${btn('underline', '<u>U</u>', 'Underline (Ctrl+U)')}${btn('strike', '<s>S</s>', 'Strikethrough')}
+        ${btn('bold', '<b>B</b>', `Bold (${formatShortcut('Mod-b')})`)}${btn('italic', '<i>I</i>', `Italic (${formatShortcut('Mod-i')})`)}${btn('underline', '<u>U</u>', `Underline (${formatShortcut('Mod-u')})`)}${btn('strike', '<s>S</s>', 'Strikethrough')}
         <span class="uf-ss-sep"></span>
         ${btn('align:left', '⇤', 'Align left')}${btn('align:center', '⇔', 'Align centre')}${btn('align:right', '⇥', 'Align right')}${btn('wrap', '⤶', 'Wrap text')}
         <span class="uf-ss-sep"></span>

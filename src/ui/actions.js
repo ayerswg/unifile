@@ -7,7 +7,7 @@
  *   • listBubbleActions(ctx, view) → the round action button (action-fab.js),
  *     CONTEXTUAL to the pane that is showing:
  *       editor  → text/music verbs: play · one measure per line · piano roll
- *                 (ABC), comment, indent · outdent, undo · redo
+ *                 (ABC), comment, comment out, indent · outdent, undo · redo
  *       render  → play / pause (ABC); zoom to fit · zoom in · zoom out
  *                 (Mermaid) — nothing for other DSLs (bubble hides)
  *       history → Save (the tap: the next version to the device), Save with
@@ -22,7 +22,7 @@
  */
 
 import { state, PANELS } from './state.js';
-import { getDSL, listDSLs } from '../dsl/registry.js';
+import { getDSL, listDSLs, commentTokensFor } from '../dsl/registry.js';
 import { generateQuine, downloadFile, downloadBlob } from '../core/storage.js';
 import { showDslHelpModal, showExtensionsModal } from './topbar.js';
 import { showArchivedCommentsModal } from './comments.js';
@@ -142,6 +142,13 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
   // Comment on the selection (or the word at the caret) — the phone's sure way
   // in, beside the long-press on selected text (editor.js).
   acts.push(mk({ id: 'comment', label: 'Comment', glyph: '❝', run: () => state.emit('comment-selection') }));
+  // Comment out / uncomment the selected lines (Mod-/ on a hardware keyboard)
+  // — only where the DSL has a comment syntax; the glyph is its token.
+  const ct = commentTokensFor(dslId, state.data?.dslType);
+  if (ct?.line || ct?.block) {
+    acts.push(mk({ id: 'comment-lines', label: 'Comment out', key: 'Comment out',
+      glyph: ct.line ? ct.line[0] : ct.block.open.slice(0, 2), run: () => { editor?.toggleComment(); } }));
+  }
   // Indent / outdent the selected lines — every text app, since a soft keyboard
   // has no Tab / Shift-Tab.
   acts.push(mk({ id: 'indent', label: 'Indent', glyph: '⇥', run: () => { editor?.indent(); } }));

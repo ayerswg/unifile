@@ -31,7 +31,8 @@ function dslActions(dslId) {
 import { shortHash } from '../core/hash.js';
 import { nextVersion } from '../core/library.js';
 import { showArchivedCommentsModal } from './comments.js';
-import { listDSLs, getDSL } from '../dsl/registry.js';
+import { listDSLs, getDSL, commentTokensFor } from '../dsl/registry.js';
+import { formatShortcut } from '../core/keys.js';
 import {
   getExtensionMeta,
   setTextExtension,
@@ -75,7 +76,7 @@ export class TopBar {
     const next = state.nextSaveVersion;
     const dev = state.deviceFile;
     const saveTitle = next
-      ? `Save ${next} to the device${dev?.linked ? ' (into its folder)' : ''} — Ctrl+S · Shift-click = new major version`
+      ? `Save ${next} to the device${dev?.linked ? ' (into its folder)' : ''} — ${formatShortcut('Mod-s')} · Shift-click = new major version`
       : 'Version limit reached (Z99)';
     const versionTitle = version
       ? `Saved as ${dev?.fileName ?? version}${dev?.savedAt ? ' ' + formatRelative(dev.savedAt) : ''} — history`
@@ -84,7 +85,7 @@ export class TopBar {
     this.el.innerHTML = `
       <div class="topbar">
         ${state.library ? `
-        <button class="tb-library" id="tb-library" title="Documents (Ctrl+Shift+L)" aria-label="Documents">
+        <button class="tb-library" id="tb-library" title="Documents (${formatShortcut('Mod-Shift-l')})" aria-label="Documents">
           ${iconBack()}
         </button>` : ''}
         <button class="tb-hamburger${this._dslMenuOpen ? ' active' : ''}" id="tb-dsl-menu-toggle"
@@ -263,30 +264,31 @@ export class TopBar {
     const major = state.nextMajorVersion;
     const activeDslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
     const dslName = DSL_HELP[activeDslId]?.name ?? activeDslId;
+    const commentTokens = commentTokensFor(activeDslId, state.data?.dslType);
     return `
       <ul class="tools-menu-list">
         <li class="tools-menu-item" id="tb-new-doc" title="${state.library ? 'A new, empty document in the library' : 'Discard this document and start a new one'}">
           ${iconNewDoc()} New document
         </li>
         ${state.library ? `
-        <li class="tools-menu-item" id="tb-library-item" title="The documents of this app (Ctrl+Shift+L)">
+        <li class="tools-menu-item" id="tb-library-item" title="The documents of this app (${kbd('Mod-Shift-l')})">
           ${iconLibrary()} Documents…
-          <kbd>⌃⇧L</kbd>
+          <kbd>${kbd('Mod-Shift-l')}</kbd>
         </li>` : ''}
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item${state.needsSave && next ? '' : ' disabled'}" id="tb-save"
-          title="Write the text to the device as ${escHtml(next ? `<name>-${next}.uni` : '…')} and keep the snapshot in history (Ctrl+S)">
+          title="Write the text to the device as ${escHtml(next ? `<name>-${next}.uni` : '…')} and keep the snapshot in history (${kbd('Mod-s')})">
           ${iconCommit()} Save${next ? ` <span class="tools-menu-ver">${escHtml(next)}</span>` : ''}
-          <kbd>⌃S</kbd>
+          <kbd>${kbd('Mod-s')}</kbd>
         </li>
         <li class="tools-menu-item${major ? '' : ' disabled'}" id="tb-save-major"
-          title="Start a new major version: the next save is ${escHtml(major ?? '—')} (Ctrl+Shift+S)">
+          title="Start a new major version: the next save is ${escHtml(major ?? '—')} (${kbd('Mod-Shift-s')})">
           ${iconCommit()} Save as new major${major ? ` <span class="tools-menu-ver">${escHtml(major)}</span>` : ''}
-          <kbd>⌃⇧S</kbd>
+          <kbd>${kbd('Mod-Shift-s')}</kbd>
         </li>
-        <li class="tools-menu-item" id="tb-open-device" title="Open a <name>-<version>.uni from the device (Ctrl+Shift+O)">
+        <li class="tools-menu-item" id="tb-open-device" title="Open a <name>-<version>.uni from the device (${kbd('Mod-Shift-o')})">
           ${iconImport()} Open from device…
-          <kbd>⌃⇧O</kbd>
+          <kbd>${kbd('Mod-Shift-o')}</kbd>
         </li>
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-dsl-help" title="Syntax reference for ${escHtml(dslName)}">
@@ -298,31 +300,36 @@ export class TopBar {
         </li>`).join('')}
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item${hasCommits ? '' : ' disabled'}" id="tb-blame"
-          title="${hasCommits ? 'Blame view (Ctrl+Shift+B)' : 'Available after the first save'}">
+          title="${hasCommits ? `Blame view (${kbd('Mod-Shift-b')})` : 'Available after the first save'}">
           ${iconBlame()} Blame view
-          <kbd>⌃⇧B</kbd>
+          <kbd>${kbd('Mod-Shift-b')}</kbd>
         </li>
         <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-export" title="Export document (Ctrl+Shift+E)">
+        <li class="tools-menu-item" id="tb-export" title="Export document (${kbd('Mod-Shift-e')})">
           ${iconExport()} Export…
-          <kbd>⌃⇧E</kbd>
+          <kbd>${kbd('Mod-Shift-e')}</kbd>
         </li>
         ${listDSLs().some(d => (d.extensionSlots?.length ?? 0) > 0) ? `
         <li class="tools-menu-item" id="tb-extensions" title="Configure DSL extensions">
           ${iconPlugin()} Extensions…
         </li>` : ''}
         <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-comment" title="Comment on the selected text (Ctrl+Alt+M) — or right-click the text">
+        <li class="tools-menu-item" id="tb-comment" title="Comment on the selected text (${kbd('Mod-Alt-m')}) — or right-click the text">
           ${iconComment()} Comment on selection
-          <kbd>⌃⌥M</kbd>
+          <kbd>${kbd('Mod-Alt-m')}</kbd>
         </li>
+        ${commentTokens ? `
+        <li class="tools-menu-item" id="tb-comment-lines" title="Comment out the selected lines in ${escHtml(dslName)}'s own syntax, or uncomment them (${kbd('Mod-/')})">
+          ${iconCommentOut()} Comment out lines
+          <kbd>${kbd('Mod-/')}</kbd>
+        </li>` : ''}
         <li class="tools-menu-item" id="tb-archived-comments" title="Browse resolved comment threads">
           ${iconComment()} Resolved comments…
         </li>
         <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-settings-item" title="Settings (Ctrl+Shift+,)">
+        <li class="tools-menu-item" id="tb-settings-item" title="Settings (${kbd('Mod-Shift-,')})">
           ${iconGear()} Settings
-          <kbd>⌃⇧,</kbd>
+          <kbd>${kbd('Mod-Shift-,')}</kbd>
         </li>
       </ul>
     `;
@@ -503,6 +510,11 @@ export class TopBar {
       showExtensionsModal();
     });
 
+    this.el.querySelector('#tb-comment-lines')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      state.emit('toggle-comment');
+    });
     this.el.querySelector('#tb-comment')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
@@ -635,6 +647,11 @@ function iconPlugin() {
     <path d="M3.5 10a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5h-2a.5.5 0 0 0 0 1h2A1.5 1.5 0 0 0 14 9.5v-8A1.5 1.5 0 0 0 12.5 0h-9A1.5 1.5 0 0 0 2 1.5v8A1.5 1.5 0 0 0 3.5 11h2a.5.5 0 0 0 0-1h-2z"/>
     <path d="M7.646 15.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 14.293V5.5a.5.5 0 0 0-1 0v8.793l-2.146-2.147a.5.5 0 0 0-.708.708l3 3z"/>
   </svg>`;
+}
+
+function iconCommentOut() {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 7h16M4 12h10M4 17h7"/><path d="M21 15l-4 6"/></svg>`;
 }
 
 function iconComment() {
@@ -1566,8 +1583,50 @@ C:D    {hidden}
   }
 };
 
+/** `<kbd>` text for a CodeMirror-style chord, on this OS (⌘/ · Ctrl+/). */
+const kbd = (chord) => escHtml(formatShortcut(chord));
+
+/**
+ * The editor's keyboard shortcuts, as a help section — generated at open time
+ * so the labels read ⌘ on a Mac and Ctrl elsewhere (core/keys.js), and so the
+ * comment-out row names the DSL's own syntax.
+ */
+function keyboardHelpSection(dslType) {
+  let dsl = null;
+  try { dsl = getDSL(dslType); } catch { /* unknown DSL */ }
+  const ct = commentTokensFor(dslType, state.data?.dslType);
+  const commentHow = ct?.line
+    ? `<code>${escHtml(ct.line)}</code> at the start of each line`
+    : ct?.block ? `the lines wrapped in <code>${escHtml(ct.block.open)} … ${escHtml(ct.block.close)}</code>` : null;
+  const rows = [
+    ['Mod-s', 'Save the next version to the device'],
+    ['Mod-Shift-s', 'Save as a new major version'],
+    ['Mod-Shift-o', 'Open from device'],
+    ['Mod-Shift-l', 'Show / hide the documents'],
+    ['Mod-Shift-e', 'Export'],
+    ['Mod-Shift-b', 'Blame view'],
+    ['Mod-Shift-,', 'Settings'],
+    ['Mod-Alt-m', 'Comment on the selection (or the word at the caret)'],
+    commentHow && ['Mod-/', `Comment out the selected lines, or uncomment them — ${commentHow}; <code>#</code> inside the front matter`],
+    ['Tab', 'Indent the line (or accept the completion)'],
+    ['Shift-Tab', 'Outdent the line'],
+    typeof dsl?.alignSource === 'function' && ['Alt-Shift-f', 'Format the source'],
+    ['Alt-1', 'Editor only'],
+    ['Alt-2', 'Editor and preview'],
+    ['Alt-3', 'Preview only'],
+  ].filter(Boolean);
+  return {
+    group: 'Keyboard',
+    title: 'Shortcuts',
+    content: `<table class="help-keys">${rows.map(([chord, what]) =>
+      `<tr><td><kbd>${kbd(chord)}</kbd></td><td>${what}</td></tr>`).join('')}</table>
+<p class="help-note">Hold <kbd>${kbd('Alt')}</kbd> and drag for a column selection. Right-click the text for the context menu.</p>`,
+  };
+}
+
 export function showDslHelpModal(dslType) {
-  const help = DSL_HELP[dslType] ?? DSL_HELP.markdown;
+  const base = DSL_HELP[dslType] ?? DSL_HELP.markdown;
+  const help = { ...base, sections: [...base.sections, keyboardHelpSection(dslType)] };
 
   // A stable id per section (for the nav anchors + scroll-spy).
   const slug = (s, i) =>

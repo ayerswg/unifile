@@ -31,6 +31,7 @@ import { VCS } from '../core/vcs.js';
 import { appMark, appName } from '../core/brand.js';
 import { isSavedToDevice, searchRecords } from '../core/library.js';
 import { esc } from './actions.js';
+import { formatShortcut } from '../core/keys.js';
 
 export class LibraryPane {
   /**
@@ -89,7 +90,7 @@ export class LibraryPane {
           <div class="lib-head">
             <span class="lib-title"><span class="lib-mark">${esc(appMark(app))}</span> Documents</span>
             <button type="button" class="lib-new" data-act="create" title="New document (you name it; the name is fixed)">+ New</button>
-            <button type="button" class="lib-back" data-act="close" aria-label="Hide the documents" title="Hide the documents (Ctrl+Shift+L)">${_iconBack()}</button>
+            <button type="button" class="lib-back" data-act="close" aria-label="Hide the documents" title="Hide the documents (${formatShortcut('Mod-Shift-l')})">${_iconBack()}</button>
           </div>
           <div class="lib-search">
             <span class="lib-search-icon" aria-hidden="true">${_iconSearch()}</span>

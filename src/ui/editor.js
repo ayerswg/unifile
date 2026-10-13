@@ -11,7 +11,7 @@
  *     highlight to open its thread.  The same context menu carries Copy / Cut /
  *     Paste and, on an ABC voice line, Mute / Solo for that voice.
  *   - Bracket matching, autocomplete, column selection (Alt+drag)
- *   - Tab / Shift+Tab indent · Ctrl+S → commit · Alt+1/2/3 → view modes
+ *   - Tab / Shift+Tab indent · Mod-S → save · Mod-/ → comment out the lines · Alt+1/2/3 → view modes
  */
 
 import { EditorView, keymap, Decoration, drawSelection,
@@ -27,10 +27,11 @@ import { searchKeymap } from '@codemirror/search';
 import { editorTheme, editorHighlight } from './editor-theme.js';
 import { highlightTree } from '@lezer/highlight';
 import { state, VIEW_MODES, PANELS } from './state.js';
-import { getDSL, listDSLs } from '../dsl/registry.js';
+import { getDSL, listDSLs, commentTokensFor } from '../dsl/registry.js';
 import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
+import { toggleCommentEdits, commentSpecFor } from '../core/line-comment.js';
 import {
   commentsExtension,
   commentCardField,
@@ -435,7 +436,13 @@ const baseExtensions = [
 // ---------------------------------------------------------------------------
 
 function makeUnifileKeymap() {
-  return keymap.of([
+  return [
+    // Comment out / uncomment the selected lines with the DSL's own comment
+    // syntax (core/line-comment.js).  Prec.high: @codemirror/commands'
+    // defaultKeymap binds Mod-/ to its toggleComment too, and that one knows
+    // nothing of the front matter or of `%%` directives.
+    Prec.high(keymap.of([{ key: 'Mod-/', preventDefault: true, run: toggleCommentCommand }])),
+    keymap.of([
     {
       key: 'Mod-s',
       preventDefault: true,
@@ -451,7 +458,59 @@ function makeUnifileKeymap() {
     { key: 'Alt-1', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.EDITOR);  return true; } },
     { key: 'Alt-2', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.SPLIT);   return true; } },
     { key: 'Alt-3', preventDefault: true, run: () => { state.setViewMode(VIEW_MODES.PREVIEW); return true; } }
-  ]);
+    ]),
+  ];
+}
+
+/**
+ * Mod-/ — toggle comments on the selected lines (every selection range).  The
+ * comment syntax is the active section's DSL's `commentTokens` (ABC `%`,
+ * mermaid `%%`, {spreadsheet} `#`, Markdown / {slides} `<!-- -->`), or YAML's
+ * `#` inside the leading front matter.  A range that ends at a line start
+ * leaves that line out (CodeMirror's rule).  Returns false when the DSL has
+ * no comment syntax, so the key falls through.
+ * @param {EditorView} view
+ */
+function toggleCommentCommand(view) {
+  if (!view) return false;
+  const st = view.state;
+  const spec = commentTokensFor(state.activeDslId, state.data?.dslType);
+  const doc = st.doc;
+  const lines = new Array(doc.lines);
+  for (let i = 0; i < doc.lines; i++) lines[i] = doc.line(i + 1).text;
+
+  // Selected line ranges, merged when they touch.
+  const ranges = [];
+  for (const r of st.selection.ranges) {
+    const fl = doc.lineAt(r.from);
+    let tl = r.to <= fl.to ? fl : doc.lineAt(r.to);
+    if (tl.number > fl.number && tl.from === r.to) tl = doc.line(tl.number - 1);
+    const a = fl.number - 1, b = tl.number - 1;
+    const last = ranges[ranges.length - 1];
+    if (last && last.b >= a) last.b = Math.max(last.b, b);
+    else ranges.push({ a, b });
+  }
+
+  const changes = [];
+  let any = false;
+  for (const { a, b } of ranges) {
+    const res = toggleCommentEdits(lines, a, b, commentSpecFor(lines, a, b, spec));
+    if (!res) continue;
+    any = true;
+    for (const e of res.edits) {
+      const from = doc.line(e.line + 1).from + e.col;
+      changes.push({ from, to: from + e.remove, insert: e.insert });
+    }
+  }
+  if (!any) return false;
+  const changeSet = st.changes(changes);
+  view.dispatch({
+    changes: changeSet,
+    selection: st.selection.map(changeSet, 1),
+    scrollIntoView: true,
+    userEvent: 'input.comment',
+  });
+  return true;
 }
 
 /**
@@ -665,6 +724,8 @@ export class Editor {
 
     // "Comment on selection" from the ⋯ menu / the phone bubble.
     this._unsub.push(state.on('comment-selection', () => this.commentSelection()));
+    // "Comment out lines" (Mod-/) from the ⋯ menu.
+    this._unsub.push(state.on('toggle-comment', () => this.toggleComment()));
 
     // Thread data mutations (new / reply / resolve) → rebuild the highlights + card.
     this._unsub.push(state.on('comments-change', () => {
@@ -1066,6 +1127,13 @@ export class Editor {
    */
   indent()  { return this._view ? indentMore(this._view) : false; }
   outdent() { return this._view ? indentLess(this._view) : false; }
+
+  /**
+   * Comment out / uncomment the selected lines in the DSL's syntax (Mod-/).
+   * The ⋯ menu and the phone bubble call this; returns false when the DSL has
+   * no comment syntax.
+   */
+  toggleComment() { return toggleCommentCommand(this._view); }
 
   /**
    * Run the active DSL's source formatter (ABC: one measure per line) over the

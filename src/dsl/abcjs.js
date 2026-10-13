@@ -3042,6 +3042,8 @@ const abcjsDSL = {
   name: 'ABC Notation',
   extensions: ['.abc'],
   editorMode: 'abc',
+  // Mod-/ (editor.js): `%` comments; a `%%directive` line is code and comments out as `% %%…`.
+  commentTokens: { line: '%', directive: /^%%/ },
 
   render,
   renderToString,

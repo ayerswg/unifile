@@ -203,6 +203,29 @@ facet is the way to complete INSIDE a nested language: lang-markdown mounts its 
 `<!-- … -->` blocks, so a source attached to the Markdown language never fires where the Marp
 directives live ({slides} registers its source globally for that reason).
 
+**Comment out lines — Mod-/ (2026-10, `src/core/line-comment.js`, pure, `test/line-comment.test.mjs`).**
+ONE toggler for every editor: it works on an array of lines + an inclusive line range and returns
+edits in original coordinates (`applyEdits` / `mapOffset` for the custom editor; the CM shell turns
+them into a change set and `selection.map(…, 1)`). Each DSL declares its syntax as `commentTokens`
+on its registration — `{ line: '%', directive: /^%%/ }` (abcjs), `{ line: '%%', directive: /^%%\{/ }`
+(mermaid), `{ line: '#' }` (spreadsheet), `{ block: { open: '<!--', close: '-->' } }` (markdown,
+slides), the Fountain boneyard — and uPub/uDraft export it from their `syntax.js` (`UPubEditor`
+reads `syntax.commentTokens`; `toggleComment()` + the `Mod-/` keydown). Semantics are
+CodeMirror's/VS Code's (any uncommented non-blank line → comment all at the minimum indent, else
+uncomment; blank lines skipped; block languages wrap the selected lines in ONE block), plus two of
+our own: a `directive` line (`%%MIDI`, `%%{init}%%`) is CODE — it comments out as `% %%MIDI` /
+`%% %%{init…` so the toggle round-trips (mermaid's `cleanupComments` drops any `%%`-not-`{` line
+before it looks for directives) — and a range inside the leading `---` front matter toggles YAML's
+`#` whatever the DSL (`commentSpecFor`). editor.js binds it at `Prec.high` because
+`defaultKeymap` already binds `Mod-/` to CM's own `toggleComment`, which knows neither. Reached
+also from ⋯ → "Comment out lines", the phone bubble's "Comment out" (soft keyboards have no Mod)
+and the `toggle-comment` event. **Shortcut labels follow the OS (`src/core/keys.js`,
+`test/keys.test.mjs`):** `formatShortcut('Mod-Shift-s')` = `⇧⌘S` on a Mac (Apple's ⌃⌥⇧⌘ order)
+and `Ctrl+Shift+S` elsewhere; the ⋯ menu's `<kbd>`s + titles, the Save pill, the library + sheet
+toolbar titles and the help modal's generated **Keyboard → Shortcuts** section
+(`keyboardHelpSection`, appended to every DSL's reference at open time) all go through it — never
+hard-code `Ctrl+` or `⌃` in a label again.
+
 **No section bars (2026-10).** The editor is ONE plain text surface: the collapsible front-matter bar (`editor-sections.js`, block widgets that folded the `---`…`---` block on load) was removed as noise — the front matter is just the first lines of the text, highlighted as YAML. `Editor.setValue` only closes the comment card now. Do not re-add folding of any kind (the generic `@codemirror/language` fold went for the same reason, see Mobile section).
 
 **ABC "one measure per line" formatter (`dsl/abc-align.js`, `alignSource` on the abcjs DSL; Alt-Shift-F, the mobile FAB `.uf-align-btn`, the landscape dock `.ps-align`)** — reflows every music line so each measure sits on its own source line (2026-09; it replaced the column-padding voice aligner, which drifted once lines wrap). **Staff-line breaks are preserved** with the ABC ` \` line continuation: every measure except the last of its original line ends in ` \`, and both engines honour it (abc2svg joins continued lines; abcjs rewrites `\`+newline in place, so `startChar` offsets stay stable and a following `w:` lyric line still binds to the joined line). Idempotent. Fields/comments/`#!`/front matter pass through; the `buildVoiceMap` char→voice lookup is unaffected because a continuation line inherits the last `[V:]`/`V:` boundary before it. Unit-tested in `test/abc-align.test.mjs`.
