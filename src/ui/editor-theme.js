@@ -1,5 +1,11 @@
 /**
- * Shared CodeMirror 6 theme — Catppuccin Mocha (dark) with light fallback.
+ * Shared CodeMirror 6 theme — the iA Writer look, driven by the app's CSS tokens.
+ *
+ * Every colour is a `var(--…)` from app.css, so dark / light / auto come from
+ * the same `--bg` / `--text` / `--accent` set as the rest of the shell (no
+ * per-theme hex here, no `!important` forced overrides in app.css).  Sizing
+ * (16px / 1.7, the tall 2px caret, the line margins) lives in app.css under
+ * "EDITOR SURFACE" so the phone media query can retune it.
  *
  * Imported by:
  *   - editor.js      (base theme + shared highlight style)
@@ -11,169 +17,54 @@ import { HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 
 // ---------------------------------------------------------------------------
-// Base editor theme (colours, fonts, gutters, selection, etc.)
+// Base editor theme (structure + token-driven colours; no gutter)
 // ---------------------------------------------------------------------------
 
-export const catppuccinTheme = EditorView.theme(
-  {
-    '&': {
-      background: '#1e1e2e',
-      color: '#cdd6f4',
-      height: '100%',
-      fontSize: '14px',
-      fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, monospace'
-    },
-    '.cm-scroller': { overflow: 'auto', lineHeight: '1.65' },
-    '.cm-content': { caretColor: '#89b4fa', padding: '8px 0' },
-    '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#89b4fa' },
-    '.cm-focused': { outline: 'none' },
-    // Gutter
-    '.cm-gutters': {
-      background: '#181825',
-      color: '#4a4a6a',
-      border: 'none',
-      borderRight: '1px solid #313244',
-      paddingRight: '2px',
-      userSelect: 'none'
-    },
-    '.cm-lineNumbers .cm-gutterElement': {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'flex-end',
-      padding: '0 6px 0 4px',
-      minWidth: '26px',
-      fontSize: '12px'
-    },
-    '.cm-activeLineGutter': { background: '#28283e', color: '#89b4fa' },
-    // NOTE: no .cm-activeLine content background — highlightActiveLine() is
-    // disabled (editor.js) because a full-width line tint competes with the
-    // text-selection highlight.  The cursor + blue gutter cell mark the line.
-    '.cm-line': { padding: '0 4px 0 0' },
-    // Selection — use the accent blue so it's clearly visible against the dark bg.
-    // !important is required to beat drawSelection()'s higher-specificity injected
-    // theme (.ͼN.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground).
-    '.cm-selectionBackground': { background: 'rgba(137,180,250,.28) !important' },
-    '&.cm-focused .cm-selectionBackground': { background: 'rgba(137,180,250,.38) !important' },
-    '&.cm-focused .cm-selectionMatch': { background: '#45475a55' },
-    '.cm-selectionMatch': { background: '#45475a44' },
-    // Matching brackets
-    '.cm-matchingBracket': {
-      background: '#45475a',
-      color: '#89b4fa !important',
-      fontWeight: 'bold'
-    },
-    '.cm-nonmatchingBracket': { color: '#f38ba8 !important' },
-    // Search highlight
-    '.cm-searchMatch': { background: '#f9e2af33', outline: '1px solid #f9e2af66' },
-    '.cm-searchMatch.cm-searchMatch-selected': { background: '#f9e2af66' },
-    // Tooltip / autocomplete
-    '.cm-tooltip': {
-      background: '#313244',
-      border: '1px solid #45475a',
-      borderRadius: '6px',
-      boxShadow: '0 4px 16px rgba(0,0,0,.5)',
-      color: '#cdd6f4'
-    },
-    '.cm-tooltip-autocomplete > ul > li': { padding: '4px 10px' },
-    '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
-      background: '#45475a',
-      color: '#89b4fa'
-    },
-    '.cm-completionLabel': { flex: 1 },
-    '.cm-completionDetail': { color: '#6c7086', fontStyle: 'italic', marginLeft: '6px' },
-    // Placeholder
-    '.cm-placeholder': { color: '#6c7086' },
-    // Line-number gutter with comment-thread highlighting
-    // Lines with an active comment thread get an amber background.
-    // Clicking a highlighted line number opens the inline accordion widget.
-    '.cm-lineNumbers.cm-comment-ln': { cursor: 'pointer' },
-    '.cm-lineNumbers.cm-comment-ln .cm-gutterElement': {
-      padding: '0 6px 0 4px',
-      minWidth: '26px',
-      textAlign: 'right',
-      fontSize: '12px',
-      transition: 'background .1s, color .1s'
-    },
-    '.cm-lineNumbers.cm-comment-ln .cm-gutterElement:hover': {
-      background: 'rgba(137,180,250,.12)',
-      color: '#89b4fa'
-    },
-    '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments': {
-      background: 'rgba(251,191,36,.22)',
-      color: '#f9e2af'
-    },
-    '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments:hover': {
-      background: 'rgba(251,191,36,.38)'
-    },
-    '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-accordion-active': {
-      background: 'rgba(251,191,36,.55)',
-      color: '#f9e2af'
-    },
-    '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-accordion-active:hover': {
-      background: 'rgba(251,191,36,.65)'
-    },
-    '.cm-ln-text': {
-      display: 'block',
-      width: '100%',
-      textAlign: 'right'
-    },
-    // Comment range marks — visible while accordion is open (dark theme)
-    '.cm-comment-range': {
-      background: 'rgba(251,191,36,.1)',
-      borderBottom: '1px solid rgba(251,191,36,.4)'
-    },
-    '.cm-comment-range-active': {
-      background: 'rgba(251,191,36,.2)',
-      borderBottom: '1px solid rgba(251,191,36,.75)'
-    }
+export const editorTheme = EditorView.theme({
+  '&': {
+    background: 'var(--bg)',
+    color: 'var(--text)',
+    height: '100%',
+    fontFamily: 'var(--font-mono)'
   },
-  { dark: true }
-);
-
-/**
- * Light-mode override. Wraps an @media rule that CodeMirror can't automatically
- * handle, so we apply it as a second theme that is always added.
- */
-export const catppuccinThemeLight = EditorView.theme(
-  {
-    '@media (prefers-color-scheme: light)': {
-      '&': { background: '#eff1f5', color: '#4c4f69' },
-      '.cm-gutters': { background: '#e6e9ef', color: '#9ca0b0', borderRight: '1px solid #ccd0da' },
-      '.cm-activeLineGutter': { background: '#dce0e8', color: '#1e66f5' },
-      '.cm-selectionBackground': { background: 'rgba(30,102,245,.18) !important' },
-      '&.cm-focused .cm-selectionBackground': { background: 'rgba(30,102,245,.26) !important' },
-      '.cm-matchingBracket': { background: '#ccd0da', color: '#1e66f5 !important' },
-      '.cm-cursor': { borderLeftColor: '#1e66f5' },
-      '.cm-tooltip': { background: '#dce0e8', border: '1px solid #ccd0da', color: '#4c4f69' },
-      // Comment-highlighted line numbers in light mode
-      '.cm-lineNumbers.cm-comment-ln .cm-gutterElement:hover': {
-        background: 'rgba(30,102,245,.1)', color: '#1e66f5'
-      },
-      '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments': {
-        background: 'rgba(223,142,29,.18)', color: '#df8e1d'
-      },
-      '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-has-comments:hover': {
-        background: 'rgba(223,142,29,.32)'
-      },
-      '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-accordion-active': {
-        background: 'rgba(223,142,29,.45)', color: '#df8e1d'
-      },
-      '.cm-lineNumbers.cm-comment-ln .cm-gutterElement.cm-accordion-active:hover': {
-        background: 'rgba(223,142,29,.58)'
-      }
-    }
-  }
-);
+  '.cm-scroller': { overflow: 'auto', lineHeight: '1.7' },
+  '.cm-content': { caretColor: 'var(--accent)' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
+  '.cm-focused': { outline: 'none' },
+  // Selection — !important beats drawSelection()'s injected rule
+  // (.ͼN.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground).
+  '.cm-selectionBackground': { background: 'color-mix(in srgb, var(--accent) 22%, transparent) !important' },
+  '&.cm-focused .cm-selectionBackground': { background: 'color-mix(in srgb, var(--accent) 30%, transparent) !important' },
+  '.cm-selectionMatch': { background: 'color-mix(in srgb, var(--text) 10%, transparent)' },
+  '.cm-matchingBracket': { background: 'var(--bg-surface)', color: 'var(--accent) !important', fontWeight: 'bold' },
+  '.cm-nonmatchingBracket': { color: 'var(--error) !important' },
+  '.cm-searchMatch': { background: 'color-mix(in srgb, var(--warning) 25%, transparent)', outline: '1px solid color-mix(in srgb, var(--warning) 50%, transparent)' },
+  '.cm-searchMatch.cm-searchMatch-selected': { background: 'color-mix(in srgb, var(--warning) 45%, transparent)' },
+  // Tooltip / autocomplete
+  '.cm-tooltip': {
+    background: 'var(--bg-alt)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    boxShadow: '0 4px 16px rgba(0,0,0,.35)',
+    color: 'var(--text)'
+  },
+  '.cm-tooltip-autocomplete > ul > li': { padding: '4px 10px' },
+  '.cm-tooltip-autocomplete > ul > li[aria-selected]': { background: 'var(--bg-surface)', color: 'var(--accent)' },
+  '.cm-completionLabel': { flex: 1 },
+  '.cm-completionDetail': { color: 'var(--text-muted)', fontStyle: 'italic', marginLeft: '6px' },
+  '.cm-placeholder': { color: 'var(--text-muted)' }
+});
 
 // ---------------------------------------------------------------------------
 // Syntax highlighting — shared across all DSLs
 // ---------------------------------------------------------------------------
 
 /**
- * Catppuccin Mocha highlight style for Lezer syntax trees.
+ * Highlight style for Lezer syntax trees — colours are the `--hl-*` tokens.
  *
- * Markdown-specific:
- *   tags.heading*  → bold + accent-coloured (no font-size override)
+ * Markdown-specific (iA Writer): prose is ONE colour; a heading is bold text in
+ * the same colour; the marks (#, **, -, >) recede to grey via tags.meta.
+ *   tags.heading*  → bold (no font-size override, no colour change)
  *   tags.strong    → bold (** markers + content both appear bold)
  *   tags.emphasis  → italic
  *   tags.meta      → muted (the **, *, # delimiters themselves)
@@ -181,7 +72,7 @@ export const catppuccinThemeLight = EditorView.theme(
  * Generic:
  *   keywords, operators, strings, comments, etc.
  */
-export const catppuccinHighlight = HighlightStyle.define([
+export const editorHighlight = HighlightStyle.define([
   // ── Markdown headings ────────────────────────────────────────────────────
   // No fontSize overrides — varying sizes break CodeMirror's line spacing.
   {
@@ -210,7 +101,6 @@ export const catppuccinHighlight = HighlightStyle.define([
   // ── Code spans & blocks ───────────────────────────────────────────────────
   {
     tag: [tags.monospace, tags.special(tags.string)],
-    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
     color: 'var(--hl-code)',
     background: 'var(--hl-code-bg)'
   },

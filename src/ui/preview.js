@@ -15,8 +15,9 @@
  */
 
 import { state, VIEW_MODES } from './state.js';
-import { getDSL } from '../dsl/registry.js';
+import { getDSL, listDSLs } from '../dsl/registry.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
+import { parseDocSections } from '../core/doc-sections.js';
 
 // Flow model layouts
 import { renderSlides,   teardownSlides,  printSlides, exportSlidesPptx } from '../layout/flow-slides.js';
@@ -102,10 +103,6 @@ export class Preview {
       this._suppressScrollAfterRender = false;
       this._scheduleRender(content, true);
     }));
-    this._unsub.push(state.on('branch-switch', ({ content }) => {
-      this._suppressScrollAfterRender = false;
-      this._scheduleRender(content, true);
-    }));
     this._unsub.push(state.on('active-section-change', ({ version }) => {
       this._activeSectionVersion = version ?? null;
       // In layout mode (slides / document / webpage) the full document is always
@@ -119,11 +116,34 @@ export class Preview {
       this._scheduleRender(state.currentContent, true);
     }));
 
+    // A DSL that bakes the colour theme into its output (`themeAware`, e.g.
+    // Mermaid's svg <style>) is stale the moment the app's theme flips —
+    // Settings → Colour theme, or the OS switching in 'auto' mode. Re-render
+    // in place (scroll kept) when the document actually uses such a DSL; a
+    // document that doesn't is left alone (ABC playback, etc. undisturbed).
+    this._unsub.push(state.on('theme-change', () => {
+      if (!this._usesThemeAwareDsl(state.currentContent)) return;
+      if (this._lastRenderer) this._suppressScrollAfterRender = true;
+      this._scheduleRender(state.currentContent, true);
+    }));
+
     // Scroll-sync: when the editor cursor moves (without a doc change), scroll
     // the preview pane so the corresponding page is centred on screen.
     this._unsub.push(state.on('editor-select', ({ from }) => {
       if (this._scrollSyncEnabled) this._scrollToOffset(from, 'center');
     }));
+  }
+
+  /**
+   * Does the document render through a DSL whose output depends on the colour
+   * theme? True when the build's default DSL (whole-doc or shebang-less
+   * sections) is theme-aware, or any `#!` section names a theme-aware DSL.
+   */
+  _usesThemeAwareDsl(content) {
+    const aware = new Set(listDSLs().filter(d => d.themeAware).map(d => d.id));
+    if (!aware.size) return false;
+    if (aware.has(state.data?.dslType)) return true;
+    return parseDocSections(content ?? '').some(sec => aware.has(sec.dslId));
   }
 
   destroy() {
@@ -306,6 +326,43 @@ export class Preview {
     // Explicit `layout:` in front matter overrides this default.
     const layout = meta.layout ?? (model === 'flow' ? 'webpage' : null);
 
+    // ── 0. Whole-document DSL ({slides}: the deck IS the document) ─────────
+    // Bypasses the model / layout machinery entirely — no `===` splitting, no
+    // per-section rendering; the DSL gets the full source (front matter too,
+    // Marpit reads its directives from it).
+    const wholeDsl = this._wholeDocumentDsl();
+    if (wholeDsl) {
+      this._teardownCurrent();
+      this._lastContent  = content;
+      this._lastModel    = model;
+      this._lastRenderer = `dsl:${wholeDsl.id}`;
+
+      const spinnerTimer = this._armSpinner(content, 300);
+
+      const savedScrollTop = this.pane.scrollTop;
+      try {
+        await wholeDsl.render(content, this.content, { signal: ac.signal, cursorPos: this._cursorPos });
+        if (ac.signal.aborted) return;
+        if (this._suppressScrollAfterRender) {
+          // Typing: keep the user's scroll; only reveal the slide when the
+          // cursor's slide is off-screen (mirrors the layout branch below).
+          this.pane.scrollTop = savedScrollTop;
+          const _pos = this._cursorPos ?? 0;
+          requestAnimationFrame(() => this._scrollToOffset(_pos, 'nearest', true));
+        } else {
+          this._scrollToOffset(this._cursorPos ?? 0);
+        }
+        this._suppressScrollAfterRender = false;
+      } catch (err) {
+        if (ac.signal.aborted) return;
+        wholeDsl.teardown?.(this.content);
+        this.content.innerHTML = `<pre class="error">${_esc(wholeDsl.id)} render error:\n${_esc(err.message)}</pre>`;
+      } finally {
+        clearTimeout(spinnerTimer);
+      }
+      return;
+    }
+
     // ── 1. Non-flow primary model → model renderer ─────────────────────────
     if (model !== 'flow') {
       const renderer = _MODEL_RENDERERS[model];
@@ -321,10 +378,7 @@ export class Preview {
           return;
         }
 
-        const spinnerTimer = setTimeout(() => {
-          if (this._lastContent === content)
-            this.content.innerHTML = '<div class="preview-spinner"></div>';
-        }, 300);
+        const spinnerTimer = this._armSpinner(content, 300);
 
         try {
           await renderer.render(content, this.content, { signal: ac.signal });
@@ -355,12 +409,9 @@ export class Preview {
           return;
         }
 
-        const spinnerTimer = setTimeout(() => {
-          if (this._lastContent === content) {
-            this.content.innerHTML = '<div class="preview-spinner"></div>';
-            if (layout === 'slides') this.content.classList.add('slides-mode');
-          }
-        }, 300);
+        const spinnerTimer = this._armSpinner(content, 300, () => {
+          if (layout === 'slides') this.content.classList.add('slides-mode');
+        });
 
         // Snapshot scroll position so a full render that resets it can be undone.
         const savedScrollTop = this.pane.scrollTop;
@@ -428,10 +479,7 @@ export class Preview {
       ? `<div class="preview-version-warn">⚠ Document uses ${_esc(dslId)}@${_esc(declaredVer)}, plugin is ${_esc(pluginVer)} — rendering with available version</div>`
       : '';
 
-    const spinnerTimer = setTimeout(() => {
-      if (this._lastContent === content)
-        this.content.innerHTML = '<div class="preview-spinner"></div>';
-    }, 200);
+    const spinnerTimer = this._armSpinner(content, 200);
 
     try {
       await dsl.render(renderContent, this.content, { signal: ac.signal });
@@ -445,6 +493,28 @@ export class Preview {
     }
   }
 
+  /**
+   * Arm the "still rendering" spinner: after `delay` ms the pane shows a spinner
+   * instead of the stale previous render — but ONLY if the renderer has not yet
+   * started writing into the pane.  Layout renderers (webpage / document) clear
+   * the container synchronously and then append parts progressively, awaiting
+   * each DSL's render IN PLACE; a timer that blindly replaced innerHTML detached
+   * the part a slow render was still drawing into, so the diagram landed in a
+   * disconnected element and the pane kept the spinner forever (real bug: the
+   * first mermaid 12 render — ELK's warm-up — takes >300 ms).  The snapshot is
+   * the pane's first child before the render starts; a renderer that has begun
+   * has replaced it.  `onFire` runs with the spinner (e.g. the slides-mode class).
+   */
+  _armSpinner(content, delay, onFire) {
+    const snapshot = this.content.firstElementChild;
+    return setTimeout(() => {
+      if (this._lastContent !== content) return;
+      if (this.content.firstElementChild !== snapshot) return;   // renderer is already drawing
+      this.content.innerHTML = '<div class="preview-spinner"></div>';
+      onFire?.();
+    }, delay);
+  }
+
   /** Teardown whatever renderer is currently active. */
   _teardownCurrent() {
     if (!this._lastRenderer) return;
@@ -452,10 +522,20 @@ export class Preview {
     if (key.startsWith('flow:')) {
       const layout = key.slice(5);
       _FLOW_LAYOUT_RENDERERS[layout]?.teardown(this.content);
+    } else if (key.startsWith('dsl:')) {
+      this._wholeDocumentDsl()?.teardown?.(this.content);
     } else {
       _MODEL_RENDERERS[key]?.teardown(this.content);
     }
     this._lastRenderer = null;
+  }
+
+  /** The build's DSL when it renders the whole document itself (`wholeDocument`), else null. */
+  _wholeDocumentDsl() {
+    try {
+      const dsl = getDSL(state.data?.dslType ?? 'markdown');
+      return dsl.wholeDocument ? dsl : null;
+    } catch { return null; }
   }
 
   /**
@@ -467,7 +547,10 @@ export class Preview {
     const layout = this._lastRenderer?.startsWith('flow:')
       ? this._lastRenderer.slice(5)
       : null;
-    if (layout === 'document') {
+    const wholeDsl = this._lastRenderer?.startsWith('dsl:') ? this._wholeDocumentDsl() : null;
+    if (wholeDsl?.print) {
+      wholeDsl.print(state.currentContent);
+    } else if (layout === 'document') {
       printDocument(this.content);
     } else if (layout === 'slides') {
       printSlides(this.content);

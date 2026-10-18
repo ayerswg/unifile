@@ -7,23 +7,27 @@
 
 import { state, PANELS, VIEW_MODES, SPLIT_ORIENTATIONS } from './state.js';
 import { VCS } from '../core/vcs.js';
-import { diff3Merge } from '../core/diff.js';
-import { shortHash } from '../core/hash.js';
 import {
   loadEmbeddedData,
   captureTemplate,
-  generateQuine,
   loadUserPrefs,
   saveUserPrefs,
   IS_QUINE,
   saveDraft,
   loadDraft,
   clearDraft,
-  shareOrDownloadFile,
   requestPersistentStorage,
-  markBackedUp,
-  loadBackupMark,
+  idbLibraryStore,
+  loadFromIDB,
 } from '../core/storage.js';
+import {
+  Library, localPrefs, emptyData, isSavedToDevice, nextVersion, isValidApiName, suggestApiName,
+  versionFileName, LAST_VERSION,
+} from '../core/library.js';
+import {
+  saveVersionToDevice, pickDocumentFromDevice, adoptDeviceDocument, dataFromPickedFile,
+} from '../core/device-file.js';
+import { pruneAssets } from '../core/assets.js';
 import { isEncrypted, decryptData } from '../core/crypto.js';
 import { getDSL } from '../dsl/registry.js';
 import { parseGlobalFrontMatter, serializeGlobalFrontMatter } from '../core/front-matter.js';
@@ -35,16 +39,15 @@ import { Preview } from './preview.js';
 import { DslFooter } from './dsl-footer.js';
 import { PianoRoll } from './piano-roll.js';
 import { mountSiteNav } from './site-nav.js';
-import { checkForUpdate } from './update-check.js';
+import { checkForUpdate, initServiceWorker } from './update-check.js';
 import { PaneSwitch } from './pane-switch.js';
 import { ActionFab } from './action-fab.js';
 import { DiffView, DiffBar, DiffPanes } from './diff-view.js';
-import { CommitDialog } from './commit-dialog.js';
 import { BlameView } from './blame-view.js';
-import { MergeDialog } from './merge-dialog.js';
 import { migrateCommentThreads } from './comments.js';
 import { ExportDialog } from './export-dialog.js';
 import { SettingsPanel } from './settings-panel.js';
+import { LibraryPane } from './library-pane.js';
 
 export class App {
   constructor() {
@@ -62,7 +65,10 @@ export class App {
     // 1. Capture template BEFORE rendering any UI
     if (IS_QUINE) captureTemplate();
 
-    // 2. Load and possibly decrypt data
+    // 2. Load the document.
+    //    Quine: the data embedded in this very file.
+    //    PWA:   the document library (core/library.js) — the last-opened record,
+    //           migrating the pre-library single document on first launch.
     let data;
     try {
       data = loadEmbeddedData();
@@ -76,13 +82,43 @@ export class App {
       if (!data) return; // user cancelled
     }
 
+    if (!IS_QUINE) {
+      const app = data.dslType ?? 'markdown';
+      state.library = new Library(idbLibraryStore(), { app, prefs: localPrefs() });
+      let rec = null;
+      try {
+        rec = await state.library.resolveCurrent();
+        if (!rec) {
+          // First launch on the library: adopt the old single document (and the
+          // crash-recovery draft that used to carry its unsaved text).
+          let legacy = null;
+          try { legacy = await loadFromIDB('default'); } catch { /* none */ }
+          rec = await state.library.migrateLegacy({ data: legacy, draftContent: loadDraft()?.content ?? null });
+          if (rec) clearDraft();
+        }
+        if (!rec) rec = await state.library.create(emptyData(app, { version: data.version }));
+      } catch (e) {
+        console.warn('[library] unavailable, running on the embedded document:', e);
+        state.library = null;
+      }
+      if (rec) {
+        data = rec.data;
+        state.docId = rec.id;
+        state.library.currentId = rec.id;
+        state.deviceFile = _deviceFileOf(rec);
+      }
+    }
+
     // 3. Load user preferences
     const prefs = loadUserPrefs();
     state.user = { name: prefs.name ?? '', email: prefs.email ?? '' };
 
-    // 4. Initialise VCS
+    // 4. Initialise the history (one linear line; a detached head from an
+    //    older file is reattached, its working text kept — see library.js)
     const vcs = new VCS(data);
-    const currentContent = vcs.headContent;
+    vcs.detachedHead = null;
+    const currentContent = (!IS_QUINE && typeof data.currentContent === 'string')
+      ? data.currentContent : vcs.headContent;
 
     // 5. Update state — on small screens split view is impractical; default to preview
     let viewMode = prefs.viewMode ?? VIEW_MODES.SPLIT;
@@ -96,7 +132,7 @@ export class App {
       data,
       vcs,
       currentContent,
-      isDirty: false,
+      isDirty: currentContent !== vcs.headContent,
       viewMode,
       splitOrientation,
       dsl: this._getDsl(data.dslType),
@@ -104,26 +140,40 @@ export class App {
       secondaryModel: fmMeta.model2 ?? null,
     });
 
-    // 5b. Restore draft if the user left unsaved changes (crash / accidental close)
-    const draft = loadDraft();
-    if (draft && draft.content !== currentContent) {
-      // Restore the draft as the live content; the committed head is unchanged.
-      state.update({ currentContent: draft.content, isDirty: true });
-      // Show the recovery banner once components are mounted (deferred below).
-      this._pendingDraftSavedAt = draft.savedAt;
+    // 5b. Quine only: restore the crash-recovery draft if the user left unsaved
+    //     changes (a quine can't rewrite itself; the PWA's library record holds
+    //     the working text itself — see _persistSoon).
+    if (IS_QUINE) {
+      const draft = loadDraft();
+      if (draft && draft.content !== currentContent) {
+        state.update({ currentContent: draft.content, isDirty: true });
+      }
     }
 
-    // 5c. Auto-save draft on every content-change (debounced 2 s).
-    let _draftTimer = null;
-    state.on('content-change', ({ content }) => {
-      clearTimeout(_draftTimer);
-      _draftTimer = setTimeout(() => saveDraft(content, state.headHash), 2000);
+    // 5c. Remember every edit: the library record (PWA) or the draft (quine),
+    //     debounced.  Title changes, comments and assets persist the same way.
+    state.on('content-change', () => this._persistSoon());
+    state.on('comments-change', () => this._persistSoon());
+    state.on('assets-change', () => this._persistSoon(0));
+    state.on('change', () => {
+      if (state.docId && state.title !== this._persistedTitle) this._persistSoon();
     });
+    this._persistedTitle = state.title;
+    // Flush a pending write when the page is hidden / closed (iOS kills PWAs
+    // without warning; a 1 s debounce would lose the last keystrokes).
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this._persistNow(); });
+    window.addEventListener('pagehide', () => this._persistNow());
 
-    // 5d. Local data file: save/open the document + full history as a small
-    //     plain-text `.unifile.json` (deltas + content, no app/soundfont).
-    state.on('save-data-file', () => this._saveDataFile());
-    state.on('open-data-file', () => this._openDataFile());
+    // 5d. The file-level verbs (title dropdown, hamburger menu, shortcuts):
+    //     Save (the next version written to the device + its snapshot in
+    //     history), Save as a new major version, Open from device, the library.
+    state.on('save-document',    (o) => this.saveDocument(o && typeof o === 'object' && ('major' in o || 'message' in o) ? o : {}));
+    state.on('save-major',       () => this.saveDocument({ major: true }));
+    state.on('open-from-device', () => this._openFromDevice());
+    state.on('new-document',     () => this._newDocument());
+    state.on('restore-version',  (hash) => this._restoreVersion(hash));
+    state.on('open-library',     () => this._showLibrary(true));
+    state.on('close-library',    () => this._showLibrary(false));
 
     // 5e. Commit diff view: toggle `data-diff` on the shell so CSS swaps the
     //     panes for the read-only diff overlay + its bottom picker bar.
@@ -148,12 +198,7 @@ export class App {
     // 10b-ii. Wire the mobile far-left commit-log pane + horizontal pane nav.
     this._setupMobilePanes();
 
-    // 10c. Show the persistence banner if we recovered unsaved content, or if
-    //      committed work is sitting un-backed-up in the local sandbox.
-    if (this._pendingDraftSavedAt) {
-      this._draftSavedAt = this._pendingDraftSavedAt;
-      this._pendingDraftSavedAt = null;
-    }
+    // 10c. Mirror persistence state into the history list.
     this._refreshPersistenceBanner();
 
     // 11. Global keyboard shortcuts
@@ -162,12 +207,18 @@ export class App {
     // 12. PWA: register service worker + request durable storage so the OS is
     //     less likely to evict IndexedDB (best-effort; the real backstop is a
     //     user-exported .unifile.json — see the backup nudge below).
+    //     The worker is kept fresh (update on launch + foreground; on the dev
+    //     channel the page reloads onto a new worker — see update-check.js), so
+    //     an update-driven reload flushes the 2 s-debounced draft first.
     if (!IS_QUINE && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(console.warn);
+      initServiceWorker({
+        beforeReload: () => this._persistNow()
+      });
       requestPersistentStorage();
     }
 
-    // 13. Offer an upgrade if a newer release has been published (non-blocking).
+    // 13. Offer an upgrade if a newer build has been published (non-blocking;
+    //     on the dev channel a newer commit is applied automatically).
     checkForUpdate();
   }
 
@@ -182,7 +233,8 @@ export class App {
       <div id="uf-site-nav"></div>
       <div id="uf-topbar"></div>
       <div id="uf-main">
-        <div id="uf-commit-log" aria-label="Commit history"></div>
+        <div id="uf-library" aria-label="Documents"></div>
+        <div id="uf-commit-log" aria-label="Save history"></div>
         <div id="uf-editor-wrap"></div>
         <div id="uf-divider" class="pane-divider">
           <button class="divider-btn divider-to-preview" title="Preview only" aria-label="Preview only">
@@ -212,9 +264,7 @@ export class App {
         <div id="uf-diff-bar"></div>
       </div>
       <div id="uf-panels">
-        <div id="uf-commit-panel"   style="display:none"></div>
         <div id="uf-blame-panel"    style="display:none"></div>
-        <div id="uf-merge-panel"    style="display:none"></div>
         <div id="uf-export-panel"   style="display:none"></div>
         <div id="uf-settings-panel" style="display:none"></div>
       </div>
@@ -283,22 +333,22 @@ export class App {
       document.getElementById('uf-diff-right')
     );
     this._components.diffBar  = new DiffBar(document.getElementById('uf-diff-bar'), {
-      onDiffCreateBranch: (hash) => this._diffCreateBranch(hash),
-      onDiffMerge:        ()     => this._diffMerge(),
+      onRestore: (hash) => this._restoreVersion(hash),
     });
-
-    this._components.commit = new CommitDialog(
-      document.getElementById('uf-commit-panel'),
-      { onCommit: handlers.onCommit }
-    );
+    // The document library — the list behind the back arrow (phone pane /
+    // desktop drawer).  Quines have no library; the element stays empty.
+    this._components.library = new LibraryPane(document.getElementById('uf-library'), {
+      open:           (id, hit) => this._openRecord(id, hit),
+      create:         ()   => this._newDocument(),
+      remove:         (id) => this._removeRecord(id),
+      duplicate:      (id) => this._duplicateRecord(id),
+      rename:         (id, title) => this._renameRecord(id, title),
+      openFromDevice: ()   => this._openFromDevice(),
+      close:          ()   => this._showLibrary(false),
+    });
 
     this._components.blame = new BlameView(
       document.getElementById('uf-blame-panel')
-    );
-
-    this._components.merge = new MergeDialog(
-      document.getElementById('uf-merge-panel'),
-      { onMerge: handlers.onMerge }
     );
 
     this._components.export = new ExportDialog(
@@ -320,69 +370,11 @@ export class App {
   _makeHandlers() {
     return {
       /**
-       * Commit handler — handles both normal commits and detached HEAD commits.
-       * When detached, `branchName` is required; the VCS creates the branch
-       * automatically before committing (history of other branches is untouched).
+       * Save handler — the next version written to the device and the same
+       * snapshot in history.  Reached from the Save pill / Cmd+S (no message)
+       * and the pending node in the history list (message + major switch).
        */
-      onCommit: async ({ author, email, message, tag, branchName }) => {
-        const hash = await state.vcs.commit({
-          content: state.currentContent,
-          message,
-          author,
-          email,
-          tag,
-          branchName   // undefined for normal commits; provided when detached
-        });
-
-        // Sync data from VCS (includes any newly-created branch)
-        const newData = {
-          ...state.data,
-          ...state.vcs.serialize()
-        };
-
-        state.update({
-          data: newData,
-          isDirty: false
-        });
-
-        // Draft is now committed — drop the crash-recovery copy.
-        clearDraft();
-        this._draftSavedAt = null;
-
-        // Auto-save quine
-        await this._saveQuine(newData);
-
-        // Committed, but still only in the local (evictable) sandbox — surface
-        // the quiet "back up" nudge for this new head.
-        this._refreshPersistenceBanner();
-      },
-
-      onMerge: async ({ importedData, branchName, strategy }) => {
-        const { commonAncestor, importedHead } = state.vcs.importFrom(importedData, branchName);
-
-        let mergeContent = state.currentContent;
-
-        if (strategy === 'theirs') {
-          const importedVcs = new VCS(importedData);
-          mergeContent = importedVcs.headContent;
-        }
-
-        if (strategy !== 'import-only') {
-          // Create a merge commit
-          const prefs = loadUserPrefs();
-          await state.vcs.commit({
-            content: mergeContent,
-            message: `Merge ${branchName}`,
-            author: prefs.name || 'Unifile',
-            email: prefs.email || '',
-            tag: null
-          });
-        }
-
-        const newData = { ...state.data, ...state.vcs.serialize() };
-        state.update({ data: newData, currentContent: mergeContent, isDirty: false });
-        await this._saveQuine(newData);
-      },
+      onSave: ({ message, major } = {}) => this.saveDocument({ message, major }),
 
       renderPreview: async () => {
         const preview = this._components.preview;
@@ -398,139 +390,307 @@ export class App {
         return this._components.preview?.exportSlidesPptx();
       },
 
-      // Export the document + history as a .unifile.json; returns the outcome so
-      // the "new document" modal can confirm a backup happened before discarding.
-      onSaveDataFile: () => this._saveDataFile(),
-
-      // Discard the current document and start a fresh, empty one. The confirm +
-      // backup prompts live in the New-document modal (topbar.js); this only runs
-      // once the user has accepted that unbacked-up work will be lost.
-      onNewDocument: () => this._newDocument(),
+      onNewDocument:  () => this._newDocument(),
     };
   }
 
   // ---------------------------------------------------------------------------
-  // New document
+  // Saving — two layers, both on the device (see core/library.js):
+  //   remember → every edit lands in the library record (debounced); the app
+  //              remembering, not a save
+  //   SAVE     → the one save verb: the text written to the device as
+  //              `<name>-<version>.uni` (A00, A01 … a major bump → B00) and the
+  //              same snapshot tagged in history.  The device write comes
+  //              first: a cancelled save burns no version, leaves no snapshot.
+  // ---------------------------------------------------------------------------
+
+  /** Whether there is anything to save (see state.needsSave). */
+  get needsSave() { return state.needsSave; }
+
+  /**
+   * Save: the next version to the device (+ its snapshot in history).
+   * @param {object} [o]
+   * @param {string}  [o.message]  an optional note on this version
+   * @param {boolean} [o.major]    bump the letter (A07 → B00) instead of the number
+   */
+  async saveDocument({ message = '', major = false } = {}) {
+    if (this._saving) return 'busy';
+    if (!this.needsSave && !major) return 'clean';
+    this._saving = true;
+    try {
+      const apiName = await this._ensureApiName();
+      if (!apiName) return 'cancelled';
+      const version = nextVersion(state.data?.savedVersion, { major });
+      if (!version) {
+        window.alert(`This document is at ${LAST_VERSION}, the last version the scheme allows. Duplicate it to keep going.`);
+        return 'exhausted';
+      }
+      const text = state.currentContent;
+      const { result, fileName, handle, error } = await saveVersionToDevice({
+        library: state.library, docId: state.docId, text, apiName, version, mark: false,
+      });
+      if (result === 'failed') { window.alert('Could not write the file: ' + (error?.message ?? error)); return result; }
+      if (result === 'cancelled') return result;
+
+      // The file is on the device: now the matching snapshot in history.
+      const prefs = loadUserPrefs();
+      await state.vcs.commit({
+        content: text,
+        message: message || '',
+        author: (prefs.name || '').trim() || 'anonymous',
+        email: (prefs.email || '').trim() || '',
+        tag: version,
+      });
+      state.update({ data: { ...state.data, ...state.vcs.serialize(), apiName, savedVersion: version }, isDirty: false });
+      clearDraft();
+      if (state.library && state.docId) {
+        await this._persistNow();
+        const rec = await state.library.markSaved(state.docId, { fileName, version, ...(handle ? { handle } : {}) });
+        this._setDeviceFile(_deviceFileOf(rec));
+      } else {
+        // A quine has no record: the save is remembered on the data object.
+        this._setDeviceFile({ fileName, savedAt: Date.now(), savedHead: state.headHash, saved: true, linked: false, version });
+      }
+      this._refreshPersistenceBanner();
+      state.emit('saved', { version, fileName, result });
+      return result;
+    } finally {
+      this._saving = false;
+    }
+  }
+
+  /**
+   * The document's name — fixed at genesis, carried by its file names
+   * (`<name>-<version>.uni`).  A document created before names existed (or
+   * migrated) is asked once, at its first save.  Null when the user declines.
+   */
+  async _ensureApiName() {
+    if (state.data?.apiName) return state.data.apiName;
+    const apiName = await this._promptApiName(suggestApiName(state.title), { title: state.title, exceptId: state.docId });
+    if (!apiName) return null;
+    // A document still called "Untitled" takes its name as its title too.
+    const title = (!state.title || state.title === 'Untitled') ? apiName : state.title;
+    state.update({ data: { ...state.data, apiName, title } });
+    await this._persistNow();
+    return apiName;
+  }
+
+  /**
+   * Ask for a document name until it is valid and free (or cancelled).
+   * Letters, digits, `_`, `.` and `-`; it becomes the file name's stem.
+   * `exceptId` = the document being named (its own record doesn't clash);
+   * a NEW document excepts nothing.
+   */
+  async _promptApiName(suggested = '', { title, exceptId = null } = {}) {
+    let hint = '';
+    for (;;) {
+      const raw = window.prompt(
+        `${hint}Name this document${title && title !== 'Untitled' ? ` (“${title}”)` : ''}.\n` +
+        `It names its files — ${versionFileName(suggested || 'name', 'A00')} — and can't be changed later.\n` +
+        `Letters, digits, _ . and - only.`, suggested);
+      if (raw == null) return null;
+      const name = raw.trim();
+      if (!isValidApiName(name)) { hint = `“${name}” isn't a valid name. `; suggested = suggestApiName(name) || suggested; continue; }
+      if (state.library && !(await state.library.isApiNameFree(name, { exceptId }))) {
+        hint = `“${name}” is already a document here. `; suggested = name; continue;
+      }
+      return name;
+    }
+  }
+
+  /** Debounced persist of the whole document state (library record or draft). */
+  _persistSoon(delay = 1000) {
+    clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => this._persistNow(), delay);
+  }
+
+  async _persistNow() {
+    clearTimeout(this._persistTimer);
+    if (IS_QUINE || !state.library || !state.docId) {
+      if (state.isDirty) saveDraft(state.currentContent, state.headHash);
+      // No record to compare against: the device holds the last save until
+      // the text moves off it.
+      const dev = state.deviceFile;
+      if (dev) this._setDeviceFile({ ...dev, saved: !state.isDirty && state.headHash === dev.savedHead });
+      return;
+    }
+    const docId = state.docId;
+    const data = this._currentDataObject();
+    this._persistedTitle = state.title;
+    try {
+      const rec = await state.library.save(docId, { data });
+      if (state.docId === docId) this._setDeviceFile(_deviceFileOf(rec));
+    } catch (e) {
+      console.warn('[library] persist failed:', e);
+    }
+  }
+
+  /**
+   * Mirror a record's device-file link into state; `device-change` lets the
+   * top bar's pill and the library list repaint when the saved/stale flag or
+   * the file name moves (the generic `change` would re-render everything).
+   */
+  _setDeviceFile(next) {
+    const prev = state.deviceFile;
+    state.deviceFile = next;
+    const key = (d) => d ? `${d.saved}|${d.linked}|${d.fileName}|${d.savedHead}|${d.version}` : '';
+    if (key(prev) !== key(next)) state.emit('device-change', next);
+  }
+
+  /**
+   * Open from device: a `<name>-<version>.uni` (or an older `.unifile.json`)
+   * picked from the device becomes a new library document, named after the
+   * file and starting at its version.  In a quine it replaces the document.
+   */
+  async _openFromDevice() {
+    let picked;
+    try {
+      picked = await pickDocumentFromDevice({ library: state.library });
+    } catch (e) {
+      window.alert(e?.message ?? String(e));
+      return;
+    }
+    if (!picked) return;
+    const prefs = loadUserPrefs();
+    const identity = { author: (prefs.name || '').trim() || 'anonymous', email: (prefs.email || '').trim() || '' };
+    if (!state.library) {
+      if (this.needsSave && state.currentContent && !confirm('Open this file and discard your unsaved changes?')) return;
+      this._loadDataObject(await dataFromPickedFile(state.data?.dslType ?? 'markdown', picked, identity));
+      const d = state.data;
+      this._setDeviceFile(d.savedVersion ? { fileName: picked.fileName, savedAt: Date.now(), savedHead: state.headHash, saved: true, linked: false, version: d.savedVersion } : null);
+      return;
+    }
+    await this._persistNow();
+    const rec = await adoptDeviceDocument(state.library, picked, identity);
+    await this._openRecord(rec.id);
+  }
+
+  // ---------------------------------------------------------------------------
+  // The library — many documents per app
   // ---------------------------------------------------------------------------
 
   /**
-   * Replace the entire in-memory document — content, branches, commits and
-   * comments — with a blank one seeded from this build's default DSL. Configured
-   * extension slots are preserved so the user keeps their setup. Mirrors
-   * _loadDataObject (the opened-file path).
+   * Show / hide the document list (phone: a pane; desktop: a collapsible
+   * sidebar on the left — it stays open while you work, and whether it was
+   * open is remembered).
    */
-  _newDocument() {
-    const data = {
+  _showLibrary(open) {
+    if (!state.library) return;
+    const root = document.getElementById('unifile-app');
+    if (_isMobile()) {
+      state.emit('mobile-goto-pane', open ? 'library' : 'editor');
+      return;
+    }
+    root.toggleAttribute('data-library', open);
+    try { localStorage.setItem('uf_library_open', open ? '1' : '0'); } catch { /* private mode */ }
+    if (open) this._components.library?.refresh();
+    state.emit('library-change', { open });
+    requestAnimationFrame(() => this._components.editor?.refresh());
+  }
+
+  /**
+   * Switch the open document to a library record; with `hit` ({from, to},
+   * a search hit) the editor lands on that text.  On desktop the sidebar
+   * stays open (it is a panel, not a drawer); phones go to the editor.
+   */
+  async _openRecord(id, hit = null) {
+    if (!state.library || !id) return;
+    if (id !== state.docId) {
+      await this._persistNow();                      // the outgoing document's last edits
+      const rec = await state.library.get(id);
+      if (!rec) return;
+      state.closeDiff?.();
+      state.docId = rec.id;
+      state.library.currentId = rec.id;
+      this._setDeviceFile(_deviceFileOf(rec));
+      this._loadDataObject(rec.data);
+    }
+    if (_isMobile()) this._showLibrary(false);
+    if (hit) this._components.editor?.goTo(hit.from, hit.to);
+    else if (!_isMobile()) this._components.editor?.focus?.();
+  }
+
+  /**
+   * A fresh, empty document in the library (quine: replaces the document).
+   * Its name is asked for here, at genesis — it is fixed for good and names
+   * every file the document is saved as.
+   */
+  async _newDocument() {
+    if (!state.library && this.needsSave && state.currentContent
+        && !confirm('Start a new document? Unsaved changes will be lost.')) return;
+    const apiName = await this._promptApiName('');
+    if (!apiName) return;
+    const data = emptyData(state.data?.dslType ?? 'markdown', {
+      title: apiName,
       version: state.data?.version,
-      title: 'Untitled Document',
-      dslType: state.data?.dslType ?? 'markdown',
-      currentBranch: 'main',
-      branches: { main: { name: 'main', head: null } },
-      commits: {},
-      comments: {},
-      commentThreads: {},
-      password: null,
-      currentContent: '',
       // Keep the user's configured extension slots (e.g. abc soundfont).
-      ...(state.data?.pluginExtensions ? { pluginExtensions: { ...state.data.pluginExtensions } } : {}),
-    };
-
-    // Clear any diff/detached/draft state left over from the old document.
-    state.closeDiff?.();
-    this._draftSavedAt = null;
-    this._nudgeDismissedForHash = null;
-
-    this._loadDataObject(data);
-    this._refreshPersistenceBanner();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Diff-mode branch / merge (mobile 3-pane diff bottom-bar actions)
-  //
-  // Both actions require a clean working tree first (so "Current" == the branch
-  // tip and history stays coherent); if dirty we bounce the user to the commit
-  // pane and abort.  Neither auto-commits the result — the user commits it via
-  // the normal flow after reviewing (and resolving any conflict markers).
-  // ---------------------------------------------------------------------------
-
-  /** Force the user to commit before a branch/merge; keeps the diff open. */
-  _forceCommitFirst() {
-    window.alert('Commit your current changes first, then try again.');
-    state.emit('mobile-goto-pane', 'commit');
-  }
-
-  /** Create a new branch off a committed state shown in one of the diff panes. */
-  _diffCreateBranch(hash) {
-    if (!hash || hash === 'WORKING') return;
-    if (state.isDirty) { this._forceCommitFirst(); return; }
-    const vcs = state.vcs;
-    const name = (window.prompt(`New branch name (off ${shortHash(hash)}):`) || '').trim();
-    if (!name) return;
-    if (!/^[A-Za-z0-9/_-]+$/.test(name)) {
-      window.alert('Branch name may only contain letters, numbers, /, _ and -');
+      extra: {
+        apiName,
+        ...(state.data?.pluginExtensions ? { pluginExtensions: { ...state.data.pluginExtensions } } : {}),
+      },
+    });
+    if (!state.library) {
+      state.closeDiff?.();
+      this._loadDataObject(data);
+      this._setDeviceFile(null);
       return;
     }
-    try { vcs.createBranch(name, hash); }
-    catch (err) { window.alert(err?.message || 'Could not create branch.'); return; }
-
-    const content = vcs.switchBranch(name);
-    state.update({ data: { ...state.data, ...vcs.serialize() } });
-    state.closeDiff();
-    state.emit('branch-switch', { name, content });
+    await this._persistNow();
+    const rec = await state.library.create(data);
+    await this._openRecord(rec.id);
     state.emit('mobile-goto-pane', 'editor');
-    this._saveQuine(this._currentDataObject());
+    this._components.editor?.focus?.();
+  }
+
+  async _removeRecord(id) {
+    if (!state.library) return;
+    const rec = await state.library.get(id);
+    if (!rec) return;
+    const where = rec.fileName ? ` The files on your device (${rec.apiName ? rec.apiName + '-…' : rec.fileName}) are not touched.` : '';
+    if (!confirm(`Delete “${rec.title}” and its history from this app?${where}`)) return;
+    await state.library.remove(id);
+    if (id === state.docId) {
+      state.docId = null;
+      const next = await state.library.resolveCurrent();
+      if (next) await this._openRecord(next.id);
+      else await this._newDocument();
+    }
+    this._components.library?.refresh();
+  }
+
+  async _duplicateRecord(id) {
+    if (!state.library) return;
+    if (id === state.docId) await this._persistNow();
+    const copy = await state.library.duplicate(id);
+    if (copy) await this._openRecord(copy.id);
+  }
+
+  async _renameRecord(id, title) {
+    if (!state.library) return;
+    const t = String(title ?? '').trim();
+    if (!t) return;
+    if (id === state.docId) {
+      state.update({ data: { ...state.data, title: t } });
+      await this._persistNow();
+    } else {
+      await state.library.save(id, { title: t });
+    }
+    this._components.library?.refresh();
   }
 
   /**
-   * Merge the RIGHT (source) side into the LEFT (target/middle) side.  Squash
-   * semantics: the three-way merge result becomes the working content on the
-   * target branch, marked dirty for an explicit commit.
+   * Restore a saved version: its text becomes the working text (unsaved, so
+   * the editor shows it as a change on top of the current head — Save keeps
+   * it).  No detached head, no branch: history stays one line.
    */
-  _diffMerge() {
-    const diff = state.diff;
-    if (!diff) return;
-    if (state.isDirty) { this._forceCommitFirst(); return; }
-
-    const vcs = state.vcs;
-    const { left, right } = diff;
-
-    const targetBranch = left === 'WORKING' ? vcs.currentBranch : vcs.branchAtTip(left);
-    if (!targetBranch) {
-      window.alert('Merge target must be “Current” or a branch tip. Pick one as the middle side, or create a branch there first.');
-      return;
-    }
-    const targetHash = left === 'WORKING' ? (vcs.branches[targetBranch]?.head ?? null) : left;
-    const sourceHash = right;
-    if (!sourceHash || sourceHash === 'WORKING') {
-      window.alert('Pick a commit as the right (source) side to merge in.');
-      return;
-    }
-    if (sourceHash === targetHash) {
-      window.alert('Nothing to merge — both sides are the same commit.');
-      return;
-    }
-
-    const base = vcs.findCommonAncestor(targetHash, sourceHash);
-    const ours   = vcs.getContentAt(targetHash);
-    const theirs = vcs.getContentAt(sourceHash);
-    const baseContent = base ? vcs.getContentAt(base) : '';
-    const oursLabel   = left === 'WORKING' ? `Current (${targetBranch})` : shortHash(targetHash);
-    const theirsLabel = shortHash(sourceHash);
-
-    const { content, conflicts } = diff3Merge(ours, baseContent, theirs, { oursLabel, theirsLabel });
-
-    // Land on the target branch (working tree is clean) and drop the merged
-    // result in as uncommitted working content.
-    if (vcs.currentBranch !== targetBranch || vcs.isDetached) vcs.switchBranch(targetBranch);
-    state.update({ data: { ...state.data, ...vcs.serialize() } });
-    state.closeDiff();
-    state.emit('branch-switch', { name: targetBranch, content });
+  _restoreVersion(hash) {
+    if (!hash || hash === 'WORKING' || !state.vcs?.commits?.[hash]) return;
+    const content = state.vcs.getContentAt(hash);
+    state.closeDiff?.();
+    state.update({ currentContent: content, isDirty: content !== state.vcs.headContent });
+    state.emit('checkout', { hash: state.headHash, content });
     state.emit('mobile-goto-pane', 'editor');
-    this._saveQuine(this._currentDataObject());
-
-    if (conflicts > 0) {
-      window.alert(`${conflicts} conflict${conflicts === 1 ? '' : 's'} to resolve. Edit out the <<<<<<< / ======= / >>>>>>> markers, then commit.`);
-    }
+    this._persistSoon(0);
   }
 
   // ---------------------------------------------------------------------------
@@ -695,7 +855,7 @@ export class App {
     }
 
     const root = document.getElementById('unifile-app');
-    const VALID = ['commit', 'editor', 'render'];
+    const VALID = ['library', 'history', 'editor', 'render'];
 
     // Show a single pane by setting `data-mobile-pane` — CSS displays only that
     // pane.  Revealing the editor from display:none needs a CM6 re-measure (it
@@ -703,10 +863,12 @@ export class App {
     // UI + menus; we just drive the active-pane state here.
     const setPane = (pane) => {
       if (!VALID.includes(pane)) pane = 'editor';
+      if (pane === 'library' && !state.library) pane = 'editor';   // quines have no library
       if (!_isMobile()) { root.removeAttribute('data-mobile-pane'); return; }
       root.setAttribute('data-mobile-pane', pane);
       this._components.paneSwitch?.setActive(pane);
       if (pane === 'editor') requestAnimationFrame(() => this._components.editor?.refresh());
+      if (pane === 'library') this._components.library?.refresh();
     };
 
     // Programmatic pane jumps (segment taps go via the PaneSwitch component,
@@ -719,6 +881,12 @@ export class App {
 
     this._bindEditingChrome(root);
 
+    // Desktop: the document list is a collapsible sidebar — reopen it if it
+    // was open last time.
+    let libOpen = false;
+    try { libOpen = localStorage.getItem('uf_library_open') === '1'; } catch { /* private mode */ }
+    if (!_isMobile() && libOpen) this._showLibrary(true);
+
     // Open on the editor; re-assert a valid pane whenever we (re)enter mobile.
     if (_isMobile()) setPane('editor'); else root.removeAttribute('data-mobile-pane');
     _mql.addEventListener('change', (e) => {
@@ -728,139 +896,64 @@ export class App {
   }
 
   // ---------------------------------------------------------------------------
-  // Local data file (.unifile.json) — document + full history as plain text
+  // The data object
   // ---------------------------------------------------------------------------
 
   /** Build the canonical data object (state.data merged with the live VCS state). */
   _currentDataObject() {
-    return {
+    const vcsData = state.vcs?.serialize?.() ?? {};
+    const data = {
       ...state.data,
-      ...(state.vcs?.serialize?.() ?? {}),
+      ...vcsData,
       currentContent: state.currentContent,
       dslType: state.data?.dslType,
     };
-  }
-
-  /** Per-document key for the backup watermark (PWA docId, else the page URL). */
-  _backupScope() {
-    return state.docId ?? location.href;
-  }
-
-  /**
-   * Export the document + full commit history as a small plain-text
-   * `.unifile.json`, out of the browser sandbox.  On iOS this opens the share
-   * sheet ("Save to Files" → iCloud Drive); elsewhere it downloads.  On success
-   * we record the backed-up head so the persistence nudge can stand down.
-   *
-   * The filename carries the short head hash + date so successive snapshots in
-   * the Files app don't clobber each other and form a natural version trail.
-   * @returns {Promise<'shared'|'downloaded'|'cancelled'>}
-   */
-  async _saveDataFile() {
-    const data = this._currentDataObject();
-    const base = (state.title || 'untitled').trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled';
-    const hash = state.headHash ? '.' + state.headHash.slice(0, 7) : '';
-    const date = _localDateStamp();
-    const filename = `${base}${hash}.${date}.unifile.json`;
-    const result = await shareOrDownloadFile(JSON.stringify(data, null, 2), filename, 'application/json');
-    // 'cancelled' = the user backed out of the share sheet without choosing a
-    // target, so the data never actually left — don't mark it backed up.
-    if (result !== 'cancelled' && !state.isDirty && state.headHash) {
-      markBackedUp(this._backupScope(), state.headHash);
-      this._refreshPersistenceBanner();
+    // Document assets (images referenced by name from the text) are not
+    // versioned: drop the ones nothing mentions any more — the serialized
+    // history counts as a mention, so an image an old commit shows survives.
+    if (data.assets && Object.keys(data.assets).length) {
+      data.assets = pruneAssets(data.assets, [state.currentContent, JSON.stringify(vcsData)]);
+      if (data.assets !== state.data?.assets) state.data.assets = data.assets;
     }
-    return result;
+    return data;
   }
 
-  /** Prompt for a `.unifile.json`, then load it (replaces the current document). */
-  _openDataFile() {
-    if (state.isDirty && !confirm('You have uncommitted changes. Open another file and discard them?')) return;
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json,.unifile.json,application/json';
-    input.addEventListener('change', async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const data = JSON.parse(await file.text());
-        if (!data || (data.commits === undefined && data.currentContent === undefined)) {
-          alert('That doesn’t look like a unifile data file.');
-          return;
-        }
-        this._loadDataObject(data);
-      } catch (e) {
-        alert('Could not read that file: ' + (e?.message ?? e));
-      }
-    });
-    input.click();
-  }
-
-  /** Replace the in-memory document with a loaded data object (mirrors init). */
+  /** Replace the in-memory document with a data object (mirrors init). */
   _loadDataObject(data) {
     const vcs = new VCS(data);
+    vcs.detachedHead = null;                       // one line of history
     const currentContent = data.currentContent ?? vcs.headContent;
     const { meta: fmMeta } = parseGlobalFrontMatter(currentContent);
     clearDraft();
+    state.clearVoiceSelections?.();
     state.update({
       data,
       vcs,
       currentContent,
-      isDirty: false,
+      isDirty: currentContent !== vcs.headContent,
       dsl: this._getDsl(data.dslType),
       primaryModel:   fmMeta.model  ?? 'flow',
       secondaryModel: fmMeta.model2 ?? null,
     });
+    this._persistedTitle = state.title;
     this._components.editor?.setValue(currentContent);
     state.emit('checkout', { hash: vcs.headHash, content: currentContent });
+    state.emit('document-change', { docId: state.docId });
     state.emit('change');
-    this._saveQuine(this._currentDataObject());  // persist (IDB / file handle)
+    this._refreshPersistenceBanner();
   }
 
   // ---------------------------------------------------------------------------
-  // Save / quine generation
-  // ---------------------------------------------------------------------------
-
-  async _saveQuine(newData) {
-    if (!IS_QUINE) {
-      // PWA: save to IndexedDB and optionally to file handle
-      const { saveToIDB, saveToFileHandle } = await import('../core/storage.js');
-      const docId = state.docId ?? 'default';
-      await saveToIDB(docId, newData);
-      if (state.fileHandle) {
-        try {
-          const preview = await this._components.preview?.renderToString(
-            state.currentContent, newData.dslType
-          ) ?? '';
-          const html = generateQuine(newData, preview, state.title);
-          await saveToFileHandle(state.fileHandle, html);
-        } catch (e) {
-          console.warn('Could not write to file handle:', e);
-        }
-      }
-      return;
-    }
-
-    // Quine: auto-save to browser storage as backup; main save is manual (export)
-  }
-
-  // ---------------------------------------------------------------------------
-  // Persistence signalling
-  //
-  // The old nagging banners ("Unsaved draft restored — Discard/Commit" and the
-  // "back up" nudge) are gone.  Their two jobs are now handled by passive,
-  // always-legible markers instead of interrupting toasts:
-  //   • uncommitted work → the dirty dot on the title bar + a pending node at the
-  //     top of the commit log (see commit-log rendering in topbar.js).
-  //   • durability       → the "exported" marker on whichever commit was last
-  //     written out to a .unifile.json (loadBackupMark ↔ commit hash).
-  // A recovered crash draft is still restored silently (see init) — it simply
-  // shows as uncommitted, which is exactly what it is.
+  // Persistence signalling — passive markers, no banners:
+  //   • unsaved work → the dirty dot + the pending node at the top of the
+  //     history list (topbar.js);
+  //   • the device   → the "on device" marker on the save the device file
+  //     carries (state.deviceFile.savedHead) + the status line in the library.
   // ---------------------------------------------------------------------------
 
   /** Kept as a stable hook; there is no banner to render anymore. */
   _refreshPersistenceBanner() {
     document.getElementById('uf-draft-banner')?.remove();
-    // Nudge the commit log to reflect current dirty/backup state.
     this._components?.topbar?._refreshCommitLog?.();
   }
 
@@ -914,11 +1007,27 @@ export class App {
         if (state.activePanel === PANELS.BLAME) state.closePanel();
         else state.openPanel(PANELS.BLAME);
       }
-      // Ctrl+Shift+M → merge
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'M') {
+      // Ctrl+S outside the editor (CodeMirror binds its own) → save
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
-        if (state.activePanel === PANELS.MERGE) state.closePanel();
-        else state.openPanel(PANELS.MERGE);
+        state.emit('save-document');
+      }
+      // Ctrl+Shift+S → save as a new major version (A07 → B00)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+        e.preventDefault();
+        state.emit('save-major');
+      }
+      // Ctrl+Shift+O → open from device
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'O') {
+        e.preventDefault();
+        state.emit('open-from-device');
+      }
+      // Ctrl+Shift+L → the library
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'L') {
+        e.preventDefault();
+        const root = document.getElementById('unifile-app');
+        const open = root?.hasAttribute('data-library') || root?.getAttribute('data-mobile-pane') === 'library';
+        state.emit(open ? 'close-library' : 'open-library');
       }
       // Ctrl+Shift+E → export
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'E') {
@@ -1126,25 +1235,18 @@ const _isMobile = () => _mql.matches;
 
 /** Single right-pointing chevron — used for divider-to-split in PREVIEW mode.
  *  CSS flips it (scaleX(-1)) when data-mode="editor". */
-/** Format a timestamp as a human-readable age string (e.g. "5 minutes"). */
-function _formatAge(ts) {
-  const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 90)   return `${s} second${s !== 1 ? 's' : ''}`;
-  const m = Math.round(s / 60);
-  if (m < 90)   return `${m} minute${m !== 1 ? 's' : ''}`;
-  const h = Math.round(m / 60);
-  return `${h} hour${h !== 1 ? 's' : ''}`;
-}
-
-/** Local-time YYYY-MM-DD stamp for backup filenames. */
-function _localDateStamp() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-function _escBanner(str) {
-  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** The device-file link of a library record, as `state.deviceFile` carries it. */
+function _deviceFileOf(rec) {
+  if (!rec) return null;
+  if (!rec.savedAt && !rec.handle && !rec.fileName) return null;
+  return {
+    fileName:  rec.fileName ?? null,
+    savedAt:   rec.savedAt ?? null,
+    savedHead: rec.savedKey ? (rec.savedKey.split(':')[0] || null) : null,
+    saved:     isSavedToDevice(rec),
+    linked:    rec.handle?.kind === 'directory',
+    version:   rec.version ?? null,
+  };
 }
 
 function _chevronRight() {

@@ -46,6 +46,22 @@ export function getDSL(id) {
 }
 
 /**
+ * The comment syntax (`commentTokens`) of the first REGISTERED id among the
+ * candidates — the active section's DSL first, then the document's, so a
+ * `#!section` whose DSL this build does not bundle falls back to the
+ * document's own syntax instead of having none.
+ * @param {...(string|null|undefined)} ids
+ * @returns {{ line?: string, directive?: RegExp, block?: { open: string, close: string } } | null}
+ */
+export function commentTokensFor(...ids) {
+  for (const id of ids) {
+    const plugin = id && _registry.get(id);
+    if (plugin) return plugin.commentTokens ?? null;
+  }
+  return null;
+}
+
+/**
  * Deregister a DSL plugin by id.
  * @param {string} id
  */

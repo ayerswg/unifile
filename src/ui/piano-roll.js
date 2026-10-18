@@ -80,14 +80,13 @@ export class PianoRoll {
     // Note clicked in the score / editor → mirror the selection here.
     state.on('dsl-select', ({ from }) => {
       if (this._emittingSelect || !this._open || !this._data) return;
-      const c = from - this._data.sectionOffset;
+      const c = this._data.fromDoc(from);
       const hit = this._data.notes.find(n => n.startChar <= c && c < n.endChar);
       if (hit) { this._sel = hit; this._scheduleDraw(); }
     });
     // A different document arriving (checkout / branch switch) re-fits the view;
     // ordinary edits must NOT — the user's scroll/zoom position stays put.
     state.on('checkout',      () => { this._viewInited = false; });
-    state.on('branch-switch', () => { this._viewInited = false; });
 
     // Leaving the ABC DSL closes the roll (the toggle only exists for ABC).
     state.on('change', () => {
@@ -217,7 +216,7 @@ export class PianoRoll {
       this._maybeFit();
       this._renderChips();
       this._updateTime();
-      this._updatePlayBtn(state.abcPlaying);
+      this._updatePlayBtn(state.abcPlaying || state.abcStarting);
       this._scheduleDraw();
       this._canvas.focus({ preventScroll: true });
     }
@@ -404,14 +403,14 @@ export class PianoRoll {
     const cs = getComputedStyle(this.el);
     const get = (v, fb) => (cs.getPropertyValue(v) || '').trim() || fb;
     return {
-      bg:      get('--bg', '#1e1e2e'),
-      bgAlt:   get('--bg-alt', '#181825'),
-      surface: get('--bg-surface', '#313244'),
-      border:  get('--border', '#313244'),
-      text:    get('--text', '#cdd6f4'),
-      sub:     get('--text-sub', '#a6adc8'),
-      muted:   get('--text-muted', '#6c7086'),
-      accent:  get('--accent', '#89b4fa'),
+      bg:      get('--bg', '#181818'),
+      bgAlt:   get('--bg-alt', '#1f1f1f'),
+      surface: get('--bg-surface', '#272727'),
+      border:  get('--border', '#2c2c2c'),
+      text:    get('--text', '#dedede'),
+      sub:     get('--text-sub', '#a8a8a8'),
+      muted:   get('--text-muted', '#707070'),
+      accent:  get('--accent', '#3d9bff'),
     };
   }
 
@@ -933,12 +932,14 @@ export class PianoRoll {
    *  fresh abc-roll-data) where the snapshot is stale — an edit computed
    *  against it would splice the wrong characters (e.g. a quick chord-add
    *  then chord-delete turned `[GB]2` into `zGB]2`). All edits funnel through
-   *  _emitEdit, so this one guard covers add/delete/transpose/resize. */
+   *  _emitEdit, so this one guard covers add/delete/transpose/resize.
+   *  Compared against the section AS WRITTEN (`rawSource`): `source` is the
+   *  expanded text the engines parsed (`@1` → `[V:1]`, core/abc-shorthand.js). */
   _isFresh() {
     const d = this._data;
     if (!d) return false;
     const live = state.currentContent ?? '';
-    return live.slice(d.sectionOffset, d.sectionOffset + d.source.length) === d.source;
+    return live.slice(d.sectionOffset, d.sectionOffset + d.rawSource.length) === d.rawSource;
   }
 
   /**
@@ -974,20 +975,23 @@ export class PianoRoll {
 
   _emitEdit(changes, selection) {
     if (!this._isFresh()) { this._flash('Score updating — try that again'); return; }
-    const off = this._data.sectionOffset;
+    // All char math above is in the expanded section; the roll data's maps
+    // put every edit back into document offsets (the voice shorthand's
+    // `[V:id]` is 3 chars longer than the `@id` the document holds).
+    const { toDoc } = this._data;
     state.emit('dsl-edit', {
-      changes: changes.map(c => ({ from: c.from + off, to: c.to + off, insert: c.insert })),
+      changes: changes.map(c => ({ from: toDoc(c.from), to: toDoc(c.to), insert: c.insert })),
       selection: selection
-        ? { anchor: selection.anchor + off, head: selection.head + off }
+        ? { anchor: toDoc(selection.anchor), head: toDoc(selection.head) }
         : undefined,
     });
   }
 
   _emitSelect(note) {
-    const off = this._data.sectionOffset;
+    const { toDoc } = this._data;
     this._emittingSelect = true;
     try {
-      state.emit('dsl-select', { from: note.startChar + off, to: note.endChar + off });
+      state.emit('dsl-select', { from: toDoc(note.startChar), to: toDoc(note.endChar) });
     } finally {
       this._emittingSelect = false;
     }

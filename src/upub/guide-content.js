@@ -58,8 +58,12 @@ strikethrough, code, link, indent, outdent — plus undo and redo. A \`/\` insid
 (\`and/or\`), a URL, or a code block never opens the menu.
 
 On a hardware keyboard: **⌘B** bold, **⌘I** italic, **⌘K** link,
-**⌘Z / ⇧⌘Z** undo/redo, **Tab / ⇧Tab** indent/outdent in lists. On iOS,
-undo is also the system three-finger swipe (or shake).
+**⌘Z / ⇧⌘Z** undo/redo, **Tab / ⇧Tab** indent/outdent in lists, **⌘/**
+(Ctrl+/ on Windows and Linux) comments out the selected lines — they are
+wrapped in an HTML comment, \`<!-- … -->\`, which no reader or export shows;
+press it again to bring them back (inside the front matter it toggles a
+YAML \`#\` instead). On iOS, undo is also the system three-finger swipe (or
+shake).
 
 Pressing **Return** inside a list continues it (numbered lists renumber,
 task lists add a fresh \`[ ]\`). Pressing Return on an *empty* list item
@@ -179,32 +183,75 @@ How the document maps to the book:
 You can also export the raw **Markdown** (\`.md\`) at any time — your text
 is never locked in.
 
-## Version history
+## Comments
 
-{write} keeps a git-style history *inside* the document. Open **⋯ menu →
-History**:
+Comments live on the text, the way a word processor does them. **Select
+some words, then long-press the selection** (right-click on a desktop)
+and choose **Comment**. A card opens under the selection; write and tap
+**Comment**. The commented text keeps a soft highlight; **tap it** to read
+the thread, reply, or **Resolve** it (resolving removes the highlight and
+keeps the thread under **⋯ menu → Comments…**, which also lists every open
+comment — tap one to jump to it). Comments follow the text as you edit; a
+comment whose text you delete resolves itself. On a hardware keyboard,
+**⌃⌥M** / **⌘⌥M** comments on the selection.
 
-- **Commit** snapshots the current text (a message is optional). Commits
-  are stored as diffs, so history stays small.
-- Tap any commit to **restore** its text into the editor. Restoring
-  doesn't delete anything — it just puts the old text back as the current
-  (uncommitted) state; commit it to make it the new tip.
-- The dot on the History menu item shows there are uncommitted changes.
+Comments are saved with the document (and in its data file), so they
+travel with it into any other unifile app.
 
-Set your author name for commits in **⋯ menu → Settings**.
+## Documents, saves and your device
+
+The **‹** button at the top left opens your **documents** — every piece you
+have written in {write}, newest first, each one exactly as you left it. Tap
+one to open it, **+ New** to start another, **⋯** on a row to rename,
+duplicate or delete it. You never have to save before switching: the text
+you are typing is remembered as you type.
+
+The list has a **search bar**: it searches document names *and* their
+text, and shows the matching lines under each document — tap a line to open
+the document right there.
+
+Two things keep your writing safe, all on your device — nothing is ever
+sent anywhere:
+
+- **Remembered as you type.** Every document's current text, including
+  changes you haven't saved, is stored on the device the moment you type
+  it. You never have to do anything for this.
+- **Save** (⋯ menu → Save, or the Save button in **History**) writes the
+  text to your device as a file — just the text, nothing else — and keeps
+  the same snapshot in the document's **history**. Every save is a new
+  file: \`name-A00.uni\`, then \`name-A01.uni\`, \`name-A02.uni\`… The
+  **name** is asked for once, when the document is created, and never
+  changes (it is what the files are called; the title you see at the top
+  is separate and can change freely). The three-character **version** counts
+  up by itself; **Save as new major** turns \`A07\` into \`B00\` — for a
+  draft you consider a new stage. On desktop Chrome and Edge you pick the
+  folder once and later versions land in it silently; on iPhone and iPad
+  the share sheet offers **Files / iCloud Drive**; elsewhere the file
+  downloads. A note on the version is optional (History → the pending node).
+  In History, tap any version to **restore** its text into the editor —
+  restoring deletes nothing, it puts the old text back as the current
+  (unsaved) state; save again to keep it.
+
+**Open from device** brings a \`.uni\` file back into the documents list on
+any device: the name and version come from the file name, and the history
+starts from there. (Older \`.unifile.json\` files still open, history
+included.)
+
+The dot next to the title (and on the Save menu item) means the device
+doesn't have your latest changes yet. The documents list shows each
+document's last saved file.
+
+Set your author name for saves in **⋯ menu → Settings**.
 
 ## Where your text lives
 
 - **App (PWA):** documents are stored in the browser's IndexedDB on your
-  device and autosaved as you type. Use **Export → Data file
-  (.unifile.json)** for a durable backup — it contains the full text *and*
-  the complete history, and can be imported back on any device.
+  device and remembered as you type. Browsers can evict site data under
+  storage pressure — **Save** anything you care about; each version is a
+  plain-text file you keep, and it opens on any device.
 - **Single-file (.html):** the downloaded file *is* the app and the
-  document in one. "Save a copy" regenerates the file with your latest
-  text and history embedded.
-
-Autosave is instant, but browsers can evict site data under storage
-pressure — export a data file (or an EPUB) for anything you care about.
+  document in one (there is no documents list in this mode). "Save a copy"
+  regenerates the file with your latest text and history embedded.
 
 ## iOS install
 

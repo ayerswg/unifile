@@ -34,7 +34,7 @@ const rel = (p) => SITE.baseurl + p;
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // types.yml ids → icons.mjs keys (which are DSL ids).
-const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs', udraft: 'udraft' };
+const TYPE_TO_ICON = { markdown: 'markdown', mermaid: 'mermaid', upub: 'upub', abc: 'abcjs', udraft: 'udraft', slides: 'slides', spreadsheet: 'spreadsheet' };
 
 // Site favicon: the bare `{}`, black on white.
 const FAVICON = 'data:image/svg+xml,' + encodeURIComponent(faviconSvg());
@@ -102,10 +102,11 @@ async function loadTypes() {
 
 // ── version (footer stamp) ──────────────────────────────────────────────────
 async function loadVersion() {
-  try { return JSON.parse(await readFile(join(DOCS, 'version.json'), 'utf8')).version || ''; }
-  catch { return ''; }
+  try { return JSON.parse(await readFile(join(DOCS, 'version.json'), 'utf8')); }
+  catch { return {}; }
 }
 let VERSION = '';
+let BUILD_STAMP = '';   // dev channel: the commit (the identity there) beside the version
 
 // ── shared page chrome ──────────────────────────────────────────────────────
 function pageHead(title) {
@@ -126,7 +127,7 @@ function pageFoot() {
 
 /** Footer on every page: a rule, the version, the guides. */
 function footer() {
-  const v = VERSION ? `unifile v${esc(VERSION)} <span class="sep">·</span> ` : '';
+  const v = VERSION ? `unifile v${esc(VERSION)}${BUILD_STAMP ? ` ${esc(BUILD_STAMP)}` : ''} <span class="sep">·</span> ` : '';
   return `<footer class="foot"><hr>
   <p>${v}<a href="${rel('/upub/guide/')}">${esc(appName('upub'))} guide</a> <span class="sep">·</span> <a href="${rel('/udraft/guide/')}">${esc(appName('udraft'))} guide</a></p>
 </footer>`;
@@ -252,7 +253,9 @@ async function main() {
 
   const apps = await loadApps();
   const types = await loadTypes();
-  VERSION = await loadVersion();
+  const vinfo = await loadVersion();
+  VERSION = vinfo.version || '';
+  BUILD_STAMP = vinfo.channel === 'dev' && vinfo.commit ? `(dev ${vinfo.commit})` : '';
 
   // Posts (filename: YYYY-MM-DD-slug.md → /posts/slug/).
   const postFiles = (await readdir(join(DOCS, '_posts'))).filter(f => f.endsWith('.md')).sort().reverse();
@@ -312,7 +315,7 @@ async function main() {
 
   // Static passthrough: assets + downloads + PWAs + CNAME.
   await cp(join(DOCS, 'assets'), join(OUT, 'assets'), { recursive: true });
-  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-upub', 'pwa-dft']) {
+  for (const d of ['dl', 'pwa-md', 'pwa-mer', 'pwa-abc', 'pwa-upub', 'pwa-dft', 'pwa-sld', 'pwa-sht']) {
     if (await exists(join(DOCS, d))) await cp(join(DOCS, d), join(OUT, d), { recursive: true });
   }
   if (await exists(join(DOCS, 'CNAME'))) await cp(join(DOCS, 'CNAME'), join(OUT, 'CNAME'));

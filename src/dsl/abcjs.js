@@ -26,6 +26,7 @@ import { state } from '../ui/state.js';
 import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
+import { expandAbc, sourceLineBreaks, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -54,6 +55,8 @@ const abcLanguage = StreamLanguage.define({
 
     // At the start of each line decide whether it is a header line.
     if (stream.sol()) {
+      // unifile's voice shorthand: `@id` at a line start = `[V:id]`.
+      if (stream.match(VOICE_PREFIX_RE)) { state.inHeader = false; return 'keyword'; }
       const m = stream.string.match(/^([A-Za-z]):/);
       if (m && ABC_HEADER_FIELDS.has(m[1].toUpperCase())) {
         // Consume just the "X:" token and mark the rest of the line as header.
@@ -73,27 +76,43 @@ const abcLanguage = StreamLanguage.define({
     }
 
     // ── Music body tokens ────────────────────────────────────────────────────
+    // Inline fields `[K:G]` `[V:1]` `[M:3/4]` `[L:1/8]` `[r: remark]` — a field
+    // like the header's, so its letters must not read as pitches.
+    if (stream.match(/\[[A-Za-z]:[^\]\n]*\]/)) return 'keyword';
+
     // Decorations / dynamics / keyswitch marks: !staccato! !f! !legato! !pizzicato! …
     // Match the whole `!…!` as one token so its inner letters aren't mis-read as
-    // note pitches (e.g. the g/a in !legato!).
-    if (stream.match(/![^!\n]*!/)) return 'meta';
+    // note pitches (e.g. the g/a in !legato!).  `+…+` is the older spelling.
+    if (stream.match(/![^!\n]*!|\+[a-z][^+\n]*\+/)) return 'meta';
 
-    // Barlines
-    if (stream.match(/\|\||\|:|:\||\||\[|\]/)) return 'separator';
+    // Chord symbols / annotations in double quotes ("Am", "^text")
+    if (stream.match(/"[^"\n]*"/)) return 'string';
 
-    // Rests and note lengths
-    if (stream.match(/[zZ]\d*/)) return 'atom';
+    // Barlines and repeats: |] [| || |: :| :: | and the endings |1 [2
+    if (stream.match(/\|\]|\[\||\|\||\|:+|:+\||::|\|\d?|\[\d/)) return 'separator';
 
-    // Note pitches: A-G (optionally #, b, =) followed by octave markers
-    if (stream.match(/[A-Ga-g][#b=]?[,'']*/)) return 'atom';
+    // Chord brackets `[CEG]` and grace notes `{ab}`
+    if (stream.match(/[[\]{}]/)) return 'punctuation';
 
-    // Ties, slurs, beams
-    if (stream.match(/[-()~]/)) return 'punctuation';
+    // Rests (z, x = invisible, Z/X = whole measures) with their length
+    if (stream.match(/[zxZX](?:\d+\/?\d*|\/+\d*)?/)) return 'atom';
 
-    // Chord symbols in double-quotes
-    if (stream.match(/"[^"]*"/)) return 'string';
+    // Notes: accidental (^ ^^ _ __ =) + pitch A–G / a–g + octave marks (, ') +
+    // length (2, /2, 3/2, /).  NOTE `b` after a pitch is the NEXT note (B below
+    // middle C), never a flat — ABC writes flats as `_B`.
+    if (stream.match(/[\^_=]{1,2}[A-Ga-g][,']*(?:\d+\/?\d*|\/+\d*)?|[A-Ga-g][,']*(?:\d+\/?\d*|\/+\d*)?/)) return 'atom';
 
-    // Numbers (time signatures, repeat counts, etc.)
+    // Single-character decorations before a note: . staccato  ~ roll  H fermata
+    // L accent  M mordent  O coda  P mordent  S segno  T trill  u / v bows
+    if (stream.match(/[.~HLMOPSTuv](?=[\^_=]*[A-Ga-g[(])/)) return 'meta';
+
+    // Tuplets `(3`, `(3:2:3`; broken rhythm > <; ties, slurs, beams
+    if (stream.match(/\(\d+(?::\d*){0,2}|[<>]+|[-()~]/)) return 'punctuation';
+
+    // Line continuation
+    if (stream.match(/\\\s*$/)) return 'meta';
+
+    // Numbers (repeat counts, etc.)
     if (stream.match(/\d+/)) return 'number';
 
     stream.next();
@@ -192,7 +211,8 @@ let _noteEvents = [];
 // Raw ABC source of the last render (section-relative).  Needed to scan for
 // `!name!` articulation tokens — abcjs drops unknown decorations, so we read
 // them from the source ourselves; their indices line up with note startChars.
-let _lastAbcSource = '';
+let _lastAbcSource = '';   // the EXPANDED section the engines parsed
+let _lastRawSource = '';   // the same section as written (voice shorthand intact)
 
 // Voice map for the last render (section-relative char → voice id + score order),
 // used to mute/solo voices for playback, highlighting and the score fade.
@@ -286,6 +306,29 @@ let _a2sScore = null;
 let _a2sResizeObs   = null;
 let _a2sResizeTimer = 0;
 
+/**
+ * Re-engrave when `watchEl`'s width drifts >10% from `engravedW`, the width
+ * the visible score was laid out for (debounced; one observer per render —
+ * render() disconnects the previous). `stillCurrent` guards against a render
+ * that has since been replaced; during playback the check is deferred rather
+ * than dropped, so a pane switched to mid-tune still reflows when it stops.
+ */
+function _watchWidth(watchEl, engravedW, stillCurrent, reengrave) {
+  try {
+    const check = () => {
+      if (!stillCurrent()) return;
+      if (state.abcPlaying || state.abcStarting) { _a2sResizeTimer = setTimeout(check, 1000); return; }
+      const w = watchEl.clientWidth;
+      if (w && Math.abs(w - engravedW) / w > 0.1) reengrave();   // re-measures and re-engraves
+    };
+    _a2sResizeObs = new ResizeObserver(() => {
+      clearTimeout(_a2sResizeTimer);
+      _a2sResizeTimer = setTimeout(check, 250);
+    });
+    _a2sResizeObs.observe(watchEl);
+  } catch { /* ResizeObserver unsupported — engraved width stays as-is */ }
+}
+
 // Debug introspection for preview automation (harmless in production).
 if (typeof globalThis !== 'undefined') {
   globalThis.__ufAbcDebug = Object.assign(() => ({
@@ -296,6 +339,7 @@ if (typeof globalThis !== 'undefined') {
     a2s_debug: _a2sScore?._debug?.() ?? null,
     sectionOffset: _sectionOffset,
     noteEvents: _noteEvents.length,
+    events: _noteEvents.map(e => ({ ms: e.milliseconds, starts: e.startCharArray ?? [e.startChar], ends: e.endCharArray ?? [e.endChar] })),
   }), { exportSvg: abc2svgExportSvg, exportPrintBody: abc2svgExportPrintBody });
 }
 
@@ -326,13 +370,33 @@ let _scheduledOscs = [];
 // (for dsl-select events) and subtract it when going the other way (rangeHighlight).
 let _sectionOffset = 0;
 
+// The voice-shorthand expansion of the rendered section (core/abc-shorthand.js):
+// the engines parse `[V:id]` where the text says `@id`, so every char offset
+// they report is in the EXPANDED text. _toDoc / _toSec are the ONE boundary
+// between that space and the editor's document offsets — use them instead of
+// adding / subtracting _sectionOffset by hand.
+let _srcMap = expandAbc('');
+
+/** Expanded-section char → document offset. */
+function _toDoc(sectionChar) { return _sectionOffset + _srcMap.toSource(sectionChar); }
+/** Document offset → expanded-section char (clamped at the section start). */
+function _toSec(docPos) { return _srcMap.toExpanded(Math.max(0, docPos - _sectionOffset)); }
+
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
-async function render(content, el) {
+async function render(rawContent, el) {
   // Stop any in-progress playback when the content changes.
   if (_synth) stopPlayback();
+
+  // Voice shorthand: `@id` line prefixes become `[V:id]` for both engines, and
+  // a tune missing `X:` / `K:` gets them (abc2svg draws nothing without them).
+  // Everything below works in the expanded text; _toDoc/_toSec (and the maps
+  // handed to the piano roll) translate at the editor boundary.
+  const srcMap = expandAbc(rawContent);
+  const content = srcMap.text;
+  _srcMap = srcMap;
 
   // Capture section offset so click positions (section-relative) can be
   // translated to full-document positions and vice-versa.
@@ -398,16 +462,35 @@ async function render(content, el) {
   // closure uses localOffset so it always refers to its own block, and it
   // re-establishes the module-level context variables when clicked.
   const localOffset = _sectionOffset;
+  const localMap    = srcMap;
 
   try {
     const tablature = parseTabDirectives(content);
+    // The abcjs render is the VISIBLE score only for %%tablature docs and the
+    // abcjs escape hatch; there, mirror the abc2svg default (source newlines
+    // do not break staff lines) with abcjs's own re-wrapping (`wrap` needs a
+    // staffwidth). The hidden audio/timing render never needs it.
+    const abcjsVisible = !useAbc2svg() || !!tablature;
+    // The width a flowing abcjs score is engraved for; null when the source's
+    // own line breaks rule (then width does not change the layout). A hidden
+    // pane measures 0 → the 760 default, re-engraved once it shows.
+    let engravedForW = null;
+    const flowOpts = () => {
+      if (sourceLineBreaks(content)) return {};
+      engravedForW = el.clientWidth || 760;
+      return {
+        staffwidth: Math.max(300, engravedForW - 30),
+        wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 },
+      };
+    };
+    const wrapOpts = abcjsVisible ? flowOpts() : {};
 
     // Declared before renderAbc so the clickListener closure can capture the
     // binding; assigned after renderAbc once we have the tuneObjects back.
     let localEngraver    = null;
     let localTuneObjects = null;
 
-    const tuneObjects = abcjs.renderAbc(container, content, {
+    const abcjsOpts = {
       responsive: 'resize',
       add_classes: true,
       ...(tablature ? { tablature } : {}),
@@ -421,19 +504,21 @@ async function render(content, el) {
         _tuneObjects = localTuneObjects;
         _playEl      = container;
         _sectionOffset = localOffset;
+        _srcMap      = localMap;
         if (abcElem.startChar !== undefined && abcElem.endChar !== undefined) {
           // Remember which block's note was clicked so we can restore the
           // visual highlight if the block re-renders before the user moves.
           _lastNoteBlockOffset = localOffset;
           _lastNoteClickRange  = { from: abcElem.startChar, to: abcElem.endChar };
           state.emit('dsl-select', {
-            from: abcElem.startChar + localOffset,
-            to:   abcElem.endChar   + localOffset,
+            from: _toDoc(abcElem.startChar),
+            to:   _toDoc(abcElem.endChar),
           });
           _setNoteSelected(true); // show the play button
         }
       }
-    });
+    };
+    let tuneObjects = abcjs.renderAbc(container, content, { ...abcjsOpts, ...wrapOpts });
 
     localEngraver    = tuneObjects?.[0]?.engraver ?? null;
     localTuneObjects = tuneObjects ?? null;
@@ -442,6 +527,7 @@ async function render(content, el) {
     _engraver    = localEngraver;
     _tuneObjects = localTuneObjects;
     _lastAbcSource = content;
+    _lastRawSource = rawContent;
     _voiceMap    = buildVoiceMap(content);
     _playEl      = container;
 
@@ -468,35 +554,44 @@ async function render(content, el) {
           _a2sScore    = localScore;
           _playEl      = container;
           _sectionOffset = localOffset;
+          _srcMap      = localMap;
           _lastNoteBlockOffset = localOffset;
           _lastNoteClickRange  = { from, to };
-          state.emit('dsl-select', { from: from + localOffset, to: to + localOffset });
+          state.emit('dsl-select', { from: _toDoc(from), to: _toDoc(to) });
           _setNoteSelected(true);
           localScore.highlightRange(from, to);
         },
       });
       if (localScore) container.style.display = 'none';
-      else engravingEl.remove();
+      else {
+        // abc2svg could not engrave this content, so the abcjs render is the
+        // score the user sees — redraw it flowing (its hidden timing render
+        // above was drawn without the re-wrap, one staff line per source
+        // line, which is not the {compose} default).
+        engravingEl.remove();
+        const flow = flowOpts();
+        if (flow.wrap) {
+          tuneObjects = abcjs.renderAbc(container, content, { ...abcjsOpts, ...flow });
+          localEngraver    = tuneObjects?.[0]?.engraver ?? null;
+          localTuneObjects = tuneObjects ?? null;
+          _engraver    = localEngraver;
+          _tuneObjects = localTuneObjects;
+        }
+      }
 
       // Watch the wrap's width and re-engrave when it differs meaningfully
       // from the width the score was engraved for (first-layout settle,
-      // window/split resize). pageWidth is null when the doc pins its own
-      // %%pagewidth — then the layout is the author's, don't second-guess it.
-      if (localScore?.pageWidth) {
-        try {
-          _a2sResizeObs = new ResizeObserver(() => {
-            clearTimeout(_a2sResizeTimer);
-            _a2sResizeTimer = setTimeout(() => {
-              if (_a2sScore !== localScore || state.abcPlaying) return;
-              const w = engravingEl.clientWidth;
-              if (w && Math.abs(w - localScore.pageWidth) / w > 0.1) {
-                render(content, el);   // re-measures and re-engraves
-              }
-            }, 250);
-          });
-          _a2sResizeObs.observe(engravingEl);
-        } catch { /* ResizeObserver unsupported — engraved width stays as-is */ }
-      }
+      // window/split resize, the phone's render pane appearing — it is
+      // display:none while the editor shows, so the render that ran behind
+      // it measured 0 and engraved the default page). pageWidth is null when
+      // the doc pins its own %%pagewidth — then the layout is the author's,
+      // don't second-guess it.
+      if (localScore?.pageWidth) _watchWidth(engravingEl, localScore.pageWidth, () => _a2sScore === localScore, () => render(rawContent, el));
+      else if (!localScore && engravedForW) _watchWidth(container, engravedForW, () => _playEl === container, () => render(rawContent, el));
+    } else if (engravedForW) {
+      // The abcjs render IS the score (tablature docs, the escape hatch):
+      // the same re-engrave on a meaningful width change.
+      _watchWidth(container, engravedForW, () => _playEl === container, () => render(rawContent, el));
     }
     _a2sScore = localScore;
 
@@ -569,8 +664,8 @@ state.on('editor-select', ({ from, to }) => {
   if (_engraver && (state.activeDslId ?? state.data?.dslType) === 'abcjs' && !state.abcPlaying) {
     // Translated to section-relative: collapsed cursor clears, range highlights.
     // Coalesced to one rangeHighlight per frame (see _scheduleRangeHighlight).
-    const adjFrom = from === to ? 0 : Math.max(0, from - _sectionOffset);
-    const adjTo   = from === to ? 0 : Math.max(0, to   - _sectionOffset);
+    const adjFrom = from === to ? 0 : _toSec(from);
+    const adjTo   = from === to ? 0 : _toSec(to);
     _scheduleRangeHighlight(adjFrom, adjTo);
     // A real text-range selection over ABC content counts as a note selected.
     if (from !== to) _setNoteSelected(true);
@@ -584,7 +679,7 @@ state.on('editor-select', ({ from, to }) => {
   // skimming with held arrow keys doesn't machine-gun; per-note dedupe inside).
   if (from === to && !state.abcPlaying &&
       (state.activeDslId ?? state.data?.dslType) === 'abcjs') {
-    _auditionSoon(Math.max(0, from - _sectionOffset));
+    _auditionSoon(_toSec(from));
   }
 });
 
@@ -598,10 +693,23 @@ state.on('editor-select', ({ from, to }) => {
 // this one note".  Range-play is driven solely by editor text selections.
 state.on('dsl-select', ({ from }) => {
   _lastEditorSel = { from, to: from };
+  if (state.abcPlaying || state.abcStarting) {
+    // Mid-playback a click on a note (score or piano roll) is a SEEK — the
+    // DAW's click-to-locate: the audio, the green highlight and the cursor bar
+    // all jump to that note. The editor caret is collapsed there now, so any
+    // range the playback was bound to no longer matches the selection: play
+    // on to the end from the clicked note (a plain seek).
+    const ms = _charToMs(_toSec(from));
+    if (ms == null) return;
+    _selRangeMs = null;
+    state.emit('abc-range', null);
+    seekTo(ms);
+    return;
+  }
   // Clicking a note in the preview cues the transport to that note.
   _syncTransportToSelection(from, from);
   // …and sounds it (forced: re-clicking the same note plays it again).
-  _auditionAt(Math.max(0, from - _sectionOffset), { force: true });
+  _auditionAt(_toSec(from), { force: true });
 });
 
 // A note letter (or an octave mark extending one) typed in the editor is
@@ -623,7 +731,7 @@ state.on('editor-type', ({ pos, ch }) => {
 // from the current position so the newly muted/soloed voices take effect at once.
 state.on('abc-voices-change', () => {
   _applyVoiceFade();
-  if (state.abcPlaying) {
+  if (state.abcPlaying || state.abcStarting) {
     const ms = _currentMs();
     stopPlayback({ keepPosition: true });
     startPlayback({ startMs: ms });
@@ -633,7 +741,6 @@ state.on('abc-voices-change', () => {
 // Loading a different document (checkout / branch switch) clears voice selections
 // so stale voice ids don't silence the new tune.
 state.on('checkout',      () => state.clearVoiceSelections());
-state.on('branch-switch', () => state.clearVoiceSelections());
 
 // ---------------------------------------------------------------------------
 // Note audition — sound a single note/chord when it is written or selected
@@ -664,8 +771,8 @@ let _auditionFlashTimer  = 0;     // clears the green "now sounding" flash
  *  started mid-flash owns the highlight and the clear stands down. */
 function _auditionFlash(startChar, endChar, durMs) {
   const doc  = state.currentContent ?? '';
-  const to   = endChar + _sectionOffset;
-  const from = _trimToNoteStart(doc, startChar + _sectionOffset, to);
+  const to   = _toDoc(endChar);
+  const from = _trimToNoteStart(doc, _toDoc(startChar), to);
 
   // abcjs-engraver fallback (escape hatch / %%tablature): the note's own SVG
   // groups, green via the container's playback palette class.
@@ -721,7 +828,7 @@ function _pitchesAtStart(startChar) {
  *  Consecutive cursor events inside the same token play once; `force` (preview
  *  click, fresh keystroke) always plays. */
 function _auditionAt(adjChar, { force = false } = {}) {
-  if (state.abcPlaying || !_noteEvents.length) return;
+  if (state.abcPlaying || state.abcStarting || !_noteEvents.length) return;
   const note = _flatNotes().find(n => n.startChar <= adjChar && adjChar < n.endChar);
   if (!note) { _lastAuditionChar = -1; return; }
   if (!force && note.startChar === _lastAuditionChar) return;
@@ -793,7 +900,7 @@ function _consumePendingTypeAudition() {
   const { pos, at } = _pendingTypeAudition;
   _pendingTypeAudition = null;
   if (performance.now() - at > 2000) return;
-  _auditionAt(Math.max(0, pos - _sectionOffset), { force: true });
+  _auditionAt(_toSec(pos), { force: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,30 +1504,59 @@ function _highlightEvent(event) {
     return;
   }
 
-  // Editor: emit all voice char ranges for green text-colour highlighting.
-  // abcjs char indices are section-relative → add _sectionOffset to map them to
-  // document positions; and trim leading decorations/whitespace so the green
-  // covers the note, not its `!legato!`/`.` marks (abcjs's startChar can point
-  // at the decoration that precedes the note).  Muted / non-soloed voices are
-  // skipped entirely — neither the SVG note nor the editor cursor lights up
-  // (`elements[i]` parallels `startCharArray[i]`, one entry per sounding voice).
+  // Everything SOUNDING at this moment: the moment's own onsets plus every
+  // earlier note still held in another voice (a bass half note stays green
+  // while the treble's eighths pass over it — the highlight is what plays, not
+  // what just started; see _soundingEntries). Editor: emit all their char
+  // ranges for green text-colour highlighting. abcjs char indices are
+  // section-relative → _toDoc maps them to document positions; and trim
+  // leading decorations/whitespace so the green covers the note, not its
+  // `!legato!`/`.` marks (abcjs's startChar can point at the decoration that
+  // precedes the note). Muted / non-soloed voices are skipped entirely —
+  // neither the SVG note nor the editor cursor lights up.
   const doc    = state.currentContent ?? '';
-  const starts = event.startCharArray ?? [event.startChar];
-  const ends   = event.endCharArray   ?? [event.endChar];
-  const groups = event.elements ?? [];
   const ranges = [];
   const secPairs = [];   // section-relative pairs for the abc2svg score
-  starts.forEach((s, i) => {
-    if (s === undefined || ends[i] === undefined) return;
-    if (_isMutedAtChar(s)) return;
-    if (_playEl) (groups[i] ?? []).forEach(el => el?.classList?.add('abcjs-note_playing'));
-    secPairs.push({ from: s, to: ends[i] });
-    const to   = ends[i] + _sectionOffset;
-    const from = _trimToNoteStart(doc, s + _sectionOffset, to);
+  for (const e of _soundingEntries(event.milliseconds)) {
+    if (_isMutedAtChar(e.startChar)) continue;
+    if (_playEl) e.elements.forEach(el => el?.classList?.add('abcjs-note_playing'));
+    secPairs.push({ from: e.startChar, to: e.endChar });
+    const to   = _toDoc(e.endChar);
+    const from = _trimToNoteStart(doc, _toDoc(e.startChar), to);
     if (from < to) ranges.push({ from, to });
-  });
+  }
   _a2sScore?.setPlaying(secPairs.length ? secPairs : null);
   state.emit('abc-play-cursor', ranges.length ? ranges : null);
+}
+
+// A timing event is a MOMENT: one entry per voice that has an onset right then
+// (`startCharArray[i]` / `elements[i]`). A voice's entry keeps sounding until
+// that voice's NEXT moment (its next note or rest), so flatten the moments into
+// per-entry spans [ms, endMs) once per timing table and ask "what sounds at
+// ms?" — the moment's own entries plus the held ones. Memoised on the current
+// _noteEvents array (rebuilt each render, like _flatNotes).
+let _soundingCache = { src: null, list: [] };
+function _soundingEntries(ms) {
+  if (_soundingCache.src !== _noteEvents) {
+    const list = [];
+    const open = new Map();   // voice id → its latest entry, awaiting its end
+    for (const ev of _noteEvents) {
+      const ss  = ev.startCharArray ?? (ev.startChar !== undefined ? [ev.startChar] : []);
+      const ee  = ev.endCharArray   ?? (ev.endChar   !== undefined ? [ev.endChar]   : []);
+      const els = ev.elements ?? [];
+      ss.forEach((s, i) => {
+        if (s == null || ee[i] == null) return;
+        const voice = _voiceMap.at(s) ?? '';
+        const prev = open.get(voice);
+        if (prev) prev.endMs = ev.milliseconds;
+        const entry = { ms: ev.milliseconds, endMs: Infinity, startChar: s, endChar: ee[i], elements: els[i] ?? [] };
+        open.set(voice, entry);
+        list.push(entry);
+      });
+    }
+    _soundingCache = { src: _noteEvents, list };
+  }
+  return _soundingCache.list.filter(e => e.ms <= ms + 0.5 && ms < e.endMs - 0.5);
 }
 
 // Wall-clock visual driver.  abcjs's own TimingCallbacks fire the cursor on a
@@ -1892,7 +2028,13 @@ function _emitRollData() {
       msPerMeasure,
       msPerWhole: msPerMeasure / (_meterSize || 1),
       sectionOffset: _sectionOffset,
-      source: _lastAbcSource,
+      source: _lastAbcSource,          // the EXPANDED section (char space of every offset above)
+      // Translate between that space and the document (voice shorthand, see
+      // core/abc-shorthand.js); the roll's edits and selections go through them.
+      toDoc: _toDoc,
+      fromDoc: _toSec,
+      // The section as it stands in the document — the roll's freshness check.
+      rawSource: _lastRawSource,
     };
   }
   state.abcRollData = data;
@@ -1958,7 +2100,7 @@ function _cueStartMs() {
   if (_selRangeMs) return _selRangeMs.startMs;
   const { from, to } = _lastEditorSel;
   if (from === to) {
-    const ms = _charToMs(Math.max(0, from - _sectionOffset));
+    const ms = _charToMs(_toSec(from));
     if (ms != null) return ms;
   }
   return 0;
@@ -2001,12 +2143,12 @@ function _selectionMsRange(from, to) {
  * `from`/`to` are full-document offsets.
  */
 function _syncTransportToSelection(from, to) {
-  if (state.abcPlaying) return;
+  if (state.abcPlaying || state.abcStarting) return;
   if ((state.activeDslId ?? state.data?.dslType) !== 'abcjs') return;
   if (!_noteEvents.length) return;
 
-  const selFrom = Math.max(0, from - _sectionOffset);
-  const selTo   = Math.max(0, to   - _sectionOffset);
+  const selFrom = _toSec(from);
+  const selTo   = _toSec(to);
 
   const range = to > from ? _selectionMsRange(selFrom, selTo) : null;
   if (range && range.count > 1) {
@@ -2080,8 +2222,11 @@ function togglePlay() {
   // matter or a non-abcjs section (activeDslId !== 'abcjs'); that must NOT disable
   // the transport — startPlayback falls back to the beginning when nothing is cued.
   if (!_tuneObjects?.[0]) return;
-  if (state.abcPlaying) {
-    _pausedAtMs = _currentMs();
+  if (state.abcPlaying || state.abcStarting) {
+    // Playing → pause here. Still STARTING (the synth is priming after the
+    // previous tap) → cancel that start: it stays cued where it was going to
+    // begin, so the next tap plays from there. Never a second synth.
+    if (state.abcPlaying) _pausedAtMs = _currentMs();
     stopPlayback({ keepPosition: true });
   } else if (_selRangeMs && _pausedAtMs <= _selRangeMs.startMs + 1) {
     // A range is selected and we're still cued to its start → play just the range
@@ -2097,12 +2242,40 @@ function togglePlay() {
 function seekTo(ms) {
   ms = Math.max(0, Math.min(ms, _totalMs || ms));
   _pausedAtMs = ms;
-  if (state.abcPlaying) {
+  if (state.abcPlaying || state.abcStarting) {
     stopPlayback({ keepPosition: true });
     startPlayback({ startMs: ms });
   } else {
     _emitProgress(ms);
   }
+}
+
+// A Play tap starts the synth ASYNCHRONOUSLY: AudioContext resume, decoding the
+// piano samples, then abcjs mixing the whole tune into one buffer (`prime`) —
+// a second or more on a phone for a longer tune. Until 2026-10 nothing showed
+// during that window (▶ still up, no cursor, no highlight), so a second tap
+// came — and landed either as a PAUSE on the playback that had just begun or,
+// still inside the prime, as a SECOND startPlayback: two synths on one
+// transport ("have to tap Play twice", "no cursor, no green"). Now:
+//   • `state.abcStarting` covers the window — the transport reads as playing
+//     at once (⏸, the bubble's pulse, the cursor bar on the first note) and a
+//     tap meanwhile is a pause (togglePlay cancels the pending start);
+//   • every start carries a generation; a stop/pause/seek bumps it and the
+//     superseded start abandons itself after its next await, never installing
+//     its synth, timing callbacks or progress loop.
+let _startGen = 0;
+
+function _setStarting(v) {
+  if (!!state.abcStarting === !!v) return;
+  state.abcStarting = !!v;
+  if (v) state.emit('abc-play-state', { playing: true, starting: true });
+}
+
+/** A start that gave up before any sound: back to the stopped look. */
+function _abortStart() {
+  if (!state.abcStarting) return;
+  state.abcStarting = false;
+  state.emit('abc-play-state', { playing: false });
 }
 
 async function startPlayback(opts = {}) {
@@ -2112,13 +2285,15 @@ async function startPlayback(opts = {}) {
   if (_synth) {
     stopPlayback({ keepPosition: true });
   }
+  const gen = ++_startGen;
+  const superseded = () => gen !== _startGen;
 
   const tune = _tuneObjects[0];
   // Translate full-doc editor positions to section-relative positions so they
   // match the char indices in abcjs noteTimings (which are 0-based from the
   // start of the section content passed to render()).
-  const selFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
-  const selTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
+  const selFrom = _toSec(_lastEditorSel.from);
+  const selTo   = _toSec(_lastEditorSel.to);
 
   // Playback uses the abcjs synthesiser by default — this build bundles the
   // FluidR3 acoustic_grand_piano soundfont and serves it offline (see
@@ -2179,6 +2354,13 @@ async function startPlayback(opts = {}) {
   // Bound the wall-clock visual driver to the same range end as the audio.
   _visualStopMs = stopMs;
 
+  // Feedback NOW, before the awaits below: the transport shows ⏸ / the bubble
+  // pulses, and the cursor bar + scrubber sit on the first note that will
+  // sound. The cued position is also what a pause-during-start keeps.
+  _pausedAtMs = startSeconds * 1000;
+  _setStarting(true);
+  _emitProgress(_pausedAtMs);
+
   // ── 2.5  MIDI output path (replaces the internal synth when a port is set) ──
   //
   // Route to the selected external MIDI port (e.g. IAC → Kontakt) as live
@@ -2194,6 +2376,7 @@ async function startPlayback(opts = {}) {
     });
 
     _playEl?.classList.add('abc-playing');
+    state.abcStarting = false;
     state.abcPlaying = true;
     state.emit('abc-play-state', { playing: true });
 
@@ -2228,8 +2411,10 @@ async function startPlayback(opts = {}) {
     await _audioContext.resume();
   } catch {
     _audioContext = null;
+    if (!superseded()) _abortStart();
     return;
   }
+  if (superseded()) return;
 
   if (abcjs.synth?.CreateSynth) {
     // ── 3a.  Soundfont synth path (default: bundled offline piano) ────────
@@ -2259,6 +2444,7 @@ async function startPlayback(opts = {}) {
         },
       });
       await synth.prime();
+      if (superseded()) { try { synth.stop(); } catch { /* never started */ } return; }
       _synth = synth;
     } catch (err) {
       // Synth setup failed (e.g. a custom URL is wrong / unreachable, or a note
@@ -2277,6 +2463,7 @@ async function startPlayback(opts = {}) {
       _synth = null;
       // Keep the persistent context; just make sure it's running for oscillators.
       try { await _audioContext.resume(); } catch { /* ignore */ }
+      if (superseded()) return;
     }
   }
 
@@ -2295,6 +2482,7 @@ async function startPlayback(opts = {}) {
   // ── 5.  Start ────────────────────────────────────────────────────────────
 
   _playEl?.classList.add('abc-playing');
+  state.abcStarting = false;
   state.abcPlaying = true;
   state.emit('abc-play-state', { playing: true });
 
@@ -2302,6 +2490,9 @@ async function startPlayback(opts = {}) {
   // sure it's running again right before start, or the first notes are silent.
   if (_audioContext && _audioContext.state !== 'running') {
     try { await _audioContext.resume(); } catch { /* ignore */ }
+    // A stop that landed during that resume has already torn down what we
+    // installed above (synth, timing callbacks) — nothing left to start.
+    if (superseded()) return;
   }
 
   if (typeof _synth?.start === 'function') {
@@ -2326,6 +2517,8 @@ function stopPlayback(opts = {}) {
   if (_stopping) return;
   _stopping = true;
   try {
+  _startGen++;                 // a start still priming abandons itself
+  state.abcStarting = false;
   try { _timingCallbacks?.stop(); } catch { /* ignore */ }
   _timingCallbacks = null;
   _stopProgress();
@@ -2374,8 +2567,8 @@ function stopPlayback(opts = {}) {
   // abcjs-note_selected fill survives naturally — don't call rangeHighlight(0,0)
   // which would erase it.
   if (_lastEditorSel.from !== _lastEditorSel.to) {
-    const adjFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
-    const adjTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
+    const adjFrom = _toSec(_lastEditorSel.from);
+    const adjTo   = _toSec(_lastEditorSel.to);
     _rangeHighlightNow(adjFrom, adjTo);
   }
   } finally {
@@ -2427,13 +2620,16 @@ function _withDerivedTitle(content) {
 }
 
 async function renderToString(content) {
-  content = _withDerivedTitle(content);
+  content = expandAbc(_withDerivedTitle(content)).text;
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
   try {
     const tablature = parseTabDirectives(content);
     abcjs.renderAbc(tmp, content, {
       responsive: 'resize',
+      // The static preview flows like the live score (abcjs's re-wrap ignores
+      // source newlines) unless the document pins %%linebreak <EOL>.
+      ...(sourceLineBreaks(content) ? {} : { staffwidth: 740, wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
       ...(tablature ? { tablature } : {}),
     });
     return tmp.innerHTML;
@@ -2449,7 +2645,7 @@ async function renderToString(content) {
 // ---------------------------------------------------------------------------
 
 async function exportSVG(content) {
-  content = _withDerivedTitle(content);
+  content = expandAbc(_withDerivedTitle(content)).text;
   const tablature = parseTabDirectives(content);
   // abc2svg engraving for exports too (same engine as the on-screen score);
   // falls through to abcjs on failure, %%tablature docs, or the escape hatch.
@@ -2459,14 +2655,17 @@ async function exportSVG(content) {
   }
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
-  abcjs.renderAbc(tmp, content, { ...(tablature ? { tablature } : {}) });
+  abcjs.renderAbc(tmp, content, {
+    ...(sourceLineBreaks(content) ? {} : { staffwidth: 740, wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
+    ...(tablature ? { tablature } : {}),
+  });
   const svgContent = tmp.innerHTML;
   document.body.removeChild(tmp);
   return new Blob([svgContent], { type: 'image/svg+xml' });
 }
 
 async function exportPDF(content) {
-  content = _withDerivedTitle(content);
+  content = expandAbc(_withDerivedTitle(content)).text;
   // ── 1. Render offscreen with oneSvgPerLine ─────────────────────────────────
   // oneSvgPerLine splits the single large SVG into one <div><svg></svg></div>
   // per staff system.  Each SVG carries a viewBox so it can be scaled by CSS
@@ -2498,6 +2697,7 @@ async function exportPDF(content) {
         oneSvgPerLine: true,
         staffwidth: STAFF_W,
         add_classes: true,
+        ...(sourceLineBreaks(content) ? {} : { wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
         ...(tablature ? { tablature } : {}),
       });
     } catch (e) {
@@ -2574,7 +2774,7 @@ async function exportPDF(content) {
 
 async function exportMIDI(content) {
   // abcjs synth API for MIDI
-  const midiData = abcjs.synth.getMidiFile(content, {});
+  const midiData = abcjs.synth.getMidiFile(expandAbc(content).text, {});
   return new Blob([midiData], { type: 'audio/midi' });
 }
 
@@ -2622,7 +2822,7 @@ const ABC_HEADER_DOCS = {
   M: 'Meter, e.g. 4/4, 6/8, or C.',
   L: 'Default note length, e.g. 1/8.',
   Q: 'Tempo, e.g. 1/4=120.',
-  K: 'Key signature — required, ends the tune header. e.g. K:C, K:Gm, K:D dorian.',
+  K: 'Key signature — ends the tune header (C major assumed when missing). e.g. K:C, K:Gm, K:D dorian.',
   V: 'Voice, e.g. V:1 clef=treble.',
   P: 'Parts ordering.',
   I: 'Instruction / directive.',
@@ -2718,8 +2918,8 @@ function abcBodyComplete(context) {
     }
   }
 
-  // After "K:" → key signatures and clefs.
-  const km = before.match(/^\s*K:\s*(\S*)$/);
+  // After "K:" / "[K:" (inline, anywhere in a music line) → key signatures and clefs.
+  const km = before.match(/(?:^\s*|\[)K:\s*(\S*)$/);
   if (km) {
     return {
       from: context.pos - km[1].length,
@@ -2729,6 +2929,53 @@ function abcBodyComplete(context) {
       ],
       validFor: /^[\w#+=-]*$/,
     };
+  }
+
+  // `clef=` anywhere on a V: / K: line → the clef names.
+  const cm = before.match(/\bclef=([\w+-]*)$/);
+  if (cm) return { from: context.pos - cm[1].length, options: ABC_CLEFS.map(c => ({ label: c, type: 'constant', detail: 'clef' })), validFor: /^[\w+-]*$/ };
+
+  // `@` at a line start (the voice shorthand) → the voices the tune declares.
+  const am = before.match(/^@([A-Za-z0-9_]*)$/);
+  if (am) {
+    const ids = abcVoiceIds(cmState.doc.toString()).filter(id => id !== am[1]);
+    return ids.length
+      ? { from: line.from + 1, options: ids.map(id => ({ label: id, type: 'variable', detail: 'voice', apply: id + ' ' })), validFor: /^[A-Za-z0-9_]*$/ }
+      : null;
+  }
+
+  // After "V:" / "[V:" → the voices the tune already declares; after the id,
+  // the voice properties (`clef=`, `name=`, …).
+  const vm = before.match(/(?:^\s*|\[)V:\s*([^\s\]]*)$/);
+  if (vm) {
+    const ids = abcVoiceIds(cmState.doc.toString()).filter(id => id !== vm[1]);
+    return ids.length ? { from: context.pos - vm[1].length, options: ids.map(id => ({ label: id, type: 'variable', detail: 'voice' })), validFor: /^[^\s\]]*$/ } : null;
+  }
+  const vp = before.match(/(?:^\s*|\[)V:\s*[^\s\]]+(?:\s+[^\s\]]+)*\s+([a-z]*)$/);
+  if (vp) {
+    return { from: context.pos - vp[1].length, validFor: /^[a-z]*$/,
+             options: ABC_VOICE_PROPS.map(([label, info]) => ({ label, type: 'property', info, apply: label + '=' })) };
+  }
+
+  // After "M:" / "L:" / "Q:" (header or inline) → the usual values.
+  const fm = before.match(/(?:^\s*|\[)([MLQ]):\s*(\S*)$/);
+  if (fm) {
+    const vals = fm[1] === 'M' ? ABC_METERS : fm[1] === 'L' ? ABC_LENGTHS : ABC_TEMPOS;
+    return { from: context.pos - fm[2].length, options: vals.map(v => ({ label: v, type: 'constant' })), validFor: /^[\w/=|"]*$/ };
+  }
+
+  // `[` + a letter in the music → the inline fields.
+  const im = before.match(/\[([A-Za-z]?)$/);
+  if (im && (context.explicit || im[1])) {
+    return { from: context.pos - im[1].length, validFor: /^[A-Za-z]?:?$/,
+             options: ABC_INLINE_FIELDS.map(l => ({ label: `${l}:`, type: 'keyword', detail: 'inline field', info: ABC_HEADER_DOCS[l] })) };
+  }
+
+  // `%%` at a line start → the formatting / MIDI directives.
+  const dm = before.match(/^%%([\w-]*)$/);
+  if (dm) {
+    return { from: line.from + 2, validFor: /^[\w-]*$/,
+             options: Object.entries(ABC_DIRECTIVES).map(([label, info]) => ({ label, type: 'keyword', info, apply: label + ' ' })) };
   }
 
   // Header field letters (X:, T:, K:, …) — explicit only, so it never pops up
@@ -2743,6 +2990,62 @@ function abcBodyComplete(context) {
   }
   return null;
 }
+
+// Voice ids the document declares (`V:1`, `[V:T1]`, `@2`), in order of appearance.
+function abcVoiceIds(text) {
+  const ids = [];
+  for (const m of text.matchAll(/(?:^|\[)V:\s*([^\s\]]+)|^@([A-Za-z0-9_]+)/gm)) {
+    const id = m[1] ?? m[2];
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+const ABC_VOICE_PROPS = [
+  ['clef', 'Clef: treble, bass, alto, tenor, perc, none; `treble+8`, `bass-8`.'],
+  ['name', 'Full staff name, e.g. name="Violin I".'],
+  ['sname', 'Short staff name (later systems).'],
+  ['transpose', 'Transposition in semitones for playback.'],
+  ['octave', 'Octave shift for the written notes.'],
+  ['stem', 'Stem direction: up / down.'],
+  ['middle', 'The note drawn on the middle line.'],
+];
+const ABC_INLINE_FIELDS = ['K', 'V', 'M', 'L', 'Q', 'P', 'I', 'r'];
+const ABC_METERS = ['4/4', '3/4', '2/4', '6/8', '9/8', '12/8', '2/2', '3/8', '5/4', '7/8', 'C', 'C|', 'none'];
+const ABC_LENGTHS = ['1/8', '1/4', '1/16', '1/2', '1/32', '1'];
+const ABC_TEMPOS = ['1/4=120', '1/4=100', '1/4=80', '1/4=60', '1/8=120', '3/8=60', '1/2=60', '"Allegro" 1/4=120', '"Andante" 1/4=76'];
+const ABC_DIRECTIVES = {
+  score: 'Staff layout: `%%score (1 2) 3` brackets voices on one staff, `{…}` braces staves.',
+  staves: 'Staff layout (older spelling of %%score).',
+  'MIDI program': 'Instrument for playback: `%%MIDI program 0` (piano) … 127.',
+  'MIDI channel': 'MIDI channel for the following voice.',
+  'MIDI transpose': 'Transpose playback by semitones.',
+  tablature: 'Add a tablature staff below the notation: `%%tablature guitar` / violin / mandolin / fiddle.',
+  strtab: 'Convert the voice into a tab staff (strings highest first): `%%strtab E4 B3 G3 D3 A2 E2`.',
+  pagewidth: 'Page width for the engraving, e.g. `%%pagewidth 21cm`.',
+  scale: 'Engraving scale factor, e.g. `%%scale 0.8`.',
+  staffsep: 'Space between staves.',
+  sysstaffsep: 'Space between systems.',
+  leftmargin: 'Left margin, e.g. `%%leftmargin 1cm`.',
+  rightmargin: 'Right margin.',
+  topmargin: 'Top margin.',
+  measurenb: 'Measure numbers every N bars (0 = first of each line).',
+  barnumbers: 'Measure numbers every N bars (abcjs spelling).',
+  stretchlast: 'Stretch the last line to full width (1) or not (0).',
+  linebreak: 'Where staff lines break: `%%linebreak $` (the {compose} default — source newlines never break, `$` forces one, measures flow to the width) or `%%linebreak <EOL>` (every source line is a staff line).',
+  continueall: 'abcjs spelling of "ignore source line breaks" — prefer %%linebreak.',
+  titlefont: 'Title font: `%%titlefont Times-Bold 20`.',
+  vocalfont: 'Lyrics font.',
+  partsbox: 'Draw a box around part letters.',
+  'abc-version': 'The ABC standard version of this file.',
+  text: 'A line of free text in the score.',
+  center: 'A centred line of text.',
+  begintext: 'Start a block of text (end with %%endtext).',
+  endtext: 'End a text block.',
+  sep: 'A separator line.',
+  vskip: 'Vertical space, e.g. `%%vskip 1cm`.',
+  newpage: 'Start a new page (print).',
+};
 
 /** Build a small tooltip DOM node. */
 function _hoverDom(title, body) {
@@ -2842,11 +3145,15 @@ function _unusedMarkings(region, body) {
  * unexpected characters, …).  LINE/COL are relative to the parsed body.
  */
 function _abcParseWarnings(view, bodyFrom, body, docLen) {
+  // abcjs sees the voice shorthand expanded (`@1` → `[V:1]`) and the headers
+  // completed (an inserted `K:C` line); LINE:COL is turned into an offset in
+  // that text and mapped back through the expansion's offset map.
+  const ex = expandAbc(body);
   let tunes;
-  try { tunes = abcjs.parseOnly(body); } catch { return []; }
+  try { tunes = abcjs.parseOnly(ex.text); } catch { return []; }
   if (!Array.isArray(tunes)) return [];
 
-  const bodyLines = body.split('\n');
+  const bodyLines = ex.text.split('\n');
   const out = [];
   const seen = new Set();
   for (const tune of tunes) {
@@ -2857,11 +3164,17 @@ function _abcParseWarnings(view, bodyFrom, body, docLen) {
       // Drop abcjs's trailing ":  <echoed source line>" from the message.
       const message = (m ? m[3] : w).replace(/:\s{2}.*$/, '').trim();
 
+      // abcjs knows neither %%linebreak nor the `$` break it configures —
+      // both are abc2svg's (the engraver the user sees); never flag them.
+      if (/^Unknown directive: linebreak\b/.test(message)) continue;
+
       const li = Math.min(Math.max(lineNo - 1, 0), bodyLines.length - 1);
       let off = 0;
       for (let i = 0; i < li; i++) off += bodyLines[i].length + 1;
-      const line = view.state.doc.lineAt(Math.min(bodyFrom + off, docLen));
-      const from = Math.min(line.from + Math.max(col - 1, 0), line.to);
+      const exPos = Math.min(off + Math.max(col - 1, 0), off + bodyLines[li].length);
+      if (/^Unknown character ignored/.test(message) && ex.text[exPos] === '$') continue;
+      const line = view.state.doc.lineAt(Math.min(bodyFrom + ex.toSource(off), docLen));
+      const from = Math.min(bodyFrom + ex.toSource(exPos), line.to);
 
       const key = from + '|' + message;
       if (seen.has(key)) continue;
@@ -2889,10 +3202,12 @@ function abcLintSource(view) {
     // Missing required headers — anchor on the first body line.
     const firstLine = view.state.doc.lineAt(Math.min(bodyFrom, docLen));
     const anchor = { from: firstLine.from, to: Math.min(firstLine.to, firstLine.from + 1) };
+    // {compose} supplies these when they are missing (core/abc-shorthand.js
+    // completeHeader) — the tune renders; a hint, not an error.
     if (!/^\s*X:\s*\d+/m.test(body))
-      diags.push({ ...anchor, severity: 'warning', message: 'No X: (tune number) header — every ABC tune needs one.' });
+      diags.push({ ...anchor, severity: 'info', message: 'No X: (tune number) header — X:1 assumed. Standard ABC starts every tune with one.' });
     if (!/^\s*K:/m.test(body))
-      diags.push({ ...anchor, severity: 'warning', message: 'No K: (key) header — abcjs needs one to render the tune.' });
+      diags.push({ ...anchor, severity: 'info', message: 'No K: (key) header — C major assumed. K: sets the key and ends the tune header.' });
 
     diags.push(..._slurIssues(bodyFrom, body));
     diags.push(..._abcParseWarnings(view, bodyFrom, body, docLen));
@@ -2937,6 +3252,8 @@ const abcjsDSL = {
   name: 'ABC Notation',
   extensions: ['.abc'],
   editorMode: 'abc',
+  // Mod-/ (editor.js): `%` comments; a `%%directive` line is code and comments out as `% %%…`.
+  commentTokens: { line: '%', directive: /^%%/ },
 
   render,
   renderToString,

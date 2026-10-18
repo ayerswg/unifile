@@ -16,7 +16,7 @@
  *   dist/unifile.<abbrev>.html   standalone quine for each DSL
  *   dist/pwa-<abbrev>/            installable PWA for each DSL
  *
- *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | upub)
+ *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | upub | udraft | slides | spreadsheet)
  *     e.g. `node build/build.mjs --dsl=abcjs` → dist/unifile.abc.html (offline piano)
  *
  * npm scripts
@@ -39,6 +39,7 @@ import { gzipSync } from 'zlib';
 import { createHash } from 'crypto';
 import { execSync } from 'child_process';
 import { appName } from '../src/core/brand.js';
+import { detectCommit, detectChannel } from './build-id.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '..');
@@ -82,53 +83,14 @@ export const APP_VERSION = detectVersion();
 // two builds of the SAME version are distinguishable when debugging caching.
 export const APP_BUILT = new Date().toISOString().slice(0, 19) + 'Z';
 
-// Commit identity — 7-char hash + commit timestamp, shown in About.  The dev
-// channel (dev.unifile.app = the `dev` branch's Cloudflare Pages preview)
-// deploys every push without a version bump, so the hash is the only way to
-// tell which build you're looking at.  Cloudflare's shallow checkout has no
-// tags but does have HEAD, and Pages also exports CF_PAGES_COMMIT_SHA.
-function detectCommit() {
-  let sha = process.env.CF_PAGES_COMMIT_SHA || null;
-  if (!sha) {
-    try {
-      sha = execSync('git rev-parse HEAD', { cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] })
-        .toString().trim() || null;
-    } catch { /* not a git checkout (e.g. source tarball) */ }
-  }
-  let at = null;
-  try {
-    at = execSync('git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd', {
-      cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, TZ: 'UTC' }
-    }).toString().trim() || null;
-  } catch { /* ditto */ }
-  return { hash: sha ? sha.slice(0, 7) : '', at: at || '' };
-}
-export const APP_COMMIT = detectCommit();
+// Commit identity (7-char hash + commit time) and release channel — see
+// build/build-id.mjs.  On the dev channel the commit IS the version.
+export const APP_COMMIT  = detectCommit();
+export const APP_CHANNEL = detectChannel();
 
 // ---------------------------------------------------------------------------
 // esbuild plugins for bundle size / offline behaviour
 // ---------------------------------------------------------------------------
-
-/**
- * Stub out the ELK graph layout engine (elkjs) — a 1.4 MB dependency pulled in
- * by mermaid's flowchart-elk diagram type.  Diagrams that request `elk` layout
- * will get a clear runtime error; all other Mermaid diagram types are unaffected.
- */
-const elkjsStubPlugin = {
-  name: 'elkjs-stub',
-  setup(build) {
-    build.onResolve({ filter: /^elkjs\// }, () => ({
-      path: 'elkjs-stub', namespace: 'elkjs-stub',
-    }));
-    build.onLoad({ filter: /.*/, namespace: 'elkjs-stub' }, () => ({
-      contents: `export default class ELK {
-  layout() { return Promise.reject(new Error('ELK layout is not included in this build. Use dagre or other layouts.')); }
-  terminateWorker() {}
-}`,
-      loader: 'js',
-    }));
-  },
-};
 
 /**
  * Redirect abcjs's internal `require('./load-note')` to our offline note loader
@@ -209,6 +171,12 @@ const DSL_META = {
                entry: 'upub/main.js', css: 'styles/upub.css' },
   udraft:    { abbrev: 'dft',  plugins: [],                      defaultDslType: 'udraft',   label: appName('udraft'),
                entry: 'udraft/main.js', css: 'styles/udraft.css' },
+  // {slides}: the standard shell with ONLY the slides DSL (no markdown base —
+  // the deck is Markdown already, and marked/docx would be dead weight).
+  slides:    { abbrev: 'sld',  plugins: ['slides'],              defaultDslType: 'slides',   label: appName('slides')   },
+  // {spreadsheet}: the standard shell with ONLY the spreadsheet DSL — the
+  // render pane is the grid editor (src/ui/sheet-grid.js); no marked/docx.
+  spreadsheet: { abbrev: 'sht', plugins: ['spreadsheet'],        defaultDslType: 'spreadsheet', label: appName('spreadsheet') },
 };
 
 if (dslArg && !DSL_META[dslArg]) {
@@ -276,7 +244,6 @@ function makeInitialData(defaultDslType = DEFAULT_DSL_TYPE) {
  */
 function buildOptions(entryPoint, unifileMode, plugins) {
   const esPlugins = [];
-  if (plugins.includes('mermaid')) esPlugins.push(elkjsStubPlugin);
   if (plugins.includes('abcjs'))   esPlugins.push(loadNoteOverridePlugin, abc2svgExportPlugin);
 
   return {
@@ -297,7 +264,8 @@ function buildOptions(entryPoint, unifileMode, plugins) {
       'UNIFILE_VERSION': JSON.stringify(APP_VERSION),
       'UNIFILE_BUILT': JSON.stringify(APP_BUILT),
       'UNIFILE_COMMIT': JSON.stringify(APP_COMMIT.hash),
-      'UNIFILE_COMMIT_AT': JSON.stringify(APP_COMMIT.at)
+      'UNIFILE_COMMIT_AT': JSON.stringify(APP_COMMIT.at),
+      'UNIFILE_CHANNEL': JSON.stringify(APP_CHANNEL)
     },
     logOverride: { 'indirect-require': 'silent' },
     plugins: esPlugins,

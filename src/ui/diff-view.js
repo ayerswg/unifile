@@ -1,13 +1,15 @@
 /**
  * Commit diff view (read-only).
  *
- * Clicking a non-current commit opens this: a side-by-side line diff comparing
- * two versions of the document.  Each side is a commit hash or the sentinel
+ * Clicking a save in the history opens this: a side-by-side line diff comparing
+ * two versions of the document.  Each side is a save's hash or the sentinel
  * 'WORKING' (the live editor content).  The DiffBar (bottom) lets you change
- * which two versions are shown and return to the working editor.
+ * which two versions are shown, RESTORE a save's text into the editor (it
+ * lands as an unsaved change — Save keeps it; history stays one line) and
+ * return to the working editor.
  *
  *   DiffView  → the two-column diff overlay (covers #uf-main)
- *   DiffBar   → the bottom controls (two pickers + "Return to working")
+ *   DiffBar   → the bottom controls (two pickers + Restore + "Return to working")
  */
 
 import { state } from './state.js';
@@ -119,7 +121,7 @@ export class DiffPanes {
 export class DiffBar {
   /**
    * @param {HTMLElement} el
-   * @param {{ onDiffCreateBranch?: (hash:string)=>void, onDiffMerge?: ()=>void }} [handlers]
+   * @param {{ onRestore?: (hash:string)=>void }} [handlers]
    */
   constructor(el, handlers = {}) {
     this.el = el;
@@ -148,12 +150,16 @@ export class DiffBar {
         `<option value="${_esc(o.v)}"${o.v === selected ? ' selected' : ''}>${_esc(o.label)}</option>`).join('');
     };
 
+    // The save to restore: the right side when it is a save, else the left.
+    const restorable = _restorable(diff);
     this.el.innerHTML = `
       <div class="db">
         <span class="db-label">Comparing</span>
         <select class="db-pick" id="db-left" aria-label="Left side">${opts(diff.left)}</select>
         <span class="db-swap" title="Left ↔ right">↔</span>
         <select class="db-pick" id="db-right" aria-label="Right side">${opts(diff.right)}</select>
+        ${restorable ? `<button class="db-btn db-restore" id="db-restore" type="button"
+          title="Bring this save's text back into the editor (as an unsaved change)">Restore ${_esc(shortHash(restorable))}</button>` : ''}
         <button class="db-return" id="db-return" type="button">Return to working</button>
       </div>`;
 
@@ -162,34 +168,35 @@ export class DiffBar {
     left?.addEventListener('change',  () => state.openDiff(left.value, right.value));
     right?.addEventListener('change', () => state.openDiff(left.value, right.value));
     this.el.querySelector('#db-return')?.addEventListener('click', () => state.closeDiff());
+    this.el.querySelector('#db-restore')?.addEventListener('click', () => this.handlers.onRestore?.(restorable));
   }
 
   // ── Mobile: contextual action buttons for the active pane ──────────────────
-  //   commit pane → Exit only
-  //   middle pane → Exit (Current) | Create branch (a commit) + Exit
-  //   right pane  → Create branch + Merge (right→middle) + Exit
+  //   history pane → Exit only
+  //   middle pane  → Restore (when the left side is a save) + Exit
+  //   right pane   → Restore (the right side, always a save) + Exit
   _renderMobile(diff) {
     const pane = this._pane;
     const exitBtn = `<button class="db-btn db-exit" id="db-exit" type="button">Exit diff</button>`;
     let actions = '';
+    let hash = null;
 
-    if (pane === 'editor') {                       // middle pane
-      if (diff.left !== WORKING) {
-        actions += `<button class="db-btn db-branch" id="db-branch-left" type="button">Create branch</button>`;
-      }
-    } else if (pane === 'render') {                 // right pane (always a commit)
-      const mergeOk = diff.left === WORKING || !!state.vcs?.branchAtTip(diff.left);
-      actions += `<button class="db-btn db-branch" id="db-branch-right" type="button">Create branch</button>`;
-      actions += `<button class="db-btn db-merge" id="db-merge" type="button"${mergeOk ? '' : ' disabled'}`
-        + (mergeOk ? '' : ' title="Merge target must be Current or a branch tip"') + `>Merge →</button>`;
+    if (pane === 'editor' && diff.left !== WORKING) hash = diff.left;        // middle pane
+    else if (pane === 'render' && diff.right !== WORKING) hash = diff.right; // right pane
+    if (hash) {
+      actions += `<button class="db-btn db-restore" id="db-restore" type="button">Restore ${_esc(shortHash(hash))}</button>`;
     }
-    // commit pane → no branch/merge actions.
 
     this.el.innerHTML = `<div class="db db-mobile">${actions}${exitBtn}</div>`;
 
     this.el.querySelector('#db-exit')?.addEventListener('click', () => state.closeDiff());
-    this.el.querySelector('#db-branch-left')?.addEventListener('click', () => this.handlers.onDiffCreateBranch?.(state.diff.left));
-    this.el.querySelector('#db-branch-right')?.addEventListener('click', () => this.handlers.onDiffCreateBranch?.(state.diff.right));
-    this.el.querySelector('#db-merge')?.addEventListener('click', () => { if (!this.el.querySelector('#db-merge')?.disabled) this.handlers.onDiffMerge?.(); });
+    this.el.querySelector('#db-restore')?.addEventListener('click', () => this.handlers.onRestore?.(hash));
   }
+}
+
+/** The save a diff can restore: the right side when it is a save, else the left. */
+function _restorable(diff) {
+  if (diff.right && diff.right !== WORKING) return diff.right;
+  if (diff.left && diff.left !== WORKING) return diff.left;
+  return null;
 }

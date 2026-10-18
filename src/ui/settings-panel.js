@@ -10,11 +10,8 @@ import { loadUserPrefs, saveUserPrefs } from '../core/storage.js';
 import { applyTheme } from './theme.js';
 import { checkForUpdate } from './update-check.js';
 
-// Stamped by esbuild `define` in build.mjs (from the latest git tag); guard for
-// any non-built context (e.g. raw ESM in tests).
-const APP_VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
-const APP_COMMIT = (typeof UNIFILE_COMMIT !== 'undefined') ? UNIFILE_COMMIT : '';
-const APP_COMMIT_AT = (typeof UNIFILE_COMMIT_AT !== 'undefined') ? UNIFILE_COMMIT_AT : '';
+import { BUILD, isDevChannel, formatBuild, formatCommitAt } from '../core/build-info.js';
+import { getDSL } from '../dsl/registry.js';
 
 export class SettingsPanel {
   /** @param {HTMLElement} container */
@@ -53,7 +50,11 @@ export class SettingsPanel {
   show() {
     const prefs = loadUserPrefs();
     const theme = prefs.theme ?? 'auto';
-    const isAbc = (state.activeDslId ?? state.data?.dslType) === 'abcjs';
+    const dslId = state.activeDslId ?? state.data?.dslType;
+    const isAbc = dslId === 'abcjs';
+    // Bundled third-party content the running build must credit (a DSL's `credits`).
+    let credits = [];
+    try { credits = getDSL(dslId).credits ?? []; } catch {}   // getDSL throws for an unknown id
     // Split layout is a desktop affair — phones show one pane at a time.
     const isPhone = window.matchMedia?.(
       '(max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse)'
@@ -71,8 +72,8 @@ export class SettingsPanel {
           <div class="dialog-body">
             <!-- ── Identity ───────────────────────────────────────────── -->
             <p class="settings-intro">
-              Your identity is used as the commit author. Cached locally in this
-              browser and never shared.
+              Your identity is recorded as the author of your saves (optional).
+              Cached locally in this browser and never shared.
             </p>
 
             <div class="form-row">
@@ -100,7 +101,7 @@ export class SettingsPanel {
               <label class="form-label">Colour theme</label>
               <div class="theme-toggle-group" role="group" aria-label="Colour theme">
                 <button class="theme-toggle-btn${theme === 'dark'  ? ' active' : ''}"
-                  data-theme-pref="dark"  title="Always dark (Catppuccin Mocha)">
+                  data-theme-pref="dark"  title="Always dark">
                   🌙 Dark
                 </button>
                 <button class="theme-toggle-btn${theme === 'auto'  ? ' active' : ''}"
@@ -108,7 +109,7 @@ export class SettingsPanel {
                   🖥 Auto
                 </button>
                 <button class="theme-toggle-btn${theme === 'light' ? ' active' : ''}"
-                  data-theme-pref="light" title="Always light (Catppuccin Latte)">
+                  data-theme-pref="light" title="Always light">
                   ☀️ Light
                 </button>
               </div>
@@ -153,10 +154,13 @@ export class SettingsPanel {
             <!-- ── About ──────────────────────────────────────────────── -->
             <div class="settings-section-label">About</div>
             <p class="settings-about">
-              Unifile <span class="settings-version">v${escHtml(APP_VERSION)}</span>${APP_COMMIT
-                ? ` · <span class="settings-version">${escHtml(APP_COMMIT)}</span>${APP_COMMIT_AT
-                  ? ` · ${escHtml(APP_COMMIT_AT.slice(0, 16).replace('T', ' '))}Z` : ''}` : ''}
-            </p>
+              Unifile <span class="settings-version">v${escHtml(BUILD.version)}</span>${BUILD.commit
+                ? ` · <span class="settings-version">${escHtml(BUILD.commit)}</span>${BUILD.commitAt
+                  ? ` · ${escHtml(formatCommitAt(BUILD.commitAt))}` : ''}` : ''}${isDevChannel()
+                ? ' · <span class="settings-channel">dev channel — every push updates</span>' : ''}
+            </p>${credits.map(c => `
+            <p class="settings-about settings-credit">Includes ${escHtml(c.what)}${c.license
+              ? ` (${c.url ? `<a href="${escHtml(c.url)}" target="_blank" rel="noopener">${escHtml(c.license)}</a>` : escHtml(c.license)})` : ''}.</p>`).join('')}
           </div>
 
           <div class="dialog-footer">
@@ -242,11 +246,13 @@ export class SettingsPanel {
       const r = await checkForUpdate({ force: true });
       switch (r.status) {
         case 'update':
-          statusEl.textContent = `Update available: v${r.remote} — see the banner to apply.`;
+          statusEl.textContent = isDevChannel()
+            ? `New build ${formatBuild(r.remote, { commit: true })} — updating…`
+            : `Update available: v${r.remote.version} — see the banner to apply.`;
           statusEl.classList.add('is-update');
           break;
         case 'current':
-          statusEl.textContent = `You're on the latest (v${r.current}).`;
+          statusEl.textContent = `You're on the latest (${formatBuild(r.local, { version: true })}).`;
           break;
         case 'file':
           statusEl.textContent = "Can't check from a downloaded file — open the hosted app or PWA.";

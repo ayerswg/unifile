@@ -14,26 +14,29 @@
  * scroll is pinned to (0,0), and only #wr-scroll scrolls.
  */
 
-/* global UNIFILE_VERSION, UNIFILE_BUILT, UNIFILE_COMMIT, UNIFILE_COMMIT_AT */
 
 import {
   IS_QUINE, captureTemplate, loadEmbeddedData, generateQuine,
-  saveToIDB, loadFromIDB, downloadBlob, shareOrDownloadFile,
+  downloadBlob, shareOrDownloadFile,
   requestPersistentStorage, loadUserPrefs, saveUserPrefs,
-  saveDraft, loadDraft, clearDraft, markBackedUp, loadBackupMark,
+  saveDraft, loadDraft, clearDraft,
 } from '../core/storage.js';
+import { ShellLibrary } from './library.js';
 import { VCS } from '../core/vcs.js';
 import { shortHash } from '../core/hash.js';
 import { UPubEditor } from './editor.js';
 import { SlashMenu } from './slash-menu.js';
+import { UPubComments } from './comments.js';
 import { renderDocument, renderMarkdown } from './preview.js';
 import { buildEpub, slugify } from './epub.js';
 import { GUIDE_MD } from './guide-content.js';
+import { BUILD, isDevChannel, newerBuild, remoteBuild, formatBuild, formatCommitAt } from '../core/build-info.js';
 
-const VERSION = (typeof UNIFILE_VERSION !== 'undefined') ? UNIFILE_VERSION : '0.0.0';
-const BUILT = (typeof UNIFILE_BUILT !== 'undefined') ? UNIFILE_BUILT : 'dev';
-const COMMIT = (typeof UNIFILE_COMMIT !== 'undefined') ? UNIFILE_COMMIT : '';
-const COMMIT_AT = (typeof UNIFILE_COMMIT_AT !== 'undefined') ? UNIFILE_COMMIT_AT : '';
+// Build identity (version · commit · channel) — src/core/build-info.js.
+const VERSION = BUILD.version;
+const BUILT = BUILD.built || 'dev';
+const COMMIT = BUILD.commit;
+const COMMIT_AT = BUILD.commitAt;
 const DOC_ID = 'upub';
 
 const SEED = `---
@@ -54,6 +57,7 @@ Select this text and start typing to begin.
 `;
 
 const ICONS = {
+  back: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
   eye: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
   dots: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
 };
@@ -70,13 +74,14 @@ export class UPubApp {
     if (IS_QUINE) captureTemplate();
 
     // ── Load document ──────────────────────────────────────────────────────
-    let data = null;
-    if (!IS_QUINE) {
-      try { data = await loadFromIDB(DOC_ID); } catch { /* fresh */ }
-    }
-    data = data || loadEmbeddedData();
+    // PWA: the document library (upub/library.js → core/library.js) — the
+    // last-opened record, migrating the pre-library single document (the
+    // legacy DOC_ID record) on first launch.  Quine: the embedded data.
+    this.lib = new ShellLibrary(this, { app: 'upub', version: VERSION });
+    const { data } = await this.lib.boot(loadEmbeddedData(), DOC_ID);
     this.data = data;
     this.vcs = new VCS(data);
+    this.vcs.detachedHead = null;                 // one line of history
     this.title = data.title || 'Untitled';
     this.content = data.currentContent ?? this.vcs.headContent ?? '';
 
@@ -101,9 +106,23 @@ export class UPubApp {
 
     this.editor = new UPubEditor(document.getElementById('wr-sheet'), {
       onChange: () => this._onEdit(),
+      onEdit: (change) => this.comments?.mapEdit(change),
       onSlash: (ctx) => this._onSlashCtx(ctx),
     });
     this.editor.setValue(this.content);
+    // Inline comments — highlights in the text, a card on the selection
+    // (see upub/comments.js); the threads live on this.data.commentThreads.
+    this.comments = new UPubComments({
+      editor: this.editor,
+      sheet: document.getElementById('wr-sheet'),
+      scroller: document.getElementById('wr-scroll'),
+      getData: () => this.data,
+      author: () => (this.prefs.name || '').trim() || 'Anonymous',
+      headHash: () => this.vcs.headHash,
+      onChange: () => { this._persistSoon(); this.comments.refresh(); },
+      openSheet: (html, cls) => this._openSheet(html, cls),
+      closeSheet: () => this._closeSheet(),
+    });
     this._refreshDirty();
     this._refreshCount();
     this._bindSlashMenu();
@@ -165,8 +184,16 @@ export class UPubApp {
     setTimeout(async () => {
       try {
         const remote = await this._fetchRemoteVersion();
-        if (this._isNewer(remote)) {
-          this._toast(`v${remote} is available — tap to update`, {
+        const reason = this._isNewer(remote);
+        if (!reason) return;
+        if (isDevChannel()) {
+          // Dev channel: the commit is the version and every push is meant to
+          // be run — apply it without being asked; the reload lands once the
+          // new worker takes control (controllerchange above).
+          this._toast(`New build ${formatBuild(remote, { commit: true })} — updating…`, { duration: 10000 });
+          this._applyUpdate();
+        } else {
+          this._toast(`v${remote.version} is available — tap to update`, {
             duration: 10000,
             onTap: () => this._applyUpdate(),
           });
@@ -175,16 +202,17 @@ export class UPubApp {
     }, 2500);
   }
 
+  /** The published build (version.json, cache-busted) as a build-info object. */
   async _fetchRemoteVersion() {
     const res = await fetch(`../version.json?_=${Date.now()}`, { cache: 'no-store' });
-    const info = await res.json();
-    return info.latest ?? info.stable ?? info.version;
+    return remoteBuild(await res.json());
   }
 
-  _isNewer(remote) {
-    return String(remote).localeCompare(String(VERSION), undefined,
-      { numeric: true, sensitivity: 'base' }) > 0;
-  }
+  /**
+   * 'version' | 'commit' | null — stable compares versions (SemVer), the dev
+   * channel compares commits (a later commit is newer, whatever the tag).
+   */
+  _isNewer(remote) { return newerBuild(remote, BUILD); }
 
   /**
    * Drive a new service worker to activation.  NO blind timed reload while an
@@ -217,9 +245,10 @@ export class UPubApp {
     root.className = 'wr-app';
     root.innerHTML = `
       <header id="wr-top">
+        <button id="wr-back" class="wr-icon-btn" title="Documents" aria-label="Documents"${this.lib?.enabled ? '' : ' hidden'}>${ICONS.back}</button>
         <input id="wr-title" type="text" value="${esc(this.title)}" aria-label="Document title"
                autocomplete="off" autocorrect="on" spellcheck="false" enterkeyhint="done">
-        <span id="wr-dirty" title="Uncommitted changes" hidden></span>
+        <span id="wr-dirty" title="Not saved to the device" hidden></span>
         <div id="wr-top-actions">
           <button id="wr-count" title="Word count" aria-label="Word count"></button>
           <button id="wr-btn-preview" class="wr-icon-btn" title="Preview" aria-label="Toggle preview">${ICONS.eye}</button>
@@ -253,6 +282,7 @@ export class UPubApp {
 
     document.getElementById('wr-btn-preview').addEventListener('click', () => this.togglePreview());
     document.getElementById('wr-btn-menu').addEventListener('click', () => this._openMenu());
+    document.getElementById('wr-back').addEventListener('click', () => this.lib.openSheet());
     document.getElementById('wr-overlay').addEventListener('click', (e) => {
       if (e.target.id === 'wr-overlay') this._closeSheet();
     });
@@ -360,6 +390,7 @@ export class UPubApp {
 
   _onEdit() {
     this.content = this.editor.getValue();
+    this.comments?.refresh();
     this._refreshDirty();
     this._refreshCount();
     this._persistSoon();
@@ -370,7 +401,8 @@ export class UPubApp {
 
   _refreshDirty() {
     const el = document.getElementById('wr-dirty');
-    if (el) el.hidden = !this.isDirty;
+    // The dot = the device is behind (changed since the last save, or never saved).
+    if (el) el.hidden = !(this.lib ? this.lib.needsSave : this.isDirty);
   }
 
   _refreshCount() {
@@ -406,22 +438,46 @@ export class UPubApp {
       // The file can't rewrite itself silently — keep a crash-recovery draft.
       saveDraft(this.content, this.vcs.headHash);
     } else {
-      try { await saveToIDB(DOC_ID, data); } catch (e) { console.warn('autosave failed', e); }
+      await this.lib.persist(data);
     }
   }
 
-  async commit(message) {
+  /**
+   * The history snapshot of a save, tagged with its version — the device
+   * write is the library's (`lib.save`), which calls this once the file is on
+   * the device.
+   */
+  async commit(message, tag) {
     const author = (this.prefs.name || '').trim() || 'anonymous';
     const email = (this.prefs.email || '').trim() || '';
-    await this.vcs.commit({ content: this.content, message: message || '', author, email });
+    await this.vcs.commit({ content: this.content, message: message || '', author, email, tag });
     clearDraft();
     this._refreshDirty();
     await this._persistNow();
   }
 
+  /** Replace the open document (the library opened / created one, or a file). */
+  _loadDocument(data) {
+    this.data = data;
+    this.vcs = new VCS(data);
+    this.vcs.detachedHead = null;
+    this._setTitle(data.title || 'Untitled');
+    this._resetView?.();
+    this.setContent(data.currentContent ?? this.vcs.headContent ?? '');
+    if (!document.getElementById('wr-preview').hidden) this._renderPreview();
+  }
+
+  _setTitle(title) {
+    this.title = title;
+    const el = document.getElementById('wr-title');
+    if (el) el.value = title;
+    document.title = title;
+  }
+
   setContent(text) {
     this.content = text;
     this.editor.setValue(text);
+    this.comments?.clamp();
     this._refreshDirty();
     this._refreshCount();
     this._persistSoon();
@@ -491,9 +547,13 @@ export class UPubApp {
       <div class="wr-menu">
         <button data-act="preview">Preview</button>
         <button data-act="focus">${focusOn ? '✓ ' : ''}Focus mode</button>
-        <button data-act="history">History${this.isDirty ? ' <span class="wr-menu-dot"></span>' : ''}</button>
+        ${this.lib?.enabled ? '<button data-act="documents">Documents</button>' : ''}
+        <button data-act="save"${this.lib.needsSave && this.lib.nextVersion ? '' : ' disabled'}>Save${this.lib.nextVersion ? ` <span class="wr-menu-ver">${this.lib.nextVersion}</span>` : ''} to device${this.lib.needsSave ? ' <span class="wr-menu-dot"></span>' : ''}</button>
+        ${this.lib.nextMajor ? `<button data-act="save-major">Save as new major <span class="wr-menu-ver">${this.lib.nextMajor}</span></button>` : ''}
+        <button data-act="history">History${this.lib.savedVersion ? ` <span class="wr-menu-ver">${this.lib.savedVersion}</span>` : ''}</button>
+        <button data-act="open-device">Open from device…</button>
+        <button data-act="comments">Comments…</button>
         <button data-act="export">Export…</button>
-        <button data-act="import">Import data file…</button>
         <button data-act="new">New document</button>
         <hr>
         <button data-act="guide">Guide</button>
@@ -507,10 +567,14 @@ export class UPubApp {
       const go = {
         preview: () => this.togglePreview(true),
         focus: () => this.editor.setFocusMode(!focusOn),
+        documents: () => this.lib.openSheet(),
+        save: () => this._quickSave(),
+        'save-major': () => this.lib.save({ major: true }),
         history: () => this._openHistory(),
+        'open-device': () => this.lib.openFromDevice(),
+        comments: () => this.comments.showSheet(),
         export: () => this._openExport(),
-        import: () => this._importData(),
-        new: () => this._newDocument(),
+        new: () => this.lib.newDocument(),
         guide: () => this._openGuide(),
         settings: () => this._openSettings(),
         about: () => this._openAbout(),
@@ -523,56 +587,67 @@ export class UPubApp {
 
   _openHistory() {
     const commits = this.vcs.log();
-    const backup = loadBackupMark(this._backupScope());
+    const dev = this.lib.device;
     const fmtDate = (t) => new Date(t).toLocaleString(undefined,
       { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-    const pending = this.isDirty ? `
+    const cur = this.lib.savedVersion, next = this.lib.nextVersion, major = this.lib.nextMajor;
+    const label = !cur ? 'Never saved to the device' : this.isDirty ? `Changed since ${esc(cur)}` : `${esc(cur)} not on the device`;
+    const pending = this.lib.needsSave ? `
       <div class="wr-pending">
-        <div class="wr-pending-head"><span class="wr-node"></span>Uncommitted changes</div>
+        <div class="wr-pending-head"><span class="wr-node"></span>${label}</div>
         <div class="wr-pending-row">
-          <input id="wr-commit-msg" type="text" placeholder="Message (optional)" autocomplete="off">
-          <button id="wr-commit-btn" class="wr-primary">Commit</button>
+          <input id="wr-commit-msg" type="text" placeholder="A note on this version (optional)" autocomplete="off">
+          <button id="wr-commit-btn" class="wr-primary"${next ? '' : ' disabled'}>Save <b id="wr-commit-next">${esc(next ?? '—')}</b></button>
         </div>
-      </div>` : '<div class="wr-clean">Everything committed.</div>';
+        ${major ? `<label class="wr-pending-major"><input type="checkbox" id="wr-commit-major"> new major version (${esc(major)})</label>` : ''}
+      </div>` : `<div class="wr-clean">On the device as ${esc(dev?.fileName ?? cur ?? '')}.</div>`;
 
     const list = commits.length ? commits.map(c => `
       <div class="wr-commit" data-hash="${c.hash}">
         <div class="wr-commit-line">
           <span class="wr-commit-msg">${esc(c.message || '(no message)')}</span>
-          ${c.tag ? `<span class="wr-tag">${esc(c.tag)}</span>` : ''}
-          ${backup && backup.headHash === c.hash ? '<span class="wr-tag wr-exported">exported</span>' : ''}
+          ${c.tag ? `<span class="wr-tag">${esc(c.tag)}</span>` : `<span class="wr-tag">${esc(shortHash(c.hash))}</span>`}
+          ${dev && dev.savedHead === c.hash ? `<span class="wr-tag wr-exported" title="${dev.saved ? 'The device holds this version' : 'On the device, changed since'}">on device</span>` : ''}
         </div>
-        <div class="wr-commit-meta">${esc(shortHash(c.hash))} · ${esc(c.author || '')} · ${fmtDate(c.timestamp)}</div>
+        <div class="wr-commit-meta">${esc(c.author || '')} · ${fmtDate(c.timestamp)}</div>
         <button class="wr-restore" data-hash="${c.hash}">Restore</button>
-      </div>`).join('') : '<div class="wr-clean">No commits yet.</div>';
+      </div>`).join('') : '<div class="wr-clean">No saves yet.</div>';
 
     const modal = this._openSheet(`
       <div class="wr-sheet-head">History</div>
       <div class="wr-sheet-body">${pending}<div class="wr-log">${list}</div></div>`, 'tall');
 
+    modal.querySelector('#wr-commit-major')?.addEventListener('change', (e) => {
+      const el = modal.querySelector('#wr-commit-next');
+      if (el) el.textContent = e.target.checked ? (major ?? '—') : (next ?? '—');
+    });
     modal.querySelector('#wr-commit-btn')?.addEventListener('click', async () => {
       const msg = modal.querySelector('#wr-commit-msg').value.trim();
-      await this.commit(msg);
+      const isMajor = !!modal.querySelector('#wr-commit-major')?.checked;
       this._closeSheet();
-      this._toast('Committed');
+      await this.lib.save({ message: msg, major: isMajor });
     });
     modal.addEventListener('click', (e) => {
       const btn = e.target.closest('.wr-restore');
       if (!btn) return;
       const hash = btn.dataset.hash;
       if (hash === this.vcs.headHash && !this.isDirty) { this._closeSheet(); return; }
-      if (!confirm('Restore this version into the editor? Your current text stays in history only if committed.')) return;
+      if (!confirm('Restore this version into the editor? Your current text stays in history only if saved.')) return;
       this.setContent(this.vcs.getContentAt(hash));
       this._closeSheet();
-      this._toast('Restored — commit to keep it');
+      this._toast('Restored — save to keep it');
     });
+  }
+
+  /** Save now, no note (the menu's Save): the next version to the device. */
+  async _quickSave() {
+    await this.lib.save();
   }
 
   // ── Export ────────────────────────────────────────────────────────────────
 
   _slug() { return slugify(this.title); }
-  _backupScope() { return IS_QUINE ? location.href : DOC_ID; }
 
   _openExport() {
     const modal = this._openSheet(`
@@ -580,7 +655,6 @@ export class UPubApp {
       <div class="wr-menu">
         <button data-act="epub"><b>EPUB</b> — e-book for Apple Books, Kindle, Kobo…</button>
         <button data-act="md">Markdown (.md) — the raw text</button>
-        <button data-act="data">Data file (.unifile.json) — text + full history</button>
         ${IS_QUINE ? '<button data-act="quine">Save a copy (.html) — app + document in one file</button>' : ''}
       </div>`);
     modal.addEventListener('click', async (e) => {
@@ -590,7 +664,6 @@ export class UPubApp {
       try {
         if (act === 'epub') await this._exportEpub();
         if (act === 'md') await shareOrDownloadFile(this.content, this._slug() + '.md', 'text/markdown');
-        if (act === 'data') await this._exportData();
         if (act === 'quine') await this._exportQuine();
       } catch (err) {
         if (err?.name !== 'AbortError') this._toast('Export failed: ' + err.message);
@@ -606,14 +679,6 @@ export class UPubApp {
     });
     await this._shareOrDownloadBlob(new Blob([bytes], { type: 'application/epub+zip' }), filename);
     this._toast('EPUB exported');
-  }
-
-  async _exportData() {
-    const json = JSON.stringify(this._currentData(), null, 2);
-    const res = await shareOrDownloadFile(json, this._slug() + '.unifile.json', 'application/json');
-    if (res !== 'cancelled' && this.vcs.headHash) {
-      markBackedUp(this._backupScope(), this.vcs.headHash);
-    }
   }
 
   async _exportQuine() {
@@ -635,48 +700,6 @@ export class UPubApp {
       if (e && e.name === 'AbortError') return;
     }
     downloadBlob(blob, filename);
-  }
-
-  _importData() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json,application/json';
-    input.addEventListener('change', async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const data = JSON.parse(await file.text());
-        if (!data.branches || !data.commits) throw new Error('not a unifile data file');
-        if (!confirm(`Replace the current document with “${data.title || 'Untitled'}” (including its history)?`)) return;
-        this.data = data;
-        this.vcs = new VCS(data);
-        this.title = data.title || 'Untitled';
-        document.getElementById('wr-title').value = this.title;
-        document.title = this.title;
-        this.setContent(data.currentContent ?? this.vcs.headContent ?? '');
-        await this._persistNow();
-        this._toast('Imported');
-      } catch (err) {
-        this._toast('Import failed: ' + err.message);
-      }
-    });
-    input.click();
-  }
-
-  _newDocument() {
-    if (!confirm('Start a new document? The current document and its history will be replaced'
-      + (IS_QUINE ? '.' : ' (export a data file first if you want to keep it).'))) return;
-    this.data = {
-      version: VERSION, title: 'Untitled', dslType: 'upub',
-      currentBranch: 'main', branches: { main: { name: 'main', head: null } },
-      commits: {}, comments: {}, password: null,
-    };
-    this.vcs = new VCS(this.data);
-    this.title = 'Untitled';
-    document.getElementById('wr-title').value = this.title;
-    document.title = this.title;
-    this.setContent('');
-    this._persistNow();
   }
 
   // ── Guide / Settings / About ─────────────────────────────────────────────
@@ -732,7 +755,8 @@ export class UPubApp {
       <div class="wr-sheet-body">
         <p><b>{write}</b> v${esc(VERSION)}
           <span class="wr-mut">· build ${esc(BUILT)}${COMMIT
-            ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(COMMIT_AT.slice(0, 16).replace('T', ' '))}Z)` : ''}` : ''}</span></p>
+            ? ` · ${esc(COMMIT)}${COMMIT_AT ? ` (${esc(formatCommitAt(COMMIT_AT))})` : ''}` : ''}${isDevChannel()
+            ? ' · dev channel — every push updates' : ''}</span></p>
         <p class="wr-mut">${IS_QUINE ? 'Single-file mode — this document and the app live in one .html file.'
           : 'App mode — your document is stored on this device (IndexedDB).'}</p>
         <p class="wr-mut">Fully offline. Nothing leaves your device. <br>unifile.app</p>
@@ -748,8 +772,13 @@ export class UPubApp {
     status.textContent = 'Checking…';
     try {
       const remote = await this._fetchRemoteVersion();
-      if (!this._isNewer(remote)) { status.textContent = `Up to date (v${VERSION}).`; return; }
-      status.textContent = `v${remote} available.`;
+      if (!this._isNewer(remote)) {
+        status.textContent = `Up to date (${formatBuild(BUILD, { version: true })}).`;
+        return;
+      }
+      status.textContent = isDevChannel()
+        ? `New build ${formatBuild(remote, { commit: true })} available.`
+        : `v${remote.version} available.`;
       btn.textContent = 'Update & reload';
       btn.onclick = () => {
         btn.textContent = 'Updating…';

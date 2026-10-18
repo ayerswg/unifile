@@ -53,7 +53,7 @@ export class DslFooter {
 
     if (dslType !== 'abcjs') { this.el.innerHTML = ''; return; }
 
-    const playing = state.abcPlaying;
+    const playing = state.abcPlaying || state.abcStarting;   // starting: ⏸ while the synth primes
     const total   = state.abcDurationMs ?? 0;
     const pos     = state.abcPositionMs ?? 0;
 

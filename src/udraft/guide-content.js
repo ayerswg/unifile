@@ -10,6 +10,9 @@ blueprint. You write statements — one per line — and the plan draws itself:
 walls, door swings, window symbols, dimension strings, room labels with areas.
 
 Tap the **eye** to see the drawing. Type \`/\` for the insertion menu.
+A line starting with \`#\` is a comment the plan ignores; on a hardware
+keyboard **⌘/** (Ctrl+/ on Windows and Linux) comments out the selected
+lines and, pressed again, brings them back.
 **Example plan** in the ⋯ menu loads a complete three-floor cottage —
 stacked stairwell, kitchen island, a \`define\`d baby grand placed on two
 floors, an L-shaped desk — plus a **site plan** of its lakeside lot, to
@@ -289,12 +292,40 @@ walls:
 ## Exports
 
 From the ⋯ menu: **SVG** (vector drawing), **PNG**, **PDF** — printed **at
-true scale** (put a scale ruler on it), plus the data file (text + full
-history) and, in single-file mode, a copy of the whole app.
+true scale** (put a scale ruler on it) and, in single-file mode, a copy of
+the whole app. The plan itself (text + full history) is kept by **Save to
+device** — see History.
 
-## History
+## Comments
 
-{draft} keeps git-style version history on your device — commit from the
-History sheet, restore any version. Everything is offline; nothing leaves
-your device.
+Select a statement (or a few words of it) and **long-press the selection**
+(right-click on a desktop) → **Comment**. A card opens under it; the
+commented text keeps a soft highlight — tap it to read the thread, reply or
+**Resolve**. **⋯ menu → Comments…** lists every open and resolved comment
+(tap one to jump to it). Comments follow the text as you edit and are saved
+with the document.
+
+## Documents and history
+
+The **‹** button at the top left lists every plan you have drafted in
+{draft}, each one exactly as you left it — tap to open, **+ New** to start
+another, **⋯** on a row to rename, duplicate or delete. What you type is
+remembered on the device as you type it, so switching plans never loses
+anything.
+
+The list's **search bar** searches plan names *and* their text, showing
+the matching lines under each plan — tap one to open the plan on that line.
+
+**Save** (⋯ menu → Save, or from the **History** sheet, where a note is
+optional) writes the plan's text to your device as a file — just the DSL
+text — and keeps the same snapshot in the plan's history. Every save is a
+new file: \`name-A00.uni\`, \`name-A01.uni\`… The **name** is asked for
+once, when the plan is created, and never changes (the title at the top is
+separate); the version counts up by itself, and **Save as new major** turns
+\`A07\` into \`B00\`. On desktop Chrome and Edge you pick the folder once
+and later versions land in it silently; on iPhone and iPad the share sheet
+offers Files; elsewhere the file downloads. Tap any version in History to
+**restore** it — the old text comes back as the current, unsaved state.
+**Open from device** brings a \`.uni\` back (name and version from the
+file name). Everything is offline; nothing leaves your device.
 `;

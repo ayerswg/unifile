@@ -16,7 +16,7 @@ Each format is its own dedicated app — install it as an offline PWA or downloa
 
 ## What it does
 
-Each app is focused on one format, with a built-in git-style version history (branches, commits, diffs) — all in a single file that works fully offline. Prose sections use Markdown; a `#!shebang` at the top of a section switches it to that app's format:
+Each app is focused on one format, keeps every document you write in a library on your device, and has a built-in save history (snapshots, diffs, restore) — all fully offline, with nothing ever sent anywhere. Prose sections use Markdown; a `#!shebang` at the top of a section switches it to that app's format:
 
 ```
 #!markdown

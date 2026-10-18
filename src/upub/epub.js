@@ -28,7 +28,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
-import { buildZip } from './zip.js';
+import { buildZip } from '../core/zip.js';
 
 const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 

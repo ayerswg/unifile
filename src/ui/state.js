@@ -6,6 +6,7 @@
  */
 
 import { shortHash } from '../core/hash.js';
+import { nextVersion } from '../core/library.js';
 
 // ---------------------------------------------------------------------------
 // Event bus
@@ -56,7 +57,6 @@ export const PANELS = {
   NONE: null,
   HISTORY: 'history',
   BLAME: 'blame',
-  MERGE: 'merge',
   EXPORT: 'export',
   COMMIT: 'commit',
   COMMENTS: 'comments',
@@ -95,20 +95,28 @@ class AppState extends EventBus {
     /** @type {{ name: string, email: string }} Cached user identity */
     this.user = { name: '', email: '' };
 
-    /** @type {{ content: string, fromHash: string }|null} Single-slot auto-stash */
-    this.stash = null;
-
     /** @type {{ left: string, right: string }|null} Active diff view (hash | 'WORKING') */
     this.diff = null;
 
     /** @type {{ message: string, tag?: string }|null} Draft carried into the commit dialog */
     this.pendingCommit = null;
 
-    /** @type {FileSystemFileHandle|null} PWA file handle */
-    this.fileHandle = null;
+    /** @type {import('../core/library.js').Library|null} The document library (PWA; null in a quine) */
+    this.library = null;
 
-    /** @type {string|null} PWA document ID for IDB */
+    /** @type {string|null} The open document's library record id (PWA) */
     this.docId = null;
+
+    /**
+     * The open document's device-file link, mirrored from its library record:
+     * `fileName` (what it was written as), `savedAt`, `savedHead` (the head
+     * commit that write carried), `version` (the last version written) and
+     * `saved` (the current state IS what the device holds); `linked` = a
+     * folder is kept, later saves land in it silently.  Null until the
+     * document has been written out once.
+     * @type {{ fileName: string|null, savedAt: number|null, savedHead: string|null, saved: boolean, linked: boolean, version: string|null }|null}
+     */
+    this.deviceFile = null;
 
     /** @type {boolean} Whether the DSL libs are ready */
     this.dslReady = false;
@@ -118,6 +126,10 @@ class AppState extends EventBus {
 
     /** @type {boolean} Whether ABC audio is currently playing */
     this.abcPlaying = false;
+
+    /** @type {boolean} A Play is starting (the synth is priming): the transport
+     *  already reads as playing, and a tap meanwhile is a pause (abcjs.js) */
+    this.abcStarting = false;
 
     /** @type {boolean} Whether a valid ABC tune is loaded and ready to play */
     this.abcHasTune = false;
@@ -178,8 +190,33 @@ class AppState extends EventBus {
     return this.isDirty ? '*' : '';
   }
 
+  /** Always false now — history is one linear line (kept for older callers). */
   get isDetached() {
-    return this.vcs?.isDetached ?? false;
+    return false;
+  }
+
+  /**
+   * Whether a Save has something to write: the text moved since the last
+   * save, the document was never saved, or the device copy is behind (a
+   * title change, a record that lost its device state).  There is ONE save —
+   * to the device — so this is the dirty dot, the Save pill and the pending
+   * node's one condition.
+   */
+  get needsSave() {
+    if (this.isDirty) return true;
+    if (!this.data?.savedVersion) return true;
+    return this.deviceFile ? !this.deviceFile.saved : false;
+  }
+
+  /** The version the next Save writes ('A00' first; null once the scheme is exhausted). */
+  get nextSaveVersion() {
+    return nextVersion(this.data?.savedVersion ?? null);
+  }
+
+  /** The version a "new major" save writes (A07 → B00); null before the first save or past Z. */
+  get nextMajorVersion() {
+    const cur = this.data?.savedVersion ?? null;
+    return cur ? nextVersion(cur, { major: true }) : null;
   }
 
   get title() {

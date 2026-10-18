@@ -106,3 +106,45 @@ export function buildZip(entries, date) {
   out.set(eocd, p);
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a ZIP (the .xlsx importer).  Stored entries are sliced; deflated ones
+ * go through `inflateRaw(bytes) → Uint8Array | Promise` — Node's
+ * `zlib.inflateRawSync`, or a DecompressionStream('deflate-raw') in the
+ * browser (src/dsl/spreadsheet.js supplies it).
+ * @returns {Promise<Map<string, Uint8Array>>}  entry name → bytes
+ */
+export async function readZip(bytes, inflateRaw) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  // The end-of-central-directory record sits in the last 64 KB.
+  let eocd = -1;
+  for (let i = b.length - 22; i >= Math.max(0, b.length - 65557); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a ZIP file');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const out = new Map();
+  const dec = new TextDecoder();
+  for (let i = 0; i < count; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('bad central directory');
+    const method = dv.getUint16(p + 10, true);
+    const csize = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true), extraLen = dv.getUint16(p + 30, true), commentLen = dv.getUint16(p + 32, true);
+    const local = dv.getUint32(p + 42, true);
+    const name = dec.decode(b.subarray(p + 46, p + 46 + nameLen));
+    const lNameLen = dv.getUint16(local + 26, true), lExtraLen = dv.getUint16(local + 28, true);
+    const dataAt = local + 30 + lNameLen + lExtraLen;
+    const data = b.subarray(dataAt, dataAt + csize);
+    if (method === 0) out.set(name, data);
+    else if (method === 8) { if (!inflateRaw) throw new Error('deflated entry without an inflater'); out.set(name, await inflateRaw(data)); }
+    else throw new Error(`unsupported compression ${method}`);
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}

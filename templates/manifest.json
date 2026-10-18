@@ -4,8 +4,8 @@
   "description": "Offline document editor with built-in version history",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#1e1e2e",
-  "theme_color": "#181825",
+  "background_color": "#181818",
+  "theme_color": "#181818",
   "orientation": "any",
   "icons": [
     {

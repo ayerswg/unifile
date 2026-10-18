@@ -34,32 +34,39 @@
  *     shake-to-undo and keyboard undo key also emit) are intercepted.
  */
 
-import { classifyDoc, renderLineHtml, lineClass } from './syntax.js';
+import { classifyDoc, renderLineHtml, lineClass, commentTokens } from './syntax.js';
+import { toggleCommentEdits, commentSpecFor, applyEdits, mapOffset } from '../core/line-comment.js';
 
 const UNDO_LIMIT = 500;
 const UNDO_COALESCE_MS = 900;
 
-const markdownSyntax = { classifyDoc, renderLineHtml, lineClass };
+const markdownSyntax = { classifyDoc, renderLineHtml, lineClass, commentTokens };
 
 export class UPubEditor {
   /**
    * @param {HTMLElement} host      element the editor mounts into
    * @param {object}   opts
    * @param {Function} [opts.onChange]  fired (debounced by caller) after any model change
-   * @param {object}   [opts.syntax]    { classifyDoc, renderLineHtml, lineClass } —
-   *   pluggable line classifier/renderer (defaults to uPub's Markdown module).
+   * @param {object}   [opts.syntax]    { classifyDoc, renderLineHtml, lineClass, commentTokens } —
+   *   pluggable line classifier/renderer (defaults to uPub's Markdown module);
+   *   `commentTokens` is the syntax Mod-/ comments lines out with.
    *   uDraft passes its own; the Markdown-specific commands and the swipe
    *   gesture are gated on line types other syntaxes never emit, so they stay
    *   inert.  The one invariant every syntax must hold:
    *   textContent(renderLineHtml(line, info)) === line.
    * @param {Function} [opts.onCaret]   fired after every edit AND caret move
    *   (same cadence as onSlash) — uDraft's autocomplete hangs off this.
+   * @param {Function} [opts.onEdit]    fired with `{ from, to, insertLen }` —
+   *   the one replaced span (old-text offsets) of every model change that
+   *   went through typing, paste, undo, a command or a swipe (NOT setValue,
+   *   which is a different document).  comments.js maps its ranges with it.
    */
   constructor(host, opts = {}) {
     this.host = host;
     this.onChange = opts.onChange || (() => {});
     this.onSlash = opts.onSlash || null;   // ctx|null → app's insertion menu
     this.onCaret = opts.onCaret || null;
+    this.onEdit = opts.onEdit || null;
     this.syntax = opts.syntax || markdownSyntax;
     this.lines = [''];
     this.infos = this.syntax.classifyDoc(this.lines);
@@ -277,9 +284,40 @@ export class UPubEditor {
     const selAfter = sel && { start: adj(sel.start), end: adj(sel.end) };
     if (!coalesce) this._pushUndo('format');
     this._lastUndoKind = 'format';
+    const before = this.getValue();
     for (let i = a; i <= b; i++) this.lines[i] = next[i - a];
     this._render();
     if (selAfter) this._setSelOffsets(selAfter.start, selAfter.end);
+    this._emitEdit(before);
+    this.onChange();
+    this._notifySlash();
+    return true;
+  }
+
+  /**
+   * Mod-/ — comment out the selected lines (or uncomment them) in the syntax's
+   * own comment tokens, YAML's `#` inside the front matter
+   * (core/line-comment.js — the same rules as the CodeMirror apps).  A
+   * selection ending at a line start leaves that line out.  One undo step.
+   * Returns true when the text changed.
+   */
+  toggleComment() {
+    const sel = this._selOffsets(); if (!sel) return false;
+    const a = this._lineAt(sel.start).lineIdx;
+    const end = this._lineAt(sel.end);
+    const b = end.lineIdx > a && end.col === 0 && sel.end > sel.start ? end.lineIdx - 1 : end.lineIdx;
+    const spec = commentSpecFor(this.lines, a, b, this.syntax.commentTokens);
+    const res = toggleCommentEdits(this.lines, a, b, spec);
+    if (!res) return false;
+    const before = this.getValue();
+    const start = mapOffset(this.lines, res.edits, sel.start);
+    const stop = mapOffset(this.lines, res.edits, sel.end);
+    this._pushUndo('format');
+    this._lastUndoKind = 'format';
+    this.lines = applyEdits(this.lines, res.edits);
+    this._render();
+    this._setSelOffsets(start, stop);
+    this._emitEdit(before);
     this.onChange();
     this._notifySlash();
     return true;
@@ -323,8 +361,26 @@ export class UPubEditor {
     this.lines = next.split('\n');
     this._render();
     this._setSelOffsets(selStart, selEnd ?? selStart);
+    this._emitEdit(text);
     this.onChange();
     this._notifySlash();
+  }
+
+  /**
+   * Report a model change to `onEdit` as ONE replaced span, found by common
+   * prefix / suffix against the previous text (exact for an _applyEdit, the
+   * minimal single span for a native edit or an undo).
+   */
+  _emitEdit(before) {
+    if (!this.onEdit) return;
+    const after = this.getValue();
+    if (before === after) return;
+    let a = 0;
+    const max = Math.min(before.length, after.length);
+    while (a < max && before.charCodeAt(a) === after.charCodeAt(a)) a++;
+    let b = 0;
+    while (b < max - a && before.charCodeAt(before.length - 1 - b) === after.charCodeAt(after.length - 1 - b)) b++;
+    this.onEdit({ from: a, to: before.length - b, insertLen: after.length - b - a });
   }
 
   _pushUndo(kind) {
@@ -346,10 +402,12 @@ export class UPubEditor {
     const sel = this._selOffsets() || { start: 0, end: 0 };
     to.push({ text: this.getValue(), sel });
     const snap = from.pop();
+    const before = this.getValue();
     this.lines = snap.text.split('\n');
     this._lastUndoKind = null;
     this._render();
     this._setSelOffsets(snap.sel.start, snap.sel.end);
+    this._emitEdit(before);
     this.onChange();
     this._notifySlash();
   }
@@ -531,22 +589,47 @@ export class UPubEditor {
     };
   }
 
+  /** DOM point (node, offset) for an absolute text offset. */
+  _domPoint(offset) {
+    const { lineIdx, col } = this._lineAt(Math.max(0, Math.min(offset, this.getValue().length)));
+    const div = this.root.children[lineIdx];
+    if (!div) return { node: this.root, off: 0 };
+    // Walk text nodes accumulating length until we reach col.
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    let acc = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+      const len = node.nodeValue.length;
+      if (col <= acc + len) return { node, off: col - acc };
+      acc += len;
+    }
+    return { node: div, off: div.childNodes.length };
+  }
+
+  /** A DOM Range over [start, end) — comments.js measures highlights with it. */
+  domRange(start, end = start) {
+    const a = this._domPoint(start);
+    const b = start === end ? a : this._domPoint(end);
+    const range = document.createRange();
+    try { range.setStart(a.node, a.off); range.setEnd(b.node, b.off); } catch { return null; }
+    return range;
+  }
+
+  /** The current selection as absolute offsets (public alias). */
+  selection() { return this._selOffsets(); }
+  setSelection(start, end = start) { this._setSelOffsets(start, end); }
+
+  /** The word around `offset` as { start, end }, or null on whitespace. */
+  wordAt(offset) {
+    const text = this.getValue();
+    let a = offset, b = offset;
+    while (a > 0 && /[\p{L}\p{N}'’-]/u.test(text[a - 1])) a--;
+    while (b < text.length && /[\p{L}\p{N}'’-]/u.test(text[b])) b++;
+    return a < b ? { start: a, end: b } : null;
+  }
+
   _setSelOffsets(start, end = start) {
-    const place = (offset) => {
-      const { lineIdx, col } = this._lineAt(Math.max(0, Math.min(offset, this.getValue().length)));
-      const div = this.root.children[lineIdx];
-      if (!div) return { node: this.root, off: 0 };
-      // Walk text nodes accumulating length until we reach col.
-      const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
-      let acc = 0;
-      let node;
-      while ((node = walker.nextNode())) {
-        const len = node.nodeValue.length;
-        if (col <= acc + len) return { node, off: col - acc };
-        acc += len;
-      }
-      return { node: div, off: div.childNodes.length };
-    };
+    const place = (offset) => this._domPoint(offset);
     const a = place(start);
     const b = start === end ? a : place(end);
     const sel = window.getSelection();
@@ -598,9 +681,11 @@ export class UPubEditor {
     // The undo snapshot must be the PRE-edit text, but _pushUndo reads
     // this.lines via getValue() — which is still the old model here. Good.
     const sel = this._selOffsetsFromDom(domLines);
+    const before = old.join('\n');
     this.lines = domLines;
     this._render();
     if (sel) this._setSelOffsets(sel.start, sel.end);
+    this._emitEdit(before);
     this.onChange();
     this._notifySlash();
   }
@@ -879,6 +964,7 @@ export class UPubEditor {
       if (k === 'b') { e.preventDefault(); this.wrapSelection('**'); return; }
       if (k === 'i') { e.preventDefault(); this.wrapSelection('*'); return; }
       if (k === 'k') { e.preventDefault(); this.insertLink(); return; }
+      if (k === '/') { e.preventDefault(); this.toggleComment(); return; }
     }
   }
 

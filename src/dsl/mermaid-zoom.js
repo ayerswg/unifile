@@ -212,24 +212,26 @@ export function mountZoomStage(el, svg) {
   });
   ctl.addEventListener('dblclick', (e) => e.stopPropagation());
 
-  // ── External control (the phone action bubble: actions.js `zoomStages`) ──
-  stage.addEventListener('uf-mmd-zoom', (e) => {
+  // ── Remote control ────────────────────────────────────────────────────────
+  // The phone action bubble has no pointer over the stage: it dispatches a
+  // `uf-mmd-zoom` CustomEvent on `document` (detail = 'fit' | 'in' | 'out')
+  // and every mounted stage obeys (zoom about its own centre).  A stage the
+  // preview has since replaced unhooks itself on the next event.
+  const onRemote = (e) => {
+    if (!stage.isConnected) { document.removeEventListener('uf-mmd-zoom', onRemote); return; }
     const z = e.detail;
     if (z === 'fit') { setView(null); return; }
     const r = rect();
-    zoomAt(r.left + r.width / 2, r.top + r.height / 2, z === 'in' ? 1.4 : 1 / 1.4);
-  });
+    if (z === 'in' || z === 'out') {
+      zoomAt(r.left + r.width / 2, r.top + r.height / 2, z === 'in' ? 1.4 : 1 / 1.4);
+    }
+  };
+  document.addEventListener('uf-mmd-zoom', onRemote);
 }
 
-/**
- * Zoom every mounted stage under `root` ('fit' | 'in' | 'out') — for callers
- * that don't hold a stage (the phone action bubble).
- * @returns {number} stages reached
- */
-export function zoomStages(z, root = document) {
-  const stages = root.querySelectorAll('.uf-mmd-stage');
-  stages.forEach(s => s.dispatchEvent(new CustomEvent('uf-mmd-zoom', { detail: z })));
-  return stages.length;
+/** Zoom every live diagram stage: 'fit' (extents) | 'in' | 'out'. */
+export function zoomAll(z) {
+  document.dispatchEvent(new CustomEvent('uf-mmd-zoom', { detail: z }));
 }
 
 /** The diagram's own box from its viewBox (mermaid always sets one). */

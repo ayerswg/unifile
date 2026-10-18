@@ -1,27 +1,38 @@
 /**
- * Top bar component
+ * Desktop top bar
  *
- * Layout (left → right):
- *   [DSL menu icon ▾]  [editable title]  [↑commit]  [branch ▾][hash ▾]
+ *   [‹ documents]  [menu ▾]  [editable title]          [Save A04 ●][▾]
  *
- * The view-mode toggle (Editor / Split / Preview) has been moved to the
- * pane divider bar — click it to cycle through modes.
+ *   - ‹ toggles the document list (the sidebar on the left; see library-pane.js)
+ *   - Menu       → file-level verbs (new, save, save as major, open from
+ *                  device…), help, blame, export, comments, settings
+ *   - Save pill  → appears while the device is behind (changes since the last
+ *                  save, or never saved); a click writes the NEXT VERSION to
+ *                  the device — `<name>-A04.uni` — and snapshots it into
+ *                  history (Ctrl+S; Shift-click = a new major, B00).  The ▾
+ *                  half opens the history.
+ *   - version pill → the saved version (A03); its dropdown is the history —
+ *                  the pending node (note + major switch + Save) while there
+ *                  is something to save, then every version: click one to
+ *                  open the read-only diff against the working text.
  *
- * Two independent VCS dropdowns:
- *   - Branch pill  → lists all branches; click to switch
- *   - Commit pill  → lists commits on current branch; click to checkout
- *                    When dirty: becomes a split button — left half commits,
- *                    right half (▾) opens the history dropdown.
- *
- * The DSL icon at the far left is a dropdown menu that replaces the former
- * ⋯ tools menu and ⚙ settings gear.
+ * There is ONE save — to the device — and ONE linear line of history (no
+ * branches, no detached head): each version is a snapshot, a restore brings
+ * an old text back as an unsaved change.  The history list is also mounted
+ * into the phone's history pane (mountCommitLog).
  */
 
 import { state, PANELS } from './state.js';
+
+/** A DSL's own actions (`dsl.actions: [{ id, label, glyph, run }]`), if any. */
+function dslActions(dslId) {
+  try { return getDSL(dslId)?.actions ?? []; } catch { return []; }
+}
 import { shortHash } from '../core/hash.js';
-import { loadUserPrefs, loadBackupMark } from '../core/storage.js';
+import { nextVersion } from '../core/library.js';
 import { showArchivedCommentsModal } from './comments.js';
-import { listDSLs } from '../dsl/registry.js';
+import { listDSLs, getDSL, commentTokensFor } from '../dsl/registry.js';
+import { formatShortcut } from '../core/keys.js';
 import {
   getExtensionMeta,
   setTextExtension,
@@ -36,7 +47,6 @@ export class TopBar {
   constructor(container, handlers = {}) {
     this.el = container;
     this.handlers = handlers;
-    this._branchOpen = false;
     this._commitOpen = false;
     this._dslMenuOpen = false;
     this._unsub = [];
@@ -46,6 +56,8 @@ export class TopBar {
     // Refresh the mobile commit-log pane's selected-commit highlight as the diff
     // selection changes (diff-change doesn't emit the generic 'change' event).
     this._unsub.push(state.on('diff-change', () => this._refreshCommitLog()));
+    // The device pill + the "on device" marker follow the device-file link.
+    this._unsub.push(state.on('device-change', () => this.render()));
 
     this.render();
   }
@@ -59,13 +71,23 @@ export class TopBar {
   // ---------------------------------------------------------------------------
 
   render() {
-    const { isDirty } = state;
-    const hash = state.shortHeadHash;
-    const branch = state.currentBranch;
-    const isDetached = state.isDetached;
+    const needsSave = state.needsSave;
+    const version = state.data?.savedVersion ?? null;
+    const next = state.nextSaveVersion;
+    const dev = state.deviceFile;
+    const saveTitle = next
+      ? `Save ${next} to the device${dev?.linked ? ' (into its folder)' : ''} — ${formatShortcut('Mod-s')} · Shift-click = new major version`
+      : 'Version limit reached (Z99)';
+    const versionTitle = version
+      ? `Saved as ${dev?.fileName ?? version}${dev?.savedAt ? ' ' + formatRelative(dev.savedAt) : ''} — history`
+      : 'Not saved to the device yet — history';
 
     this.el.innerHTML = `
       <div class="topbar">
+        ${state.library ? `
+        <button class="tb-library" id="tb-library" title="Documents (${formatShortcut('Mod-Shift-l')})" aria-label="Documents">
+          ${iconBack()}
+        </button>` : ''}
         <button class="tb-hamburger${this._dslMenuOpen ? ' active' : ''}" id="tb-dsl-menu-toggle"
           title="Menu" aria-label="Menu">
           ${iconHamburger()}
@@ -80,26 +102,21 @@ export class TopBar {
 
         <div class="topbar-right">
           <div class="vcs-pill-group">
-            <button class="vcs-pill branch-pill${isDetached ? ' detached' : ''}" id="tb-branch-toggle"
-              title="${isDetached ? 'Detached HEAD — click to manage branches' : `Branch: ${escHtml(branch)}`}">
-              ${iconBranch()}
-              <span class="vcs-pill-text">${isDetached ? '⚠ detached' : escHtml(branch)}</span>
-              <span class="vcs-pill-caret">▾</span>
-            </button>
-            ${isDirty ? `
+            ${needsSave ? `
               <button class="vcs-pill commit-pill dirty commit-action-pill" id="tb-commit-action"
-                title="Commit changes (Ctrl+S)">
-                <span class="vcs-pill-text vcs-pill-mono">${escHtml(hash)}</span>
-                <span class="dirty-dot" title="Uncommitted changes">●</span>
+                title="${escHtml(saveTitle)}">
+                <span class="vcs-pill-text">Save${next ? ` <span class="vcs-pill-mono">${escHtml(next)}</span>` : ''}</span>
+                <span class="dirty-dot" title="Not saved to the device">●</span>
               </button>
               <button class="vcs-pill commit-pill dirty commit-caret-pill" id="tb-commit-toggle"
-                title="View commits on this branch">
+                title="History">
                 <span class="vcs-pill-caret">▾</span>
               </button>
             ` : `
-              <button class="vcs-pill commit-pill" id="tb-commit-toggle"
-                title="Commit: ${escHtml(hash)}">
-                <span class="vcs-pill-text vcs-pill-mono">${escHtml(hash)}</span>
+              <button class="vcs-pill commit-pill saved" id="tb-commit-toggle"
+                title="${escHtml(versionTitle)}">
+                ${iconCheck()}
+                <span class="vcs-pill-text vcs-pill-mono">${escHtml(version ?? '—')}</span>
                 <span class="vcs-pill-caret">▾</span>
               </button>
             `}
@@ -111,17 +128,15 @@ export class TopBar {
       <div class="vcs-dropdown dsl-menu-dropdown${this._dslMenuOpen ? ' open' : ''}" id="tb-dsl-menu-dd">
         ${this._renderDslMenuList()}
       </div>
-      <div class="vcs-dropdown${this._branchOpen ? ' open' : ''}" id="tb-branch-dd">
-        ${this._branchOpen ? this._renderBranchList() : ''}
-      </div>
       <div class="vcs-dropdown${this._commitOpen ? ' open' : ''}" id="tb-commit-dd">
-        ${this._commitOpen ? this._renderCommitList() : ''}
+        ${this._commitOpen ? this._renderHistory() : ''}
       </div>
     `;
 
     this._bindEvents();
+    this._bindPending(this.el.querySelector('#tb-commit-dd'));
     // Keep the mobile commit-log pane (if mounted) in sync with every re-render
-    // — render() fires on state 'change', which covers commit/checkout/branch.
+    // — render() fires on state 'change', which covers save/restore/open.
     this._refreshCommitLog();
   }
 
@@ -137,18 +152,30 @@ export class TopBar {
 
   _refreshCommitLog() {
     if (!this._commitLogEl) return;
-    this._commitLogEl.innerHTML =
-      `<div class="commit-log-pane">${this._renderPendingNode()}${this._renderCommitList()}</div>`;
+    this._commitLogEl.innerHTML = `<div class="commit-log-pane">${this._renderHistory()}</div>`;
+    this._bindPending(this._commitLogEl);
+  }
 
-    this._commitLogEl.querySelectorAll('.dd-commit-item').forEach(item => {
+  /** The pending node (while there is something to save) + the version list. */
+  _renderHistory() {
+    return this._renderPendingNode() + this._renderCommitList();
+  }
+
+  /**
+   * Wire a rendered history (the phone pane or the desktop dropdown): version
+   * clicks → the diff, and the pending node's note / major switch / Save.
+   * Everything is class-scoped to the container, since both can be mounted
+   * at once.
+   */
+  _bindPending(root) {
+    if (!root) return;
+    root.querySelectorAll('.dd-commit-item').forEach(item => {
       item.addEventListener('click', () => {
         const hash = item.dataset.hash;
         if (hash) this._onCommitClick(hash);
       });
     });
-
-    // Pending (uncommitted) node: inline optional message + version, commit here.
-    const msg = this._commitLogEl.querySelector('#clp-msg');
+    const msg = root.querySelector('.clp-msg');
     if (msg) {
       const grow = () => {
         if (!msg.value) { msg.style.height = ''; return; }
@@ -159,70 +186,71 @@ export class TopBar {
       requestAnimationFrame(grow);
       msg.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey && (e.metaKey || e.ctrlKey)) {
-          e.preventDefault(); this._commitPending();
+          e.preventDefault(); this._savePending(root);
         }
       });
+      // Typing a note must not close the desktop dropdown.
+      msg.addEventListener('click', (e) => e.stopPropagation());
     }
-    this._commitLogEl.querySelector('#clp-commit')
-      ?.addEventListener('click', () => this._commitPending());
+    const major = root.querySelector('.clp-major');
+    const next = root.querySelector('.clp-next');
+    if (major && next) {
+      major.addEventListener('change', () => {
+        next.textContent = nextVersion(state.data?.savedVersion ?? null, { major: major.checked }) ?? '—';
+      });
+    }
+    root.querySelector('.clp-commit')?.addEventListener('click', (e) => { e.stopPropagation(); this._savePending(root); });
+    root.querySelector('.commit-log-pending')?.addEventListener('click', (e) => e.stopPropagation());
   }
 
   /**
-   * The pending-commit node shown at the top of the log while there are
-   * uncommitted changes.  It's styled distinctly from real commits (a hollow,
-   * dashed node) and carries the message field + commit action inline, so a new
-   * commit is composed right where it will land.  Message and version are both
-   * optional.
+   * The pending node shown at the top of the history while the device is
+   * behind.  Styled distinctly from real versions (a hollow, dashed node), it
+   * carries an optional note, the version the save will write (with a switch
+   * to make it a new major) and the Save button — so a save is composed right
+   * where it will land.
    */
   _renderPendingNode() {
-    if (!state.isDirty) return '';
-    const head = state.vcs?.log?.()?.[0];
-    const suggested = head?.tag ? _incPatch(head.tag) : '';
+    if (!state.needsSave) return '';
+    const cur = state.data?.savedVersion ?? null;
+    const minor = state.nextSaveVersion, major = state.nextMajorVersion;
+    const label = !cur ? 'Never saved to the device'
+      : state.isDirty ? `Changed since ${escHtml(cur)}` : `${escHtml(cur)} not on the device`;
     return `
-      <div class="commit-log-pending" aria-label="Uncommitted changes">
+      <div class="commit-log-pending" aria-label="Not saved to the device">
         <div class="clp-graph"><span class="clp-node"></span></div>
         <div class="clp-body">
-          <div class="clp-label">Uncommitted changes</div>
-          <textarea class="clp-msg" id="clp-msg" rows="1" autocomplete="off"
-            placeholder="Describe this change (optional)"></textarea>
+          <div class="clp-label">${label}</div>
+          <textarea class="clp-msg" rows="1" autocomplete="off"
+            placeholder="Note on this version (optional)"></textarea>
           <div class="clp-row">
-            <input class="clp-ver" id="clp-ver" type="text" autocomplete="off"
-              placeholder="v ${escHtml(suggested || '0.0.0')}" value="${escHtml(suggested)}"
-              aria-label="Version (optional)">
-            <button class="clp-commit" id="clp-commit" type="button">Commit</button>
+            <span class="clp-version">Save as <b class="clp-next">${escHtml(minor ?? '—')}</b></span>
+            ${major ? `<label class="clp-major-label" title="Start a new major version (${escHtml(major)})">
+              <input type="checkbox" class="clp-major"> major</label>` : ''}
+            <button class="clp-commit" type="button"${minor ? '' : ' disabled'}>Save</button>
           </div>
         </div>
       </div>`;
   }
 
-  _commitPending() {
-    if (this._committing || !state.isDirty || !this.handlers?.onCommit) return;
-    const message = this._commitLogEl?.querySelector('#clp-msg')?.value.trim() || '';
-    const tag     = this._commitLogEl?.querySelector('#clp-ver')?.value.trim() || undefined;
-
-    // Detached HEAD (needs a branch name) or no saved identity → hand off to the
-    // full commit dialog, carrying the typed message/version so they aren't lost.
-    const prefs = loadUserPrefs();
-    if (state.isDetached || !prefs?.name || !prefs?.email) {
-      state.pendingCommit = { message, tag };
-      state.openPanel(PANELS.COMMIT);
-      return;
-    }
-
-    this._committing = true;
-    Promise.resolve(this.handlers.onCommit({ author: prefs.name, email: prefs.email, message, tag }))
-      .catch(err => console.warn('[commit-log] commit failed:', err?.message))
-      .finally(() => { this._committing = false; this._refreshCommitLog(); });
+  _savePending(root) {
+    if (this._saving || !state.needsSave || !this.handlers?.onSave) return;
+    const message = root?.querySelector('.clp-msg')?.value.trim() || '';
+    const major   = !!root?.querySelector('.clp-major')?.checked;
+    this._saving = true;
+    Promise.resolve(this.handlers.onSave({ message, major }))
+      .catch(err => console.warn('[history] save failed:', err?.message))
+      .finally(() => { this._saving = false; this._refreshCommitLog(); });
   }
 
   _updateDirty() {
-    // Desktop: the commit pill structure changes fundamentally when dirty flips
-    // (single button ↔ split button), so that path needs a full re-render.
+    // Desktop: the save pill structure changes fundamentally when needsSave
+    // flips (single button ↔ split button), so that path needs a full re-render.
     const hasSplitBtn = !!this.el.querySelector('#tb-commit-action');
-    if (hasSplitBtn !== state.isDirty) {
+    if (hasSplitBtn !== state.needsSave) {
       this.render();
     }
-    // Keep the mobile commit-log pane's pending node in sync as edits land.
+    // Keep the mobile history pane's pending node in sync as edits land.
     this._refreshCommitLog();
   }
 
@@ -232,117 +260,108 @@ export class TopBar {
 
   _renderDslMenuList() {
     const hasCommits = (state.vcs?.log()?.length ?? 0) > 0;
+    const next = state.nextSaveVersion;
+    const major = state.nextMajorVersion;
     const activeDslId = state.activeDslId ?? state.data?.dslType ?? 'markdown';
     const dslName = DSL_HELP[activeDslId]?.name ?? activeDslId;
+    const commentTokens = commentTokensFor(activeDslId, state.data?.dslType);
     return `
       <ul class="tools-menu-list">
-        <li class="tools-menu-item" id="tb-new-doc" title="Discard this document and start a new one">
-          ${iconNewDoc()} New document…
+        <li class="tools-menu-item" id="tb-new-doc" title="${state.library ? 'A new, empty document in the library' : 'Discard this document and start a new one'}">
+          ${iconNewDoc()} New document
+        </li>
+        ${state.library ? `
+        <li class="tools-menu-item" id="tb-library-item" title="The documents of this app (${kbd('Mod-Shift-l')})">
+          ${iconLibrary()} Documents…
+          <kbd>${kbd('Mod-Shift-l')}</kbd>
+        </li>` : ''}
+        <li class="tools-menu-sep" role="separator"></li>
+        <li class="tools-menu-item${state.needsSave && next ? '' : ' disabled'}" id="tb-save"
+          title="Write the text to the device as ${escHtml(next ? `<name>-${next}.uni` : '…')} and keep the snapshot in history (${kbd('Mod-s')})">
+          ${iconCommit()} Save${next ? ` <span class="tools-menu-ver">${escHtml(next)}</span>` : ''}
+          <kbd>${kbd('Mod-s')}</kbd>
+        </li>
+        <li class="tools-menu-item${major ? '' : ' disabled'}" id="tb-save-major"
+          title="Start a new major version: the next save is ${escHtml(major ?? '—')} (${kbd('Mod-Shift-s')})">
+          ${iconCommit()} Save as new major${major ? ` <span class="tools-menu-ver">${escHtml(major)}</span>` : ''}
+          <kbd>${kbd('Mod-Shift-s')}</kbd>
+        </li>
+        <li class="tools-menu-item" id="tb-open-device" title="Open a <name>-<version>.uni from the device (${kbd('Mod-Shift-o')})">
+          ${iconImport()} Open from device…
+          <kbd>${kbd('Mod-Shift-o')}</kbd>
         </li>
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item" id="tb-dsl-help" title="Syntax reference for ${escHtml(dslName)}">
           ${iconHelp()} ${escHtml(dslName)} help…
         </li>
+        ${dslActions(activeDslId).map(a => `
+        <li class="tools-menu-item tb-dsl-action" data-action="${escHtml(a.id)}" title="${escHtml(a.label)}">
+          <span class="tools-menu-glyph">${escHtml(a.glyph ?? '·')}</span> ${escHtml(a.label)}
+        </li>`).join('')}
         <li class="tools-menu-sep" role="separator"></li>
         <li class="tools-menu-item${hasCommits ? '' : ' disabled'}" id="tb-blame"
-          title="${hasCommits ? 'Blame view (Ctrl+Shift+B)' : 'Available after first commit'}">
+          title="${hasCommits ? `Blame view (${kbd('Mod-Shift-b')})` : 'Available after the first save'}">
           ${iconBlame()} Blame view
-          <kbd>⌃⇧B</kbd>
+          <kbd>${kbd('Mod-Shift-b')}</kbd>
         </li>
         <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-save-data" title="Save the document + full history as a small .unifile.json text file">
-          ${iconExport()} Save data file…
-        </li>
-        <li class="tools-menu-item" id="tb-open-data" title="Open a .unifile.json data file (replaces the current document)">
-          ${iconImport()} Open data file…
-        </li>
-        <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-export" title="Export document (Ctrl+Shift+E)">
+        <li class="tools-menu-item" id="tb-export" title="Export document (${kbd('Mod-Shift-e')})">
           ${iconExport()} Export…
-          <kbd>⌃⇧E</kbd>
-        </li>
-        <li class="tools-menu-item" id="tb-merge" title="Import & merge another unifile (Ctrl+Shift+M)">
-          ${iconImport()} Import & merge…
-          <kbd>⌃⇧M</kbd>
+          <kbd>${kbd('Mod-Shift-e')}</kbd>
         </li>
         ${listDSLs().some(d => (d.extensionSlots?.length ?? 0) > 0) ? `
         <li class="tools-menu-item" id="tb-extensions" title="Configure DSL extensions">
           ${iconPlugin()} Extensions…
         </li>` : ''}
         <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-archived-comments" title="Browse archived comment threads">
-          ${iconComment()} Archived comments…
+        <li class="tools-menu-item" id="tb-comment" title="Comment on the selected text (${kbd('Mod-Alt-m')}) — or right-click the text">
+          ${iconComment()} Comment on selection
+          <kbd>${kbd('Mod-Alt-m')}</kbd>
+        </li>
+        ${commentTokens ? `
+        <li class="tools-menu-item" id="tb-comment-lines" title="Comment out the selected lines in ${escHtml(dslName)}'s own syntax, or uncomment them (${kbd('Mod-/')})">
+          ${iconCommentOut()} Comment out lines
+          <kbd>${kbd('Mod-/')}</kbd>
+        </li>` : ''}
+        <li class="tools-menu-item" id="tb-archived-comments" title="Browse resolved comment threads">
+          ${iconComment()} Resolved comments…
         </li>
         <li class="tools-menu-sep" role="separator"></li>
-        <li class="tools-menu-item" id="tb-settings-item" title="Settings (Ctrl+Shift+,)">
+        <li class="tools-menu-item" id="tb-settings-item" title="Settings (${kbd('Mod-Shift-,')})">
           ${iconGear()} Settings
-          <kbd>⌃⇧,</kbd>
+          <kbd>${kbd('Mod-Shift-,')}</kbd>
         </li>
-      </ul>
-    `;
-  }
-
-  _renderBranchList() {
-    const vcs = state.vcs;
-    if (!vcs) return '<p class="dd-empty">No branches yet.</p>';
-
-    const branches = vcs.listBranches();
-    const isDetached = state.isDetached;
-    const detachedHash = vcs.detachedHead;
-
-    return `
-      ${isDetached ? `
-        <div class="dd-detached-notice">
-          <strong>Detached HEAD</strong> — viewing commit ${escHtml(shortHash(detachedHash))}.
-          Select a branch to reattach, or commit to create a new branch automatically.
-        </div>
-      ` : ''}
-      <div class="dd-section-label">Branches</div>
-      <ul class="dd-branch-list">
-        ${branches.map(b => `
-          <li class="dd-branch-item${b.isCurrent && !isDetached ? ' current' : ''}" data-branch="${escHtml(b.name)}">
-            <span class="dd-branch-icon">${b.isCurrent && !isDetached ? '●' : '○'}</span>
-            <span class="dd-branch-name">${escHtml(b.name)}</span>
-            <span class="dd-branch-hash">${shortHash(b.head)}</span>
-          </li>
-        `).join('')}
       </ul>
     `;
   }
 
   _renderCommitList() {
     const vcs = state.vcs;
-    if (!vcs) return '<p class="dd-empty">No commits yet.</p>';
+    if (!vcs) return '<p class="dd-empty">No saves yet.</p>';
 
     const log = vcs.log();
-    const isDetached = state.isDetached;
-    const detachedHash = vcs.detachedHead;
-    const currentHash = isDetached ? detachedHash : state.headHash;
+    const currentHash = state.headHash;
 
-    // Export marker: whichever commit was last written OUT to a .unifile.json is
-    // the user's durable save point. We badge it so "committed" (in-app history)
-    // is visibly distinct from "exported" (a permanent copy off the device).
-    const mark = loadBackupMark(state.docId ?? location.href);
-    const exportedHash = mark?.headHash ?? null;
-    const exportedWhen = mark?.at ? formatRelative(mark.at) : '';
+    // Device marker: the version the device file carries (the last save) —
+    // changed-since shows on the pending node above.
+    const dev = state.deviceFile;
+    const exportedHash = dev?.savedHead ?? null;
+    const exportedWhen = dev?.savedAt ? formatRelative(dev.savedAt) : '';
 
     // While a diff is open, mark the commit currently selected as its RIGHT
     // (source) side so the commit-log pane shows what's being compared/merged.
     const selectedHash = state.diff?.right && state.diff.right !== 'WORKING' ? state.diff.right : null;
 
     return `
-      <div class="dd-section-label">
-        Commits <span class="dd-branch-ctx">on ${escHtml(state.currentBranch)}</span>
-      </div>
+      <div class="dd-section-label">History</div>
       <ul class="dd-commit-list">
         ${log.map(c => `
           <li class="dd-commit-item${c.hash === currentHash ? ' current' : ''}${c.hash === exportedHash ? ' exported' : ''}${c.hash === selectedHash ? ' selected' : ''}"
             data-hash="${c.hash}">
             <div class="dd-commit-meta">
-              <span class="dd-commit-hash">${shortHash(c.hash)}</span>
-              ${c.tag ? `<span class="dd-commit-tag">${escHtml(c.tag)}</span>` : ''}
+              ${c.tag ? `<span class="dd-commit-tag">${escHtml(c.tag)}</span>` : `<span class="dd-commit-hash">${shortHash(c.hash)}</span>`}
               ${c.hash === exportedHash
-                ? `<span class="dd-commit-exported" title="Exported to a file${exportedWhen ? ' ' + escHtml(exportedWhen) : ''} — you have a permanent copy of this state">${_iconExported()} exported</span>`
+                ? `<span class="dd-commit-exported" title="On the device${dev?.fileName ? ' as ' + escHtml(dev.fileName) : ''}${exportedWhen ? ' (' + escHtml(exportedWhen) + ')' : ''}${dev?.saved ? '' : ' — changed since'}">${_iconExported()} on device</span>`
                 : ''}
               <span class="dd-commit-date">${formatRelative(c.timestamp)}</span>
             </div>
@@ -350,7 +369,7 @@ export class TopBar {
             <div class="dd-commit-author">${escHtml(c.author)}</div>
           </li>
         `).join('')}
-        ${log.length === 0 ? '<li class="dd-empty">No commits yet.</li>' : ''}
+        ${log.length === 0 ? '<li class="dd-empty">No saves yet.</li>' : ''}
       </ul>
     `;
   }
@@ -374,11 +393,19 @@ export class TopBar {
       });
     }
 
-    // Commit action — primary part of the split pill when dirty
+    // Save — the primary part of the split pill while the device is behind:
+    // the next version to the device (Shift-click = a new major version).
     const commitActionBtn = this.el.querySelector('#tb-commit-action');
     if (commitActionBtn) {
-      commitActionBtn.addEventListener('click', () => state.openPanel(PANELS.COMMIT));
+      commitActionBtn.addEventListener('click', (e) => {
+        state.emit(e.shiftKey ? 'save-major' : 'save-document');
+      });
     }
+    // The document list (a collapsible sidebar on desktop)
+    this.el.querySelector('#tb-library')?.addEventListener('click', () => {
+      const open = document.getElementById('unifile-app')?.hasAttribute('data-library');
+      state.emit(open ? 'close-library' : 'open-library');
+    });
 
     // DSL menu toggle (far-left icon button)
     const dslMenuBtn = this.el.querySelector('#tb-dsl-menu-toggle');
@@ -386,18 +413,7 @@ export class TopBar {
       dslMenuBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._dslMenuOpen = !this._dslMenuOpen;
-        if (this._dslMenuOpen) { this._branchOpen = false; this._commitOpen = false; }
-        this._syncDropdowns();
-      });
-    }
-
-    // Branch pill toggle
-    const branchBtn = this.el.querySelector('#tb-branch-toggle');
-    if (branchBtn) {
-      branchBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._branchOpen = !this._branchOpen;
-        if (this._branchOpen) { this._commitOpen = false; this._dslMenuOpen = false; }
+        if (this._dslMenuOpen) this._commitOpen = false;
         this._syncDropdowns();
       });
     }
@@ -408,7 +424,7 @@ export class TopBar {
       commitPillBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._commitOpen = !this._commitOpen;
-        if (this._commitOpen) { this._branchOpen = false; this._dslMenuOpen = false; }
+        if (this._commitOpen) this._dslMenuOpen = false;
         this._syncDropdowns();
       });
     }
@@ -416,7 +432,6 @@ export class TopBar {
     // Close all dropdowns on outside click
     document.addEventListener('click', (e) => {
       if (!this.el.contains(e.target)) {
-        this._branchOpen = false;
         this._commitOpen = false;
         this._dslMenuOpen = false;
         this._syncDropdowns();
@@ -433,17 +448,11 @@ export class TopBar {
       dslMenuDd.classList.toggle('open', this._dslMenuOpen);
       if (this._dslMenuOpen) dslMenuDd.innerHTML = this._renderDslMenuList();
     }
-    // Branch dropdown
-    const branchDd = this.el.querySelector('#tb-branch-dd');
-    if (branchDd) {
-      branchDd.classList.toggle('open', this._branchOpen);
-      if (this._branchOpen) branchDd.innerHTML = this._renderBranchList();
-    }
-    // Commit dropdown
+    // History dropdown (the pending node + every version)
     const commitDd = this.el.querySelector('#tb-commit-dd');
     if (commitDd) {
       commitDd.classList.toggle('open', this._commitOpen);
-      if (this._commitOpen) commitDd.innerHTML = this._renderCommitList();
+      if (this._commitOpen) { commitDd.innerHTML = this._renderHistory(); this._bindPending(commitDd); }
     }
     // Sync the DSL menu button active state
     const dslMenuBtn = this.el.querySelector('#tb-dsl-menu-toggle');
@@ -453,12 +462,17 @@ export class TopBar {
   }
 
   _bindDropdownEvents() {
-    // New document — confirmation modal (with backup/commit prompts) then reset.
-    this.el.querySelector('#tb-new-doc')?.addEventListener('click', () => {
+    const item = (id, fn) => this.el.querySelector(id)?.addEventListener('click', () => {
+      if (this.el.querySelector(id)?.classList.contains('disabled')) return;
       this._dslMenuOpen = false;
       this._syncDropdowns();
-      showNewDocumentModal(this.handlers);
+      fn();
     });
+    item('#tb-new-doc',      () => state.emit('new-document'));
+    item('#tb-library-item', () => state.emit('open-library'));
+    item('#tb-save',         () => state.emit('save-document'));
+    item('#tb-save-major',   () => state.emit('save-major'));
+    item('#tb-open-device',  () => state.emit('open-from-device'));
 
     // DSL help modal — uses active section DSL or document default
     this.el.querySelector('#tb-dsl-help')?.addEventListener('click', () => {
@@ -466,6 +480,14 @@ export class TopBar {
       this._syncDropdowns();
       showDslHelpModal(state.activeDslId ?? state.data?.dslType ?? 'markdown');
     });
+
+    // The DSL's own verbs ({slides}: Insert image…).
+    this.el.querySelectorAll('.tb-dsl-action').forEach(li => li.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      const act = dslActions(state.activeDslId ?? state.data?.dslType ?? 'markdown').find(a => a.id === li.dataset.action);
+      act?.run(this.handlers ?? {});
+    }));
 
     // DSL menu items
     this.el.querySelector('#tb-blame')?.addEventListener('click', () => {
@@ -476,32 +498,27 @@ export class TopBar {
         else state.openPanel(PANELS.BLAME);
       }
     });
-    this.el.querySelector('#tb-save-data')?.addEventListener('click', () => {
-      this._dslMenuOpen = false;
-      this._syncDropdowns();
-      state.emit('save-data-file');
-    });
-    this.el.querySelector('#tb-open-data')?.addEventListener('click', () => {
-      this._dslMenuOpen = false;
-      this._syncDropdowns();
-      state.emit('open-data-file');
-    });
     this.el.querySelector('#tb-export')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
       if (state.activePanel === PANELS.EXPORT) state.closePanel();
       else state.openPanel(PANELS.EXPORT);
     });
-    this.el.querySelector('#tb-merge')?.addEventListener('click', () => {
-      this._dslMenuOpen = false;
-      this._syncDropdowns();
-      if (state.activePanel === PANELS.MERGE) state.closePanel();
-      else state.openPanel(PANELS.MERGE);
-    });
     this.el.querySelector('#tb-extensions')?.addEventListener('click', () => {
       this._dslMenuOpen = false;
       this._syncDropdowns();
       showExtensionsModal();
+    });
+
+    this.el.querySelector('#tb-comment-lines')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      state.emit('toggle-comment');
+    });
+    this.el.querySelector('#tb-comment')?.addEventListener('click', () => {
+      this._dslMenuOpen = false;
+      this._syncDropdowns();
+      state.emit('comment-selection');
     });
 
     this.el.querySelector('#tb-archived-comments')?.addEventListener('click', () => {
@@ -517,113 +534,38 @@ export class TopBar {
       else state.openPanel(PANELS.SETTINGS);
     });
 
-    // Checkout a commit
-    this.el.querySelectorAll('.dd-commit-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const hash = item.dataset.hash;
+    // A save in the history list → the read-only diff against the working text
+    this.el.querySelectorAll('.dd-commit-item').forEach(li => {
+      li.addEventListener('click', () => {
+        const hash = li.dataset.hash;
         if (hash) this._onCommitClick(hash);
       });
     });
-
-    // Switch to a branch
-    this.el.querySelectorAll('.dd-branch-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const branch = item.dataset.branch;
-        const isCurrentAndAttached = item.classList.contains('current');
-        if (branch && !isCurrentAndAttached) {
-          this._onSwitchBranch(branch);
-        } else if (branch && isCurrentAndAttached) {
-          this._branchOpen = false;
-          this._syncDropdowns();
-        }
-      });
-    });
   }
 
   // ---------------------------------------------------------------------------
-  // VCS navigation with auto-stash
+  // History navigation
   // ---------------------------------------------------------------------------
-
-  _maybeStash() {
-    if (state.isDirty) {
-      state.stash = { content: state.currentContent, fromHash: state.headHash };
-    }
-  }
-
-  _applyStash(hash, baseContent) {
-    if (state.stash && state.stash.fromHash === hash) {
-      const stashedContent = state.stash.content;
-      state.stash = null;
-      return stashedContent;
-    }
-    return baseContent;
-  }
 
   /**
-   * Clicking a commit opens the read-only diff (clicked commit vs working
-   * state).  Clicking the current commit does nothing.  Actual checkout-to-edit
-   * is the explicit `_onCheckout` path.
+   * Clicking a save opens the read-only diff (that save vs the working text);
+   * the diff bar's "Restore" brings its text back.  Clicking the current save
+   * with nothing changed does nothing.
    */
   _onCommitClick(hash) {
     this._commitOpen = false;
     this._syncDropdowns?.();
     if (!hash) return;
-    // Already diffing → the clicked commit becomes the RIGHT (source) side,
-    // keeping the current LEFT (target) selection.
+    // Already diffing → the clicked save becomes the RIGHT side, keeping the
+    // current LEFT selection.
     if (state.diff) { state.openDiff(state.diff.left, hash); return; }
     // Nothing to compare if this commit's content IS the current working state
     // (e.g. clicking the head with no uncommitted changes).
     if (state.vcs?.getContentAt(hash) === state.currentContent) return;
-    // Working state = LEFT (middle / merge target), clicked commit = RIGHT
-    // (merge source). Merge is always right → left.
+    // Working text = LEFT, the clicked save = RIGHT.
     state.openDiff('WORKING', hash);
   }
 
-  _onCheckout(hash) {
-    const vcs = state.vcs;
-    if (!vcs) return;
-
-    const currentHash = state.headHash;
-    const isDetached = state.isDetached;
-    const branchHead = vcs.branches?.[vcs.currentBranch]?.head ?? null;
-
-    if (hash === currentHash && !isDetached) {
-      this._commitOpen = false;
-      this._syncDropdowns();
-      return;
-    }
-
-    this._maybeStash();
-
-    if (hash === branchHead && isDetached) {
-      const baseContent = vcs.switchBranch(vcs.currentBranch);
-      const newHash = vcs.headHash;
-      const content = this._applyStash(newHash, baseContent);
-      state.update({ currentContent: content, isDirty: content !== baseContent });
-      state.emit('branch-switch', { name: vcs.currentBranch, content });
-    } else {
-      const { content: baseContent } = vcs.checkout(hash);
-      const content = this._applyStash(hash, baseContent);
-      state.update({ currentContent: content, isDirty: content !== baseContent });
-      state.emit('checkout', { hash, content });
-    }
-
-    this._commitOpen = false;
-    this.render();
-  }
-
-  _onSwitchBranch(name) {
-    this._maybeStash();
-
-    const baseContent = state.vcs.switchBranch(name);
-    const newHash = state.vcs.headHash;
-    const content = this._applyStash(newHash, baseContent);
-    state.update({ currentContent: content, isDirty: content !== baseContent });
-    state.emit('branch-switch', { name, content });
-
-    this._branchOpen = false;
-    this.render();
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -652,10 +594,20 @@ function iconExport() {
   </svg>`;
 }
 
-function iconBranch() {
-  return `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-    <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Z"/>
-  </svg>`;
+function iconBack() {
+  return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>`;
+}
+
+function iconLibrary() {
+  return `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="2" y="2" width="4" height="12" rx="1"/><rect x="7" y="2" width="4" height="12" rx="1"/><path d="M12 3l2.5 10.5"/></svg>`;
+}
+
+function iconCheck() {
+  return `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>`;
 }
 
 function iconGear() {
@@ -697,6 +649,11 @@ function iconPlugin() {
   </svg>`;
 }
 
+function iconCommentOut() {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 7h16M4 12h10M4 17h7"/><path d="M21 15l-4 6"/></svg>`;
+}
+
 function iconComment() {
   return `<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
     <path d="M14 1a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4.414A2 2 0 0 0 3 11.586l-2 2V2a1 1 0 0 1 1-1h12zm-2 2H4a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0 2H4a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0 2H4a.5.5 0 0 0 0 1h5a.5.5 0 0 0 0-1H4z"/>
@@ -718,91 +675,6 @@ function iconNewDoc() {
 }
 
 // ---------------------------------------------------------------------------
-// New-document confirmation modal
-//
-// Starting a new document replaces the ENTIRE current document — content,
-// branches, commits and comments — so before the user commits to that we make
-// it easy to keep the current work (commit any dirty changes, and/or export a
-// durable .unifile.json copy) and require an explicit destructive confirm.
-// ---------------------------------------------------------------------------
-
-export function showNewDocumentModal(handlers) {
-  const overlay = document.createElement('div');
-  overlay.className = 'dsl-help-overlay';
-
-  const commitCount = state.vcs?.log?.().length ?? 0;
-  const dirty = state.isDirty;
-  const historyNote = commitCount === 0
-    ? 'The current document has no commits yet.'
-    : `This discards the current document and its entire history — ${commitCount} commit${commitCount === 1 ? '' : 's'}.`;
-
-  overlay.innerHTML = `
-    <div class="dsl-help-modal newdoc-modal" role="dialog" aria-modal="true" aria-label="Start a new document" tabindex="-1">
-      <div class="dsl-help-header">
-        <div class="dsl-help-title">Start a new document</div>
-        <button class="dsl-help-close" aria-label="Close">&times;</button>
-      </div>
-      <div class="dsl-help-body newdoc-body">
-        <p class="newdoc-warn">${escHtml(historyNote)} <strong>This can’t be undone.</strong></p>
-        ${dirty ? '<p class="newdoc-dirty">⚠ You have uncommitted changes that will be lost.</p>' : ''}
-        <p class="newdoc-hint">Keep this work first — commit it and/or save a copy — then start fresh.</p>
-        <div class="newdoc-actions">
-          ${dirty ? '<button class="newdoc-btn" id="newdoc-commit">Commit…</button>' : ''}
-          <button class="newdoc-btn" id="newdoc-save">Save data file…</button>
-        </div>
-        <p class="newdoc-status" id="newdoc-status" aria-live="polite"></p>
-      </div>
-      <div class="dsl-help-footer newdoc-footer">
-        <button class="newdoc-btn newdoc-cancel" id="newdoc-cancel">Cancel</button>
-        <button class="newdoc-btn newdoc-danger" id="newdoc-confirm">Discard &amp; start new</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-
-  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
-  document.addEventListener('keydown', onKey);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-  const setStatus = (msg, ok = false) => {
-    const s = overlay.querySelector('#newdoc-status');
-    if (s) { s.textContent = msg; s.classList.toggle('ok', ok); }
-  };
-
-  overlay.querySelector('.dsl-help-close')?.addEventListener('click', close);
-  overlay.querySelector('#newdoc-cancel')?.addEventListener('click', close);
-
-  // Commit path: hand off to the full commit UI (the new-doc modal steps aside).
-  overlay.querySelector('#newdoc-commit')?.addEventListener('click', () => {
-    close();
-    state.openPanel(PANELS.COMMIT);
-  });
-
-  // Backup path: export a .unifile.json and report the outcome; the modal stays
-  // open so the user can then discard with confidence.
-  overlay.querySelector('#newdoc-save')?.addEventListener('click', async () => {
-    setStatus('Saving…');
-    try {
-      const result = await (handlers.onSaveDataFile?.() ?? Promise.resolve('downloaded'));
-      if (result === 'cancelled') setStatus('Save cancelled — nothing was exported.');
-      else setStatus('✓ Saved. Safe to start a new document.', true);
-    } catch (e) {
-      setStatus('Save failed: ' + (e?.message ?? e));
-    }
-  });
-
-  // Destructive confirm: the user has accepted the loss of unbacked-up work.
-  overlay.querySelector('#newdoc-confirm')?.addEventListener('click', () => {
-    close();
-    handlers.onNewDocument?.();
-  });
-
-  overlay.querySelector('.newdoc-modal')?.focus?.();
-}
-
-// ---------------------------------------------------------------------------
 // DSL help content
 // ---------------------------------------------------------------------------
 
@@ -816,7 +688,15 @@ const DSL_HELP = {
         title: 'Headings',
         content: `<pre><code># Heading 1
 ## Heading 2
-### Heading 3</code></pre>`
+### Heading 3
+# Centred heading {.center}</code></pre>
+<p class="help-note"><code>{.center}</code>, <code>{.right}</code> or <code>{.left}</code> at the end of a heading or paragraph aligns it — in the preview and in every export.</p>`
+      },
+      {
+        title: 'Emoji',
+        content: `<pre><code>Ship it :rocket:   →   Ship it 🚀
+Type :sm… and pick from the menu</code></pre>
+<p class="help-note">Typing <code>:</code> followed by letters opens an emoji menu (GitHub shortcodes, fully offline). A complete <code>:shortcode:</code> turns into the emoji on the closing colon.</p>`
       },
       {
         title: 'Emphasis',
@@ -849,10 +729,69 @@ console.log(x);
       {
         title: 'Tables',
         content: `<pre><code>| Name   | Age |
-|--------|-----|
-| Alice  | 30  |
-| Bob    | 25  |</code></pre>
-<p class="help-note">Alignment: <code>:---</code> left, <code>:---:</code> center, <code>---:</code> right</p>`
+|--------|----:|
+| Alice  |  30 |
+| Bob    |  25 |</code></pre>
+<p class="help-note">Rows above the <code>|---|</code> line are the header. Alignment: <code>:---</code> left, <code>:---:</code> center, <code>---:</code> right; by default numbers sit right and text left. <strong>Tab / Shift-Tab</strong> move between cells (past the last cell: a new row), <strong>Alt-Shift-F</strong> (⋯ → Align table columns) lines the pipes up, ⋯ → <strong>Insert table</strong> drops in a blank 3×3, and a block copied from a spreadsheet pastes as a table. A table is also a small spreadsheet — see <em>Table formulas</em>.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Formulas',
+        content: `<pre><code>| Item   | Qty | Price | Total       |
+|--------|----:|------:|------------:|
+| Apples |   3 |  1.20 | =B*C        |
+| Pears  |   2 |  0.80 | =B*C        |
+| Total  |     |       | =SUM(D2:D3) |</code></pre>
+<p class="help-note">A cell that starts with <code>=</code> is a formula (Excel's grammar): <code>=B2*C2</code>, <code>=SUM(D2:D9)</code>, <code>=SUM(B:B)</code>, <code>=IF(B2&gt;10, "big", "small")</code>. <strong>A bare column letter means this row</strong> — <code>=B*C</code> on every row, no renumbering. Columns are A, B, C…; rows count from 1 at the first row (the header is row 1, as in Excel; the <code>|---|</code> line is not a row). A table with a formula shows the letters and numbers in the preview; hover a formula in the text for its value. <code>'=</code> (an apostrophe) forces text.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Across Tables',
+        content: `<pre><code># Budget
+| … |
+
+# Summary
+| Spent | =Budget!D4       |
+| Avg   | ='Q1 Sales'!B9   |</code></pre>
+<p class="help-note">The heading above a table is its name: <code>=Budget!D4</code> reads cell D4 of the table under <em># Budget</em> (quote a name with spaces). Tables with no heading are <code>Sheet1</code>, <code>Sheet2</code>… Results are shown, never written into the text, so a diff is only what you typed.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Functions',
+        content: `<pre><code>SUM AVERAGE MIN MAX COUNT COUNTA COUNTBLANK PRODUCT MEDIAN STDEV
+SUMIF COUNTIF AVERAGEIF SUMPRODUCT LARGE SMALL RANK
+IF IFERROR AND OR NOT ISBLANK ISNUMBER ISTEXT ISERROR
+ROUND ROUNDUP ROUNDDOWN INT TRUNC CEILING FLOOR ABS MOD POWER SQRT
+EXP LN LOG LOG10 PI
+LEN UPPER LOWER PROPER TRIM LEFT RIGHT MID FIND SEARCH SUBSTITUTE
+CONCAT TEXTJOIN REPT TEXT VALUE N
+VLOOKUP HLOOKUP INDEX MATCH ROW COLUMN ROWS COLUMNS</code></pre>
+<p class="help-note">Type a few letters after <code>=</code> (or Ctrl-Space) for the completion menu with a one-line description of each. Operators: <code>+ - * / ^</code>, <code>&amp;</code> joins text, <code>= &lt;&gt; &lt; &gt; &lt;= &gt;=</code> compare, <code>%</code> is a percentage. Errors read as in Excel — <code>#DIV/0!</code>, <code>#NAME?</code>, <code>#VALUE!</code>, <code>#REF!</code>, <code>#N/A</code>, <code>#CIRC!</code> (circular) — and are underlined in the text.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Merged Cells',
+        content: `<pre><code>| Region   | Q1 | Q2 |
+|----------|---:|---:|
+| North    ||  5 |        North spans TWO columns
+| Total    |  8 ||       the 8 spans Q1 and Q2
+| ^^       |  1 |  2 |   ^^ merges with the cell above</code></pre>
+<p class="help-note"><code>||</code> (nothing between the pipes) extends the cell before it across the next column — <code>| |</code> with a space is an empty cell. <code>^^</code> as a cell's whole content merges it into the cell above. Merges survive into the Word and Excel exports.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Values & Formatting',
+        content: `<pre><code>| 1,200 | $3.50 | 12% | TRUE | (5) |     read as 1200 · 3.5 · 0.12 · TRUE · -5
+| =TEXT(D4, "#,##0.00") | =ROUND(D4, 1) |
+| **bold** | *italic* | \`code\` | a \\| b |</code></pre>
+<p class="help-note">A literal cell shows exactly what you typed; its <em>value</em> in a formula is the number it reads as. <code>TEXT(x, "0.00")</code>, <code>"#,##0"</code>, <code>"0%"</code>, <code>"$#,##0.00"</code> format a result; <code>decimals: 2</code> in the front matter rounds every non-integer result for display. Markdown inline formatting works inside a cell; <code>\\|</code> is a literal pipe.</p>`
+      },
+      {
+        group: 'Table formulas',
+        title: 'Exports',
+        content: `<pre><code>Tables as Excel (.xlsx)   every table a sheet; formulas kept, cells merged
+Word (.docx) · HTML · PDF  computed values, merged cells</code></pre>
+<p class="help-note">The .xlsx opens in Excel, Numbers, LibreOffice and Google Sheets with live formulas; column formulas (<code>=B*C</code>) are written out per row (<code>=B2*C2</code>).</p>`
       },
       {
         title: 'Blockquotes',
@@ -864,23 +803,37 @@ console.log(x);
       {
         title: 'Front Matter',
         content: `<pre><code>---
-model: flow
-model2: grid
 title: My Document
 subtitle: A subtitle
 author: Jane Smith
-date: 2026-01-01
+date: today
 ---</code></pre>
-<p class="help-note"><code>model</code> sets the document's primary coordinate model (flow / grid / spatial / timeline / graph). <code>model2</code> sets an optional secondary model. <code>title</code>, <code>subtitle</code>, <code>author</code>, <code>date</code> render as a title block.</p>`
+<p class="help-note"><code>title</code>, <code>subtitle</code>, <code>author</code>, <code>date</code> render as a title block (<code>date: today</code> prints the current date). <code>model</code> / <code>model2</code> pick the coordinate model (flow / grid / spatial / timeline / graph); <code>layout: document</code> previews the paginated pages. Keys autocomplete inside the block.</p>`
+      },
+      {
+        title: 'PDF page setup',
+        group: 'Front Matter',
+        content: `<pre><code>---
+title: Quarterly report
+page: a4            # letter · a4 · a5 · legal
+margin: 1in         # or 2cm 2.5cm, or 72px 80px
+font: serif         # serif · sans · mono · any family
+header-left: {title}
+header-right: {date}
+footer: Page {page} of {total}
+page-numbers: off   # on · off · bottom-right …
+title-page: true
+---</code></pre>
+<p class="help-note">The PDF export paginates itself, so the browser adds no URL or date. Header/footer slots (<code>header</code>, <code>header-left</code>, <code>header-right</code>, <code>footer</code>…) take <code>{page}</code> <code>{total}</code> <code>{title}</code> <code>{subtitle}</code> <code>{author}</code> <code>{date}</code>. <code>page-numbers: on</code> centres them in the footer. <code>===</code> on its own line forces a page break.</p>`
       },
       {
         title: 'Page Breaks',
         content: `<pre><code>Content on page 1.
 
----
+===
 
 Content on page 2.</code></pre>
-<p class="help-note"><code>---</code> (horizontal rule) inserts a page break in PDF and DOCX exports.</p>`
+<p class="help-note"><code>===</code> on its own line forces a page break in the PDF and DOCX exports (and starts a new section in the preview). <code>---</code> is a horizontal rule.</p>`
       }
     ]
   },
@@ -891,6 +844,7 @@ Content on page 2.</code></pre>
     docsLabel: 'Mermaid Docs',
     sections: [
       {
+        group: 'Flowcharts',
         title: 'Flowchart',
         content: `<pre><code>flowchart TD
     A[Start] --> B{Decision}
@@ -898,6 +852,43 @@ Content on page 2.</code></pre>
     B -->|No| D[Skip]
     C --> E[End]</code></pre>
 <p class="help-note">Directions: <code>TD</code> top-down, <code>LR</code> left-right, <code>BT</code>, <code>RL</code>. Node shapes: <code>[rect]</code> <code>(rounded)</code> <code>{diamond}</code> <code>((circle))</code> <code>[/parallelogram/]</code></p>`
+      },
+      {
+        group: 'Flowcharts',
+        title: 'Node shapes @{ }',
+        content: `<pre><code>flowchart TD
+    A@{ shape: manual-file, label: "File Handling" }
+    B@{ shape: manual-input, label: "User Input" }
+    C@{ shape: docs, label: "Multiple Documents" }
+    D@{ shape: procs, label: "Process Automation" }
+    E@{ shape: paper-tape, label: "Paper Records" }
+    A --> B --> C --> D --> E</code></pre>
+<p class="help-note"><code>id@{ shape: …, label: "…" }</code> picks any of mermaid's ~30 shapes by name: <code>rect</code> <code>rounded</code> <code>stadium</code> <code>subproc</code> <code>cyl</code> <code>circle</code> <code>diamond</code> <code>hex</code> <code>lean-r</code> <code>lean-l</code> <code>trap-t</code> <code>trap-b</code> <code>dbl-circ</code> <code>text</code> <code>notch-rect</code> <code>lin-rect</code> <code>sm-circ</code> <code>fr-circ</code> <code>fork</code> <code>hourglass</code> <code>brace</code> <code>bolt</code> <code>doc</code> <code>docs</code> <code>lin-doc</code> <code>tag-doc</code> <code>delay</code> <code>h-cyl</code> <code>lin-cyl</code> <code>disk</code> <code>das</code> <code>curv-trap</code> <code>div-rect</code> <code>tri</code> <code>flip-tri</code> <code>win-pane</code> <code>f-circ</code> <code>cross-circ</code> <code>notch-pent</code> <code>sl-rect</code> <code>st-rect</code> <code>procs</code> <code>bow-rect</code> <code>tag-rect</code> <code>paper-tape</code> <code>flag</code> <code>odd</code>. Type <code>shape:</code> for the full list with autocomplete.</p>`
+      },
+      {
+        group: 'Flowcharts',
+        title: 'Icons (Font Awesome)',
+        content: `<pre><code>flowchart LR
+    A[fa:fa-user Customer] --> B(fab:fa-github Repository)
+    B --> C@{ icon: "fa:bell", form: "circle", label: "Alerts", pos: "b" }
+    C --> D[far:fa-envelope Mail]</code></pre>
+<p class="help-note">Font Awesome 6 Free is built in — nothing is fetched, and the icons travel inside the SVG and PNG exports. In any label write <code>fa:fa-<em>name</em></code> (solid), <code>far:fa-<em>name</em></code> (regular) or <code>fab:fa-<em>name</em></code> (brands); as an icon node, <code>id@{ icon: "fa:<em>name</em>", form: square · circle · rounded, pos: t · b }</code>; in <code>architecture-beta</code>, <code>service db(fa:database)[Database]</code>. The names are Font Awesome 6's (<code>user</code>, <code>house</code>, <code>pen-to-square</code>, <code>github</code>) and the older Font Awesome 4/5 names (<code>edit</code>, <code>home</code>, <code>bank</code>, <code>close</code>) still resolve. Type <code>fa:fa-</code> for autocomplete; an unknown name is underlined.</p>`
+      },
+      {
+        group: 'Flowcharts',
+        title: 'Look, layout & theme',
+        content: `<pre><code>---
+title: Order flow
+config:
+  look: handDrawn
+  layout: elk
+  theme: forest
+---
+flowchart LR
+    A[Order] --> B{In stock?}
+    B -- yes --> C[Ship]
+    B -- no  --> D[Back-order]</code></pre>
+<p class="help-note">Mermaid's <code>config:</code> lives in the document's front matter and applies to every diagram: <code>look</code> = <code>classic</code> · <code>handDrawn</code> · <code>neo</code>; <code>layout</code> = <code>elk</code> (default, best with many edges) · <code>dagre</code>; <code>theme</code> = <code>default</code> · <code>dark</code> · <code>forest</code> · <code>neutral</code> · <code>base</code>; plus per-diagram keys such as <code>flowchart: { curve: basis }</code>. A <code>%%{init: {…}}%%</code> directive in the body still works too.</p>`
       },
       {
         title: 'Sequence Diagram',
@@ -981,6 +972,69 @@ Content on page 2.</code></pre>
       Subtopic 3</code></pre>`
       },
       {
+        title: 'Timeline',
+        content: `<pre><code>timeline
+    title History of unifile
+    2026-07 : Dedicated apps
+    2026-09 : {slides} : Site plans
+    2026-10 : Inline comments</code></pre>`
+      },
+      {
+        title: 'Kanban',
+        content: `<pre><code>kanban
+  Todo
+    [Write the docs]
+    [Fix the lint]@{ assigned: 'me', priority: 'High' }
+  In progress
+    [Ship mermaid 12]
+  Done
+    [Zoom &amp; pan]</code></pre>`
+      },
+      {
+        title: 'XY Chart',
+        content: `<pre><code>xychart-beta
+    title "Monthly revenue"
+    x-axis [jan, feb, mar, apr]
+    y-axis "Revenue (k)" 0 --> 100
+    bar  [30, 55, 70, 90]
+    line [25, 50, 65, 85]</code></pre>`
+      },
+      {
+        title: 'Architecture',
+        content: `<pre><code>architecture-beta
+    group api(cloud)[API]
+    service db(database)[Database] in api
+    service disk(disk)[Storage] in api
+    service server(server)[Server] in api
+    db:L -- R:server
+    disk:T -- B:server</code></pre>
+<p class="help-note">Built-in icons: <code>cloud</code> <code>database</code> <code>disk</code> <code>internet</code> <code>server</code>. Other icon sets (<code>logos:…</code>, <code>@{ icon: … }</code>) need an icon pack, which this offline build does not ship.</p>`
+      },
+      {
+        title: 'Packet',
+        content: `<pre><code>packet-beta
+0-15: "Source Port"
+16-31: "Destination Port"
+32-63: "Sequence Number"
+64-95: "Acknowledgment Number"</code></pre>`
+      },
+      {
+        title: 'Block Diagram',
+        content: `<pre><code>block-beta
+columns 3
+  a["Frontend"] b["API"] c[("DB")]
+  a --> b
+  b --> c</code></pre>`
+      },
+      {
+        title: 'Sankey',
+        content: `<pre><code>sankey-beta
+Solar,Electricity,60
+Wind,Electricity,40
+Electricity,Homes,70
+Electricity,Industry,30</code></pre>`
+      },
+      {
         title: 'Comments',
         content: `<pre><code>%% This is a comment</code></pre>`
       }
@@ -1005,7 +1059,7 @@ M:4/4
 L:1/8
 K:G              &lt;- K: ends the header
 GABc d2 e2 |     &lt;- music body</code></pre>
-<p class="help-note">A document is an optional <code>---</code> <strong>front matter</strong> block, then the <strong>tune header</strong> (fields like <code>X:</code> <code>T:</code> <code>M:</code>), then the <strong>music body</strong>. <code>K:</code> is required and marks where the header ends and the notes begin.</p>`
+<p class="help-note">A document is an optional <code>---</code> <strong>front matter</strong> block, then the <strong>tune header</strong> (fields like <code>X:</code> <code>T:</code> <code>M:</code>), then the <strong>music body</strong>. <code>K:</code> marks where the header ends and the notes begin — leave it (or <code>X:</code>) out and {compose} assumes <code>X:1</code> / <code>K:C</code> (C major).`
       },
       {
         group: 'Getting started',
@@ -1247,9 +1301,34 @@ ABC % end-of-line comment</code></pre>`
         content: `<pre><code>V:1 clef=treble name="Flute"
 V:2 clef=bass   name="Cello"
 K:C
-[V:1] e2fe d2ed | c2dc B4 |
-[V:2] C,4 G,4   | C,8    |</code></pre>
-<p class="help-note">Declare voices with <code>V:</code> in the header (id, then options like <code>clef=</code>, <code>name=</code>, <code>transpose=</code>). In the body, prefix lines with <code>[V:id]</code> or a standalone <code>V:id</code> line.</p>`
+@1 e2fe d2ed |
+@2 C,4 G,4   |
+@1 c2dc B4   |
+@2 C,8       |</code></pre>
+<p class="help-note">Declare voices with <code>V:</code> in the header (id, then options like <code>clef=</code>, <code>name=</code>, <code>transpose=</code>). In the body, name the voice a line belongs to: <code>@id</code> at the start of the line (the unifile shorthand, next section), standard ABC's <code>[V:id]</code>, or a standalone <code>V:id</code> line. A line with no voice tag continues the voice of the line above. Every line of a voice gets the voice's <strong>colour bar</strong> in the editor's margin — the same colour the piano roll gives its notes.</p>`
+      },
+      {
+        group: 'Voices & layout',
+        title: 'Voice Shorthand @id (unifile)',
+        content: `<pre><code>@1 A2 B2 | c2 d2 |     % = [V:1] A2 B2 | c2 d2 |
+@2 F2 G2 | A2 B2 |     % = [V:2] …
+@RH|e4 f4|             % a bar may follow the id directly
+@S  g2 a2 |            % any voice id: S, A, T, B, RH, LH, 1, 2 …</code></pre>
+<p class="help-note"><code>@</code> + the voice id at the <strong>start of a line</strong> means exactly <code>[V:id]</code> there — three characters instead of five on every line of a score. It is never ambiguous: <code>@</code> starts no ABC token, the id is the voice's own (letters, digits, <code>_</code>), and the shorthand is only read at a line start — a mid-line voice switch stays <code>[V:id]</code>. Put a space or a bar after the id. The engravers, playback, the piano roll, exports and the linter all see the expanded form; the text keeps the short one. Type <code>@</code> at a line start for a list of the tune's voices.</p>`
+      },
+      {
+        group: 'Voices & layout',
+        title: 'Line Flow (unifile)',
+        content: `<pre><code>X:1
+M:4/4
+L:1/8
+K:C
+@1 A2 B2 c2 d2 |
+@2 F2 G2 A2 B2 |
+@1 e4 f4 |     $   % \$ forces a staff break here
+@2 c4 d4 |
+%%linebreak &lt;EOL&gt;   % opt out: every source line is a staff line</code></pre>
+<p class="help-note">Standard ABC ends a staff line at every newline in the text. In {compose} the default is <code>%%linebreak $</code> instead: <strong>a newline never breaks the staff</strong>, so you write one measure per line (per voice) and the engraver flows the measures to whatever width the score is shown or printed at — the pane, the PDF column, the SVG. Write <code>$</code> where a staff line must end. A document that wants the classic rule puts <code>%%linebreak &lt;EOL&gt;</code> before <code>X:</code> (both rules at once: <code>%%linebreak &lt;EOL&gt; $</code>). Lyrics still bind to the text line above them: end a music line in <code>\\</code> to join the next line into it, which <strong>One measure per line</strong> (the formatter) does for you where a <code>w:</code> line follows.</p>`
       },
       {
         group: 'Voices & layout',
@@ -1299,7 +1378,7 @@ clef=none          % no clef / percussion</code></pre>`
       {
         group: 'Playback (unifile)',
         title: 'Mute / Solo Voices',
-        content: `<p class="help-note">Tap the <strong>gutter rail</strong> next to any <code>V:</code> line (or any line of that voice): the comment panel that folds out carries <strong>Mute</strong> and <strong>Solo</strong> buttons for that voice; the piano roll's voice chips have M / S buttons too. Muted voices don't sound or highlight and are dimmed in the editor and score (marked <code>M</code>); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
+        content: `<p class="help-note"><strong>Right-click</strong> (long-press on Android) any <code>V:</code> line, or any line of that voice, and choose <strong>Mute voice</strong> or <strong>Solo voice</strong>; the piano roll's voice chips have M / S buttons too. Muted voices don't sound or highlight and are dimmed in the editor and score (an <code>M</code> sits in the margin of every line of the voice, beside the voice's colour bar); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
       },
       {
         group: 'Playback (unifile)',
@@ -1309,113 +1388,270 @@ clef=none          % no clef / percussion</code></pre>`
     ]
   },
 
-  marp: {
-    name: 'MARP Slides',
-    docsUrl: 'https://marpit.marp.app/',
-    docsLabel: 'Marpit / MARP Docs',
+  slides: {
+    name: 'Slides',
+    docsUrl: 'https://marpit.marp.app/markdown',
+    docsLabel: 'Marpit Markdown reference',
     sections: [
       {
-        title: 'Document Front Matter',
-        content: `<pre><code>---
-marp: true
-theme: default
-paginate: true
----</code></pre>
-<p class="help-note">The opening YAML block configures global slide settings. <code>marp: true</code> enables MARP mode.</p>`
-      },
-      {
+        group: 'Deck',
         title: 'Slides',
-        content: `<pre><code># Slide 1
+        content: `<pre><code># First slide
 
-Content for slide 1.
+Some text.
 
 ---
 
-# Slide 2
+# Second slide
 
-Content for slide 2.</code></pre>
-<p class="help-note"><code>---</code> on its own line separates slides. Regular Markdown is used within each slide.</p>`
+- a bullet
+- another</code></pre>
+<p class="help-note"><code>---</code> on its own line starts a new slide (<code>===</code> works too). Plain Markdown inside — headings, lists, emphasis, code, tables, links. A line break in the text is a line break on the slide.</p>`
       },
       {
-        title: 'Themes',
+        group: 'Deck',
+        title: 'Front Matter',
         content: `<pre><code>---
-theme: default   % Clean light theme
----
----
-theme: gaia      % Dark hero theme
----
----
-theme: uncover   % Minimal light theme
----</code></pre>`
-      },
-      {
-        title: 'Pagination & Header/Footer',
-        content: `<pre><code>---
+title: Quarterly review
+theme: gaia
 paginate: true
-header: My Presentation
-footer: © 2026 My Company
----</code></pre>`
+size: 16:9
+header: "Acme Inc."
+footer: "2026"
+---</code></pre>
+<p class="help-note">The opening YAML block sets the deck-wide directives. <code>theme</code> is <code>default</code>, <code>gaia</code> or <code>uncover</code> (bundled, offline). <code>size</code> is <code>16:9</code> (1280×720) or <code>4:3</code>. <code>headingDivider: 2</code> starts a slide at every <code>#</code>/<code>##</code> without needing <code>---</code>.</p>`
       },
       {
-        title: 'Per-Slide Directives',
+        group: 'Deck',
+        title: 'Per-slide Directives',
         content: `<pre><code>&lt;!-- _class: lead --&gt;
-
-# Big Hero Slide
-
-&lt;!-- _backgroundColor: #1a1a2e --&gt;
-&lt;!-- _color: #ffffff --&gt;
-
-Custom coloured slide.</code></pre>
-<p class="help-note">HTML comments with <code>_</code> prefix apply to the current slide only. Without <code>_</code> they apply globally from that point on.</p>`
-      },
-      {
-        title: 'Background Images',
-        content: `<pre><code>![bg](image.jpg)
-![bg left](image.jpg)
-![bg right:40%](image.jpg)
-![bg cover](image.jpg)
-![bg contain](image.jpg)</code></pre>`
-      },
-      {
-        title: 'Two-Column Layout',
-        content: `<pre><code>&lt;!-- _class: split --&gt;
-
-# Title
-
-Left column content.
+# A title slide
 
 ---
 
-Right column content.</code></pre>
-<p class="help-note">Use the <code>split</code> class (available in gaia/uncover themes) or create a custom CSS class.</p>`
+&lt;!-- _backgroundColor: #123 --&gt;
+&lt;!-- _color: white --&gt;
+&lt;!-- _paginate: false --&gt;
+# Dark slide</code></pre>
+<p class="help-note">An HTML comment with an underscored name applies to that slide only; without the underscore it applies from that slide onward. <code>lead</code> (centred) and <code>invert</code> come with the bundled themes.</p>`
       },
       {
-        title: 'Math (KaTeX)',
-        content: `<pre><code>Inline: $E = mc^2$
-
-Display:
-$$
-\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}
-$$</code></pre>`
+        group: 'Images',
+        title: 'Inserting Images',
+        content: `<p class="help-note"><strong>Paste or drop an image file</strong> into the editor (desktop), or use <strong>Insert image…</strong> from the ⋯ menu / the phone action bubble (opens the photo library). The image is stored <em>with the document</em> — not as text — and a reference line is inserted:</p>
+<pre><code>![photo](photo.jpg)</code></pre>
+<p class="help-note">The editor shows a thumbnail under that line. SVG files work too. Large photos are downscaled to 2560 px on the long side. Deleting every reference to an image drops it from the document at the next save.</p>`
       },
       {
+        group: 'Images',
+        title: 'Sizing & Backgrounds',
+        content: `<pre><code>![w:400](photo.jpg)          width 400px
+![h:200](logo.svg)           height 200px
+![bg](photo.jpg)             full-slide background
+![bg left](photo.jpg)        split: image left, text right
+![bg right:40%](photo.jpg)   split at 40%
+![bg blur grayscale](photo.jpg)
+![bg](a.jpg) ![bg](b.jpg)    two backgrounds side by side</code></pre>
+<p class="help-note">Marp's image keywords go in the alt text. Filters: <code>blur</code>, <code>brightness</code>, <code>contrast</code>, <code>grayscale</code>, <code>invert</code>, <code>opacity</code>, <code>sepia</code>.</p>`
+      },
+      {
+        group: 'Styling',
         title: 'Custom CSS',
         content: `<pre><code>&lt;style&gt;
-section {
-  font-size: 28px;
-}
-h1 {
-  color: #3498db;
-}
+section { font-size: 28px; }
+h1 { color: #3498db; }
+&lt;/style&gt;
+
+&lt;style scoped&gt;
+h1 { color: crimson; }   /* this slide only */
 &lt;/style&gt;</code></pre>
-<p class="help-note">Inline <code>&lt;style&gt;</code> blocks let you override theme styles for the whole deck or individual slides.</p>`
+<p class="help-note">A <code>&lt;style&gt;</code> block tweaks the theme for the whole deck; <code>scoped</code> limits it to the slide it sits in. Raw HTML other than these (and directive comments) is shown as text.</p>`
+      },
+      {
+        group: 'Export',
+        title: 'PDF & HTML',
+        content: `<p class="help-note"><strong>Export → PDF</strong> opens the print dialog with one slide per page at the deck's own size — choose "Save as PDF". <strong>Export → HTML</strong> writes one self-contained file: the slides stacked for reading, and a click (or <kbd>F</kbd>) starts a full-screen presentation — <kbd>←</kbd> <kbd>→</kbd> to move, <kbd>Esc</kbd> to leave. It prints one slide per page too. Images travel inside both.</p>`
+      }
+    ]
+  },
+  spreadsheet: {
+    name: 'Spreadsheet',
+    docsUrl: 'https://unifile.app/spreadsheet/',
+    docsLabel: '{spreadsheet} on unifile.app',
+    sections: [
+      {
+        group: 'The file',
+        title: 'Sheets',
+        content: `<pre><code>---
+name: Budget
+header: 1
+freeze: cols 1
+filter: on
+sort: D desc
+decimals: 2
+---
+A1:D1  Item, Qty, Price, Total {bold, bg: #eef}
+A2:C2  Apples, 3, 1.20
+A3:C3  Pears, 2, 0.80
+D2:D3  =B*C {format: $#,##0.00}
+A4:C4  Total {merge}
+D4     =SUM(D2:D3)</code></pre>
+<p class="help-note">A sheet is a YAML block between <code>---</code> fences — the sheet-wide settings — followed by one line per cell or range: <code>&lt;range&gt; &lt;values&gt; {settings}</code>. Another <code>---</code> block starts the next sheet. Addresses are Excel's: <code>B3</code>, <code>A1:D9</code>, <code>A</code> / <code>A:C</code> (whole columns), <code>3</code> / <code>3:5</code> (whole rows). A line starting with <code>#</code> is a remark.</p>
+<p class="help-note">Most editing happens in the <strong>grid</strong> (the eye / render pane): type to replace a cell, <kbd>Enter</kbd> / <kbd>Tab</kbd> to move, <kbd>F2</kbd> to edit in place, click a letter or number for a whole column or row, right-click (long-press on a phone) for the menu, drag the small square at the selection's corner to <strong>fill</strong> a series (numbers, dates, <code>Item 1</code>…, formulas with their references moved). Every change rewrites the text — tidily, so a one-cell edit is a one-line diff — and lands in the same undo history as typing. <strong>Import Excel / CSV…</strong> (the ⋯ menu) reads an .xlsx or .csv into this format.</p>`
+      },
+      {
+        group: 'The file',
+        title: 'Sheet Settings',
+        content: `<pre><code>name: Budget              the sheet's name (Sheet1, Sheet2 … when absent)
+header: 1                 header rows: bold, frozen, left out of sort and filter
+freeze: rows 1, cols 2    frozen panes beyond the header
+filter: on                ▾ buttons on the header
+filter: B > 0; A contains "x"   …and active criteria (; between them)
+sort: D desc, A asc       a VIEW sort — rows never move in the text
+width: 12                 default column width (characters)
+height: 28                default row height (px)
+decimals: 2               rounding for formula results without a format</code></pre>
+<p class="help-note">Any other key is kept with the sheet (<code>owner: Will</code>). <code>sort</code> and <code>filter</code> are a view, like Excel's autofilter: addresses never change. The toolbar's A↓ / Z↓ buttons instead reorder the rows in the text once (a data sort). Header rows are never sorted or filtered.</p>`
+      },
+      {
+        group: 'The file',
+        title: 'Values & Formulas',
+        content: `<pre><code>A2:D2  Apples, 3, 1.20, =B*C      a row: values fill the range left to right
+A3     "line one\\nline two"        \\n inside quotes = a line break (Alt+Enter in the grid)
+A2:A9  Apples                     one value fills every cell
+D2:D9  =B*C                       one formula fills a column (this row's B × C)
+B:B    =A*2                       an open range fills the used rows
+A3     "Pears, green"             quote text that holds a comma
+A4:C4  Plums, , 2.50              an empty item clears the cell
+D10    =SUM(D2:D9)
+D11    =IF(D10>100, "big", "small")
+B2     =Costs!B2                  another sheet (='Q1 Sales'!A1 with spaces)</code></pre>
+<p class="help-note">Numbers (<code>1,200</code> inside quotes, <code>$3.50</code>, <code>12%</code>) read as numbers but show as typed; <code>'=x</code> forces text. Formulas use Excel's grammar: <code>+ - * / ^ &amp;</code>, comparisons, <code>%</code>, <code>$A$1</code>. <strong>A bare column letter is the cell in this row</strong> — the one addition — so one formula serves a whole column and survives sorting and inserted rows. ~70 functions: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, COUNTIF, SUMIF, AVERAGEIF, IF, IFERROR, AND, OR, NOT, ROUND, INT, MOD, ABS, SQRT, POWER, LEN, LEFT, RIGHT, MID, UPPER, LOWER, TRIM, CONCAT, TEXTJOIN, FIND, SUBSTITUTE, TEXT, VLOOKUP, HLOOKUP, INDEX, MATCH, LARGE, SMALL, MEDIAN, STDEV, RANK, SUMPRODUCT, ROW, COLUMN… Errors are Excel's (<code>#DIV/0!</code>, <code>#NAME?</code>, <code>#REF!</code>, <code>#CIRC!</code>). Later lines win when ranges overlap.<</p>
+<p class="help-note"><strong>Writing a formula in the grid works as in Excel.</strong> Type <code>=</code> and the first letters of a function: a list of matching functions opens under the cell (↑ ↓ to choose, <kbd>Tab</kbd> or <kbd>Enter</kbd> to insert <code>NAME(</code>); inside the parentheses a tip shows the function's arguments with the current one marked. Where a value is expected — after <code>=</code>, <code>(</code>, a comma or an operator — <strong>click a cell to insert its reference, drag for a range</strong>, click a column or row header for <code>B:B</code> / <code>3:3</code>, or use the arrow keys (<kbd>Shift</kbd>+arrows extend); the next click or drag replaces the reference just pointed, and typing <code>+</code>, <code>,</code> or <code>)</code> goes on from it. Every reference in the formula is outlined in its own colour. The same works in the formula bar. <kbd>F2</kbd> switches between <em>Enter</em> mode (arrows commit and move, as when you start typing) and <em>Edit</em> mode (arrows move the caret, as after a double-click).</p>`
+      },
+      {
+        group: 'Settings',
+        title: 'Sequences',
+        content: `<pre><code>A2:A13  {seq: 1}                         1, 2, 3 …
+A2:A13  {seq: 100, step: -5}             100, 95, 90 …
+B2:B13  {seq: 2026-01-31, step: 1 month} 2026-01-31, 2026-02-28, 2026-03-31 …
+C2:C8   {seq: Mon}                       Mon, Tue … Sun, Mon
+D2:D13  {seq: Jan}                       Jan … Dec
+A:A     {seq: Item 1}                    Item 1, Item 2 … (the used rows)</code></pre>
+<p class="help-note">A sequence generates the cells of its range instead of listing them: numbers, ISO dates (step <code>1</code> / <code>7</code> / <code>2 weeks</code> / <code>1 month</code> / <code>1 year</code>), month and weekday names (the start's spelling is kept), or text ending in a number. Generated cells are real to formulas and exports; typing into one writes an explicit value that wins. ⋯ → <em>Fill with a sequence…</em> in the grid.</p>`
+      },
+      {
+        group: 'Settings',
+        title: 'Formatting',
+        content: `<pre><code>A1:D1  {bold, bg: #eef, align: center}
+D      {format: $#,##0.00}
+B2:B9  {italic, color: #888, size: 12, font: mono}
+A2:A9  {wrap, valign: top, border: bottom}
+C3     {bold: off, color: none}
+A1:D1  Item, Qty, Price, Total {bold}     settings may ride on a value line</code></pre>
+<p class="help-note">Flags: <code>bold italic underline strike wrap</code>. Keys: <code>color</code>, <code>bg</code> (a CSS name or <code>#hex</code>), <code>size</code> (px), <code>font</code> (<code>mono</code> / <code>serif</code> / <code>sans</code>), <code>align</code> (<code>left</code> / <code>center</code> / <code>right</code>), <code>valign</code> (<code>top</code> / <code>middle</code> / <code>bottom</code>), <code>border</code> (<code>top</code>, <code>bottom</code>, <code>left</code>, <code>right</code>, a list, or alone for all sides), <code>format</code>. Later lines win per property; <code>bold: off</code> / <code>color: none</code> clear one inside a wider range.</p>
+<p class="help-note">Number formats: <code>0</code>, <code>0.00</code>, <code>#,##0</code>, <code>#,##0.00</code>, <code>0%</code>, <code>0.0%</code>, <code>$#,##0.00</code> (any currency sign), <code>0.00E+00</code>, <code>text</code>, <code>general</code>; quote a pattern with spaces: <code>format: "#,##0 kg"</code>. A literal cell with a format shows the formatted number (<code>1200</code> → <code>1,200</code>).</p>`
+      },
+      {
+        group: 'Settings',
+        title: 'Conditional Formatting',
+        content: `<pre><code>D2:D9  {rule: > 100, bold, color: green}
+D2:D9  {rule: between 10 and 20, bg: #ffe}
+A2:A9  {rule: contains "urgent", bg: #fdd}
+B2:B9  {rule: blank, bg: #eee}
+C2:C9  {rule: top 3, bold}
+D2:D9  {rule: =D>C, color: red}          a formula, per row
+A2:A9  {rule: duplicate, color: #c00}
+E2:E9  {scale: #fff #1a8cf5}             2 or 3 colours</code></pre>
+<p class="help-note"><code>rule</code> makes the block's properties conditional. Conditions: <code>&gt; &gt;= &lt; &lt;= = &lt;&gt;</code> a value (any expression — <code>&gt; B1*2</code>), <code>between a and b</code>, <code>contains</code> / <code>starts</code> / <code>ends "text"</code>, <code>blank</code>, <code>filled</code>, <code>error</code>, <code>duplicate</code>, <code>unique</code>, <code>top n</code>, <code>bottom n</code>, or <code>=formula</code> evaluated for each cell with the row's bare-column refs. Rules apply in order after the plain styles; a <code>scale</code> shades numbers from the lowest to the highest value. The ◈ toolbar button lists and adds rules.</p>`
+      },
+      {
+        group: 'Settings',
+        title: 'Dates',
+        content: `<pre><code>A2     2026-01-31                 an ISO date is a date value
+B2     =A2+30                     2026-03-02 — arithmetic keeps the date
+C2     =B2-A2                     30 (days between)
+D2     =EDATE(A2, 1)              2026-02-28     =EOMONTH(A2, 0)
+E2     =DATEDIF(A2, B2, "d")      d · m · y · ym · md · yd
+F2     =TEXT(A2, "mmmm d, yyyy")  January 31, 2026
+G2     =TODAY()   =DATE(2026, 7, 4)   =YEAR(A2)  =MONTH(A2)  =DAY(A2)  =WEEKDAY(A2)
+A2:A9  {format: d mmm yyyy}       31 Jan 2026 — also dd/mm/yyyy, mmm yyyy, dddd, hh:mm</code></pre>
+<p class="help-note">Dates are Excel serials underneath (<code>2026-01-31 14:30</code> carries a time), so they sort, compare (<code>rule: > "2026-01-01"</code>), subtract and feed <code>MIN</code>/<code>MAX</code>; a <code>{seq: 2026-01-31, step: 1 month}</code> generates them. The .xlsx export writes real date cells.</p>`
+      },
+      {
+        group: 'Settings',
+        title: 'Data Bars & Charts',
+        content: `<pre><code>B2:B9  {bar: #2a78d6}                                   a data bar behind each value
+A1:C9  {chart: column, title: "Sales", at: E2, size: 480x300}
+A1:C9  {chart: line}        {chart: area}   {chart: pie}   {chart: scatter}
+A1:C9  {chart: bar, series: rows, legend: off}</code></pre>
+<p class="help-note">A chart line names its <em>data</em>: the first column holds the categories (the x values of a scatter), the first row the series names when it reads as a header, every other column a series (<code>series: rows</code> transposes). <code>at</code> is the top-left cell the chart floats at (default: right of the data), <code>size</code> its pixels. In the grid, hover a chart for edit / move / remove; ▥ on the toolbar inserts one from the selection. Charts go into the .xlsx as native Excel charts and into the HTML / PDF exports as pictures.</p>`
+      },
+      {
+        group: 'Settings',
+        title: 'Merge, Comment, Size, Hide',
+        content: `<pre><code>A4:C4  Total {merge}         the top-left cell spans the range
+B3     {comment: "Market price, October"}
+A      {width: 18}           columns, in characters
+B:D    {width: 10}
+3      {height: 40}          rows, in px
+C:D    {hidden}
+5:7    {hidden}</code></pre>
+<p class="help-note">A comment shows as an orange corner in the grid (hover for the text) and exports as an Excel note. Widths can also be dragged on the column edge; double-click the edge to reset.</p>`
+      },
+      {
+        group: 'Export',
+        title: 'Excel, CSV, HTML, PDF',
+        content: `<p class="help-note"><strong>Export → Excel</strong> writes a real .xlsx: formulas (with their values cached, so they show at once and recalculate on edit), generated sequences as values, merges, number formats, fonts, fills, borders, alignment, conditional-format rules and colour scales, column widths, row heights, frozen panes, hidden rows / columns, the autofilter and cell comments. <strong>CSV</strong> exports the sheet the grid shows (values). <strong>HTML</strong> is one self-contained file of every sheet with its formatting; <strong>PDF</strong> prints it landscape.</p>`
       }
     ]
   }
 };
 
+/** `<kbd>` text for a CodeMirror-style chord, on this OS (⌘/ · Ctrl+/). */
+const kbd = (chord) => escHtml(formatShortcut(chord));
+
+/**
+ * The editor's keyboard shortcuts, as a help section — generated at open time
+ * so the labels read ⌘ on a Mac and Ctrl elsewhere (core/keys.js), and so the
+ * comment-out row names the DSL's own syntax.
+ */
+function keyboardHelpSection(dslType) {
+  let dsl = null;
+  try { dsl = getDSL(dslType); } catch { /* unknown DSL */ }
+  const ct = commentTokensFor(dslType, state.data?.dslType);
+  const commentHow = ct?.line
+    ? `<code>${escHtml(ct.line)}</code> at the start of each line`
+    : ct?.block ? `the lines wrapped in <code>${escHtml(ct.block.open)} … ${escHtml(ct.block.close)}</code>` : null;
+  const rows = [
+    ['Mod-s', 'Save the next version to the device'],
+    ['Mod-Shift-s', 'Save as a new major version'],
+    ['Mod-Shift-o', 'Open from device'],
+    ['Mod-Shift-l', 'Show / hide the documents'],
+    ['Mod-Shift-e', 'Export'],
+    ['Mod-Shift-b', 'Blame view'],
+    ['Mod-Shift-,', 'Settings'],
+    ['Mod-Alt-m', 'Comment on the selection (or the word at the caret)'],
+    commentHow && ['Mod-/', `Comment out the selected lines, or uncomment them — ${commentHow}; <code>#</code> inside the front matter`],
+    ['Tab', 'Indent the line (or accept the completion)'],
+    ['Shift-Tab', 'Outdent the line'],
+    typeof dsl?.alignSource === 'function' && ['Alt-Shift-f', 'Format the source'],
+    ['Alt-1', 'Editor only'],
+    ['Alt-2', 'Editor and preview'],
+    ['Alt-3', 'Preview only'],
+  ].filter(Boolean);
+  return {
+    group: 'Keyboard',
+    title: 'Shortcuts',
+    content: `<table class="help-keys">${rows.map(([chord, what]) =>
+      `<tr><td><kbd>${kbd(chord)}</kbd></td><td>${what}</td></tr>`).join('')}</table>
+<p class="help-note">Hold <kbd>${kbd('Alt')}</kbd> and drag for a column selection. Right-click the text for the context menu.</p>`,
+  };
+}
+
 export function showDslHelpModal(dslType) {
-  const help = DSL_HELP[dslType] ?? DSL_HELP.markdown;
+  const base = DSL_HELP[dslType] ?? DSL_HELP.markdown;
+  const help = { ...base, sections: [...base.sections, keyboardHelpSection(dslType)] };
 
   // A stable id per section (for the nav anchors + scroll-spy).
   const slug = (s, i) =>
@@ -1676,13 +1912,6 @@ function escHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/** Bump the patch of a `major.minor.patch` string (mirrors commit-bar). */
-function _incPatch(semver) {
-  const m = String(semver).match(/^(\d+)\.(\d+)\.(\d+)/);
-  if (!m) return '';
-  return `${m[1]}.${m[2]}.${+m[3] + 1}`;
 }
 
 function _iconExported() {
