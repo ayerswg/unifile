@@ -26,6 +26,7 @@ import { state } from '../ui/state.js';
 import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
+import { expandVoices, sourceLineBreaks, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -54,6 +55,8 @@ const abcLanguage = StreamLanguage.define({
 
     // At the start of each line decide whether it is a header line.
     if (stream.sol()) {
+      // unifile's voice shorthand: `@id` at a line start = `[V:id]`.
+      if (stream.match(VOICE_PREFIX_RE)) { state.inHeader = false; return 'keyword'; }
       const m = stream.string.match(/^([A-Za-z]):/);
       if (m && ABC_HEADER_FIELDS.has(m[1].toUpperCase())) {
         // Consume just the "X:" token and mark the rest of the line as header.
@@ -208,7 +211,8 @@ let _noteEvents = [];
 // Raw ABC source of the last render (section-relative).  Needed to scan for
 // `!name!` articulation tokens — abcjs drops unknown decorations, so we read
 // them from the source ourselves; their indices line up with note startChars.
-let _lastAbcSource = '';
+let _lastAbcSource = '';   // the EXPANDED section the engines parsed
+let _lastRawSource = '';   // the same section as written (voice shorthand intact)
 
 // Voice map for the last render (section-relative char → voice id + score order),
 // used to mute/solo voices for playback, highlighting and the score fade.
@@ -342,13 +346,32 @@ let _scheduledOscs = [];
 // (for dsl-select events) and subtract it when going the other way (rangeHighlight).
 let _sectionOffset = 0;
 
+// The voice-shorthand expansion of the rendered section (core/abc-shorthand.js):
+// the engines parse `[V:id]` where the text says `@id`, so every char offset
+// they report is in the EXPANDED text. _toDoc / _toSec are the ONE boundary
+// between that space and the editor's document offsets — use them instead of
+// adding / subtracting _sectionOffset by hand.
+let _srcMap = expandVoices('');
+
+/** Expanded-section char → document offset. */
+function _toDoc(sectionChar) { return _sectionOffset + _srcMap.toSource(sectionChar); }
+/** Document offset → expanded-section char (clamped at the section start). */
+function _toSec(docPos) { return _srcMap.toExpanded(Math.max(0, docPos - _sectionOffset)); }
+
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
-async function render(content, el) {
+async function render(rawContent, el) {
   // Stop any in-progress playback when the content changes.
   if (_synth) stopPlayback();
+
+  // Voice shorthand: `@id` line prefixes become `[V:id]` for both engines.
+  // Everything below works in the expanded text; _toDoc/_toSec (and the maps
+  // handed to the piano roll) translate at the editor boundary.
+  const srcMap = expandVoices(rawContent);
+  const content = srcMap.text;
+  _srcMap = srcMap;
 
   // Capture section offset so click positions (section-relative) can be
   // translated to full-document positions and vice-versa.
@@ -414,9 +437,19 @@ async function render(content, el) {
   // closure uses localOffset so it always refers to its own block, and it
   // re-establishes the module-level context variables when clicked.
   const localOffset = _sectionOffset;
+  const localMap    = srcMap;
 
   try {
     const tablature = parseTabDirectives(content);
+    // The abcjs render is the VISIBLE score only for %%tablature docs and the
+    // abcjs escape hatch; there, mirror the abc2svg default (source newlines
+    // do not break staff lines) with abcjs's own re-wrapping (`wrap` needs a
+    // staffwidth). The hidden audio/timing render never needs it.
+    const abcjsVisible = !useAbc2svg() || !!tablature;
+    const wrapOpts = abcjsVisible && !sourceLineBreaks(content)
+      ? { staffwidth: Math.max(300, (el.clientWidth || 760) - 30),
+          wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }
+      : {};
 
     // Declared before renderAbc so the clickListener closure can capture the
     // binding; assigned after renderAbc once we have the tuneObjects back.
@@ -426,6 +459,7 @@ async function render(content, el) {
     const tuneObjects = abcjs.renderAbc(container, content, {
       responsive: 'resize',
       add_classes: true,
+      ...wrapOpts,
       ...(tablature ? { tablature } : {}),
       // abcjs highlights the clicked note (abcjs-note_selected + fill="#ff0000").
       // We tell the editor which source range to jump to, and show the play button.
@@ -437,14 +471,15 @@ async function render(content, el) {
         _tuneObjects = localTuneObjects;
         _playEl      = container;
         _sectionOffset = localOffset;
+        _srcMap      = localMap;
         if (abcElem.startChar !== undefined && abcElem.endChar !== undefined) {
           // Remember which block's note was clicked so we can restore the
           // visual highlight if the block re-renders before the user moves.
           _lastNoteBlockOffset = localOffset;
           _lastNoteClickRange  = { from: abcElem.startChar, to: abcElem.endChar };
           state.emit('dsl-select', {
-            from: abcElem.startChar + localOffset,
-            to:   abcElem.endChar   + localOffset,
+            from: _toDoc(abcElem.startChar),
+            to:   _toDoc(abcElem.endChar),
           });
           _setNoteSelected(true); // show the play button
         }
@@ -458,6 +493,7 @@ async function render(content, el) {
     _engraver    = localEngraver;
     _tuneObjects = localTuneObjects;
     _lastAbcSource = content;
+    _lastRawSource = rawContent;
     _voiceMap    = buildVoiceMap(content);
     _playEl      = container;
 
@@ -484,9 +520,10 @@ async function render(content, el) {
           _a2sScore    = localScore;
           _playEl      = container;
           _sectionOffset = localOffset;
+          _srcMap      = localMap;
           _lastNoteBlockOffset = localOffset;
           _lastNoteClickRange  = { from, to };
-          state.emit('dsl-select', { from: from + localOffset, to: to + localOffset });
+          state.emit('dsl-select', { from: _toDoc(from), to: _toDoc(to) });
           _setNoteSelected(true);
           localScore.highlightRange(from, to);
         },
@@ -506,7 +543,7 @@ async function render(content, el) {
               if (_a2sScore !== localScore || state.abcPlaying) return;
               const w = engravingEl.clientWidth;
               if (w && Math.abs(w - localScore.pageWidth) / w > 0.1) {
-                render(content, el);   // re-measures and re-engraves
+                render(rawContent, el);   // re-measures and re-engraves
               }
             }, 250);
           });
@@ -585,8 +622,8 @@ state.on('editor-select', ({ from, to }) => {
   if (_engraver && (state.activeDslId ?? state.data?.dslType) === 'abcjs' && !state.abcPlaying) {
     // Translated to section-relative: collapsed cursor clears, range highlights.
     // Coalesced to one rangeHighlight per frame (see _scheduleRangeHighlight).
-    const adjFrom = from === to ? 0 : Math.max(0, from - _sectionOffset);
-    const adjTo   = from === to ? 0 : Math.max(0, to   - _sectionOffset);
+    const adjFrom = from === to ? 0 : _toSec(from);
+    const adjTo   = from === to ? 0 : _toSec(to);
     _scheduleRangeHighlight(adjFrom, adjTo);
     // A real text-range selection over ABC content counts as a note selected.
     if (from !== to) _setNoteSelected(true);
@@ -600,7 +637,7 @@ state.on('editor-select', ({ from, to }) => {
   // skimming with held arrow keys doesn't machine-gun; per-note dedupe inside).
   if (from === to && !state.abcPlaying &&
       (state.activeDslId ?? state.data?.dslType) === 'abcjs') {
-    _auditionSoon(Math.max(0, from - _sectionOffset));
+    _auditionSoon(_toSec(from));
   }
 });
 
@@ -617,7 +654,7 @@ state.on('dsl-select', ({ from }) => {
   // Clicking a note in the preview cues the transport to that note.
   _syncTransportToSelection(from, from);
   // …and sounds it (forced: re-clicking the same note plays it again).
-  _auditionAt(Math.max(0, from - _sectionOffset), { force: true });
+  _auditionAt(_toSec(from), { force: true });
 });
 
 // A note letter (or an octave mark extending one) typed in the editor is
@@ -679,8 +716,8 @@ let _auditionFlashTimer  = 0;     // clears the green "now sounding" flash
  *  started mid-flash owns the highlight and the clear stands down. */
 function _auditionFlash(startChar, endChar, durMs) {
   const doc  = state.currentContent ?? '';
-  const to   = endChar + _sectionOffset;
-  const from = _trimToNoteStart(doc, startChar + _sectionOffset, to);
+  const to   = _toDoc(endChar);
+  const from = _trimToNoteStart(doc, _toDoc(startChar), to);
 
   // abcjs-engraver fallback (escape hatch / %%tablature): the note's own SVG
   // groups, green via the container's playback palette class.
@@ -808,7 +845,7 @@ function _consumePendingTypeAudition() {
   const { pos, at } = _pendingTypeAudition;
   _pendingTypeAudition = null;
   if (performance.now() - at > 2000) return;
-  _auditionAt(Math.max(0, pos - _sectionOffset), { force: true });
+  _auditionAt(_toSec(pos), { force: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -1430,8 +1467,8 @@ function _highlightEvent(event) {
     if (_isMutedAtChar(s)) return;
     if (_playEl) (groups[i] ?? []).forEach(el => el?.classList?.add('abcjs-note_playing'));
     secPairs.push({ from: s, to: ends[i] });
-    const to   = ends[i] + _sectionOffset;
-    const from = _trimToNoteStart(doc, s + _sectionOffset, to);
+    const to   = _toDoc(ends[i]);
+    const from = _trimToNoteStart(doc, _toDoc(s), to);
     if (from < to) ranges.push({ from, to });
   });
   _a2sScore?.setPlaying(secPairs.length ? secPairs : null);
@@ -1907,7 +1944,13 @@ function _emitRollData() {
       msPerMeasure,
       msPerWhole: msPerMeasure / (_meterSize || 1),
       sectionOffset: _sectionOffset,
-      source: _lastAbcSource,
+      source: _lastAbcSource,          // the EXPANDED section (char space of every offset above)
+      // Translate between that space and the document (voice shorthand, see
+      // core/abc-shorthand.js); the roll's edits and selections go through them.
+      toDoc: _toDoc,
+      fromDoc: _toSec,
+      // The section as it stands in the document — the roll's freshness check.
+      rawSource: _lastRawSource,
     };
   }
   state.abcRollData = data;
@@ -1973,7 +2016,7 @@ function _cueStartMs() {
   if (_selRangeMs) return _selRangeMs.startMs;
   const { from, to } = _lastEditorSel;
   if (from === to) {
-    const ms = _charToMs(Math.max(0, from - _sectionOffset));
+    const ms = _charToMs(_toSec(from));
     if (ms != null) return ms;
   }
   return 0;
@@ -2020,8 +2063,8 @@ function _syncTransportToSelection(from, to) {
   if ((state.activeDslId ?? state.data?.dslType) !== 'abcjs') return;
   if (!_noteEvents.length) return;
 
-  const selFrom = Math.max(0, from - _sectionOffset);
-  const selTo   = Math.max(0, to   - _sectionOffset);
+  const selFrom = _toSec(from);
+  const selTo   = _toSec(to);
 
   const range = to > from ? _selectionMsRange(selFrom, selTo) : null;
   if (range && range.count > 1) {
@@ -2132,8 +2175,8 @@ async function startPlayback(opts = {}) {
   // Translate full-doc editor positions to section-relative positions so they
   // match the char indices in abcjs noteTimings (which are 0-based from the
   // start of the section content passed to render()).
-  const selFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
-  const selTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
+  const selFrom = _toSec(_lastEditorSel.from);
+  const selTo   = _toSec(_lastEditorSel.to);
 
   // Playback uses the abcjs synthesiser by default — this build bundles the
   // FluidR3 acoustic_grand_piano soundfont and serves it offline (see
@@ -2389,8 +2432,8 @@ function stopPlayback(opts = {}) {
   // abcjs-note_selected fill survives naturally — don't call rangeHighlight(0,0)
   // which would erase it.
   if (_lastEditorSel.from !== _lastEditorSel.to) {
-    const adjFrom = Math.max(0, _lastEditorSel.from - _sectionOffset);
-    const adjTo   = Math.max(0, _lastEditorSel.to   - _sectionOffset);
+    const adjFrom = _toSec(_lastEditorSel.from);
+    const adjTo   = _toSec(_lastEditorSel.to);
     _rangeHighlightNow(adjFrom, adjTo);
   }
   } finally {
@@ -2442,13 +2485,16 @@ function _withDerivedTitle(content) {
 }
 
 async function renderToString(content) {
-  content = _withDerivedTitle(content);
+  content = expandVoices(_withDerivedTitle(content)).text;
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
   try {
     const tablature = parseTabDirectives(content);
     abcjs.renderAbc(tmp, content, {
       responsive: 'resize',
+      // The static preview flows like the live score (abcjs's re-wrap ignores
+      // source newlines) unless the document pins %%linebreak <EOL>.
+      ...(sourceLineBreaks(content) ? {} : { staffwidth: 740, wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
       ...(tablature ? { tablature } : {}),
     });
     return tmp.innerHTML;
@@ -2464,7 +2510,7 @@ async function renderToString(content) {
 // ---------------------------------------------------------------------------
 
 async function exportSVG(content) {
-  content = _withDerivedTitle(content);
+  content = expandVoices(_withDerivedTitle(content)).text;
   const tablature = parseTabDirectives(content);
   // abc2svg engraving for exports too (same engine as the on-screen score);
   // falls through to abcjs on failure, %%tablature docs, or the escape hatch.
@@ -2474,14 +2520,17 @@ async function exportSVG(content) {
   }
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
-  abcjs.renderAbc(tmp, content, { ...(tablature ? { tablature } : {}) });
+  abcjs.renderAbc(tmp, content, {
+    ...(sourceLineBreaks(content) ? {} : { staffwidth: 740, wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
+    ...(tablature ? { tablature } : {}),
+  });
   const svgContent = tmp.innerHTML;
   document.body.removeChild(tmp);
   return new Blob([svgContent], { type: 'image/svg+xml' });
 }
 
 async function exportPDF(content) {
-  content = _withDerivedTitle(content);
+  content = expandVoices(_withDerivedTitle(content)).text;
   // ── 1. Render offscreen with oneSvgPerLine ─────────────────────────────────
   // oneSvgPerLine splits the single large SVG into one <div><svg></svg></div>
   // per staff system.  Each SVG carries a viewBox so it can be scaled by CSS
@@ -2513,6 +2562,7 @@ async function exportPDF(content) {
         oneSvgPerLine: true,
         staffwidth: STAFF_W,
         add_classes: true,
+        ...(sourceLineBreaks(content) ? {} : { wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
         ...(tablature ? { tablature } : {}),
       });
     } catch (e) {
@@ -2589,7 +2639,7 @@ async function exportPDF(content) {
 
 async function exportMIDI(content) {
   // abcjs synth API for MIDI
-  const midiData = abcjs.synth.getMidiFile(content, {});
+  const midiData = abcjs.synth.getMidiFile(expandVoices(content).text, {});
   return new Blob([midiData], { type: 'audio/midi' });
 }
 
@@ -2750,6 +2800,15 @@ function abcBodyComplete(context) {
   const cm = before.match(/\bclef=([\w+-]*)$/);
   if (cm) return { from: context.pos - cm[1].length, options: ABC_CLEFS.map(c => ({ label: c, type: 'constant', detail: 'clef' })), validFor: /^[\w+-]*$/ };
 
+  // `@` at a line start (the voice shorthand) → the voices the tune declares.
+  const am = before.match(/^@([A-Za-z0-9_]*)$/);
+  if (am) {
+    const ids = abcVoiceIds(cmState.doc.toString()).filter(id => id !== am[1]);
+    return ids.length
+      ? { from: line.from + 1, options: ids.map(id => ({ label: id, type: 'variable', detail: 'voice', apply: id + ' ' })), validFor: /^[A-Za-z0-9_]*$/ }
+      : null;
+  }
+
   // After "V:" / "[V:" → the voices the tune already declares; after the id,
   // the voice properties (`clef=`, `name=`, …).
   const vm = before.match(/(?:^\s*|\[)V:\s*([^\s\]]*)$/);
@@ -2797,10 +2856,13 @@ function abcBodyComplete(context) {
   return null;
 }
 
-// Voice ids the document declares (`V:1`, `[V:T1]`), in order of appearance.
+// Voice ids the document declares (`V:1`, `[V:T1]`, `@2`), in order of appearance.
 function abcVoiceIds(text) {
   const ids = [];
-  for (const m of text.matchAll(/(?:^|\[)V:\s*([^\s\]]+)/gm)) if (!ids.includes(m[1])) ids.push(m[1]);
+  for (const m of text.matchAll(/(?:^|\[)V:\s*([^\s\]]+)|^@([A-Za-z0-9_]+)/gm)) {
+    const id = m[1] ?? m[2];
+    if (!ids.includes(id)) ids.push(id);
+  }
   return ids;
 }
 
@@ -2835,7 +2897,8 @@ const ABC_DIRECTIVES = {
   measurenb: 'Measure numbers every N bars (0 = first of each line).',
   barnumbers: 'Measure numbers every N bars (abcjs spelling).',
   stretchlast: 'Stretch the last line to full width (1) or not (0).',
-  continueall: 'Ignore line breaks in the source (1) — one measure per line in the text, flowing staves.',
+  linebreak: 'Where staff lines break: `%%linebreak $` (the {compose} default — source newlines never break, `$` forces one, measures flow to the width) or `%%linebreak <EOL>` (every source line is a staff line).',
+  continueall: 'abcjs spelling of "ignore source line breaks" — prefer %%linebreak.',
   titlefont: 'Title font: `%%titlefont Times-Bold 20`.',
   vocalfont: 'Lyrics font.',
   partsbox: 'Draw a box around part letters.',
@@ -2947,11 +3010,14 @@ function _unusedMarkings(region, body) {
  * unexpected characters, …).  LINE/COL are relative to the parsed body.
  */
 function _abcParseWarnings(view, bodyFrom, body, docLen) {
+  // abcjs sees the voice shorthand expanded (`@1` → `[V:1]`); lines stay 1:1
+  // and the columns map back through the expansion's offset map.
+  const ex = expandVoices(body);
   let tunes;
-  try { tunes = abcjs.parseOnly(body); } catch { return []; }
+  try { tunes = abcjs.parseOnly(ex.text); } catch { return []; }
   if (!Array.isArray(tunes)) return [];
 
-  const bodyLines = body.split('\n');
+  const bodyLines = ex.text.split('\n');
   const out = [];
   const seen = new Set();
   for (const tune of tunes) {
@@ -2962,11 +3028,17 @@ function _abcParseWarnings(view, bodyFrom, body, docLen) {
       // Drop abcjs's trailing ":  <echoed source line>" from the message.
       const message = (m ? m[3] : w).replace(/:\s{2}.*$/, '').trim();
 
+      // abcjs knows neither %%linebreak nor the `$` break it configures —
+      // both are abc2svg's (the engraver the user sees); never flag them.
+      if (/^Unknown directive: linebreak\b/.test(message)) continue;
+
       const li = Math.min(Math.max(lineNo - 1, 0), bodyLines.length - 1);
       let off = 0;
       for (let i = 0; i < li; i++) off += bodyLines[i].length + 1;
-      const line = view.state.doc.lineAt(Math.min(bodyFrom + off, docLen));
-      const from = Math.min(line.from + Math.max(col - 1, 0), line.to);
+      const exPos = Math.min(off + Math.max(col - 1, 0), off + bodyLines[li].length);
+      if (/^Unknown character ignored/.test(message) && ex.text[exPos] === '$') continue;
+      const line = view.state.doc.lineAt(Math.min(bodyFrom + ex.toSource(off), docLen));
+      const from = Math.min(bodyFrom + ex.toSource(exPos), line.to);
 
       const key = from + '|' + message;
       if (seen.has(key)) continue;

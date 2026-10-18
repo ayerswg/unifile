@@ -253,6 +253,14 @@
 .cm-completionDetail { color: var(--text-muted); }
 .cm-placeholder { color: var(--text-muted); }
 
+/* ABC voice colour — in a multi-voice score each line of a voice carries the
+   voice's colour as a 3px bar in its left margin (an inset shadow: nothing
+   moves, no gutter) and its voice tag (`@1` / `[V:1]` / `V:1`) is tinted the
+   same. `--vc` is set per line by editor.js from the `--voice-N` tokens the
+   piano roll draws with, so a voice is one colour everywhere. */
+.cm-line.cm-voice-line { box-shadow: inset 3px 0 0 var(--vc); }
+.cm-voice-tag { color: var(--vc); font-weight: 600; }
+
 /* Muted ABC voice — dim the source lines in the editor so it's clear they won't
    sound or highlight during playback; an M (muted) / S (soloed) mark sits in
    the line's left margin (a pseudo-element: no DOM text, so CM's content

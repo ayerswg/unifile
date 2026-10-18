@@ -1301,9 +1301,34 @@ ABC % end-of-line comment</code></pre>`
         content: `<pre><code>V:1 clef=treble name="Flute"
 V:2 clef=bass   name="Cello"
 K:C
-[V:1] e2fe d2ed | c2dc B4 |
-[V:2] C,4 G,4   | C,8    |</code></pre>
-<p class="help-note">Declare voices with <code>V:</code> in the header (id, then options like <code>clef=</code>, <code>name=</code>, <code>transpose=</code>). In the body, prefix lines with <code>[V:id]</code> or a standalone <code>V:id</code> line.</p>`
+@1 e2fe d2ed |
+@2 C,4 G,4   |
+@1 c2dc B4   |
+@2 C,8       |</code></pre>
+<p class="help-note">Declare voices with <code>V:</code> in the header (id, then options like <code>clef=</code>, <code>name=</code>, <code>transpose=</code>). In the body, name the voice a line belongs to: <code>@id</code> at the start of the line (the unifile shorthand, next section), standard ABC's <code>[V:id]</code>, or a standalone <code>V:id</code> line. A line with no voice tag continues the voice of the line above. Every line of a voice gets the voice's <strong>colour bar</strong> in the editor's margin — the same colour the piano roll gives its notes.</p>`
+      },
+      {
+        group: 'Voices & layout',
+        title: 'Voice Shorthand @id (unifile)',
+        content: `<pre><code>@1 A2 B2 | c2 d2 |     % = [V:1] A2 B2 | c2 d2 |
+@2 F2 G2 | A2 B2 |     % = [V:2] …
+@RH|e4 f4|             % a bar may follow the id directly
+@S  g2 a2 |            % any voice id: S, A, T, B, RH, LH, 1, 2 …</code></pre>
+<p class="help-note"><code>@</code> + the voice id at the <strong>start of a line</strong> means exactly <code>[V:id]</code> there — three characters instead of five on every line of a score. It is never ambiguous: <code>@</code> starts no ABC token, the id is the voice's own (letters, digits, <code>_</code>), and the shorthand is only read at a line start — a mid-line voice switch stays <code>[V:id]</code>. Put a space or a bar after the id. The engravers, playback, the piano roll, exports and the linter all see the expanded form; the text keeps the short one. Type <code>@</code> at a line start for a list of the tune's voices.</p>`
+      },
+      {
+        group: 'Voices & layout',
+        title: 'Line Flow (unifile)',
+        content: `<pre><code>X:1
+M:4/4
+L:1/8
+K:C
+@1 A2 B2 c2 d2 |
+@2 F2 G2 A2 B2 |
+@1 e4 f4 |     $   % \$ forces a staff break here
+@2 c4 d4 |
+%%linebreak &lt;EOL&gt;   % opt out: every source line is a staff line</code></pre>
+<p class="help-note">Standard ABC ends a staff line at every newline in the text. In {compose} the default is <code>%%linebreak $</code> instead: <strong>a newline never breaks the staff</strong>, so you write one measure per line (per voice) and the engraver flows the measures to whatever width the score is shown or printed at — the pane, the PDF column, the SVG. Write <code>$</code> where a staff line must end. A document that wants the classic rule puts <code>%%linebreak &lt;EOL&gt;</code> before <code>X:</code> (both rules at once: <code>%%linebreak &lt;EOL&gt; $</code>). Lyrics still bind to the text line above them: end a music line in <code>\\</code> to join the next line into it, which <strong>One measure per line</strong> (the formatter) does for you where a <code>w:</code> line follows.</p>`
       },
       {
         group: 'Voices & layout',
@@ -1353,7 +1378,7 @@ clef=none          % no clef / percussion</code></pre>`
       {
         group: 'Playback (unifile)',
         title: 'Mute / Solo Voices',
-        content: `<p class="help-note"><strong>Right-click</strong> (long-press on Android) any <code>V:</code> line, or any line of that voice, and choose <strong>Mute voice</strong> or <strong>Solo voice</strong>; the piano roll's voice chips have M / S buttons too. Muted voices don't sound or highlight and are dimmed in the editor and score (an <code>M</code> sits in the margin of every line of the voice); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
+        content: `<p class="help-note"><strong>Right-click</strong> (long-press on Android) any <code>V:</code> line, or any line of that voice, and choose <strong>Mute voice</strong> or <strong>Solo voice</strong>; the piano roll's voice chips have M / S buttons too. Muted voices don't sound or highlight and are dimmed in the editor and score (an <code>M</code> sits in the margin of every line of the voice, beside the voice's colour bar); Solo isolates a voice (marked <code>S</code>) and mutes the rest. It's a live, per-session setting — not saved with the document.</p>`
       },
       {
         group: 'Playback (unifile)',
