@@ -31,6 +31,9 @@ import abc2svg from 'abc2svg/abc2svg-1.js';
 import 'abc2svg/strtab-1.js';
 import { DEFAULT_LINEBREAK } from '../core/abc-shorthand.js';
 
+/** abc2svg's own page width when none is injected (A4 at 96 dpi, px). */
+const DEFAULT_PAGE_WIDTH = 794;
+
 /** True when abc2svg is the active engraver (default; 'abcjs' opts out). */
 export function useAbc2svg() {
   try { return localStorage.getItem('uf_engraver') !== 'abcjs'; } catch { return true; }
@@ -174,13 +177,20 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   // back to content-relative offsets below so click/highlight mapping and the
   // editor stay in sync.
   const paneW = Math.round(el.clientWidth || el.parentElement?.clientWidth || 0);
+  const ownPageWidth = /^%%pagewidth\b/m.test(content);
+  // The width the score is engraved for: the pane's, else abc2svg's own
+  // default page (A4, ~794px). A HIDDEN pane (the phone's render pane while
+  // the editor shows, a collapsed split) measures 0 and gets the default —
+  // the caller's ResizeObserver compares this against the pane once it is
+  // visible and re-engraves (see `pageWidth` below).
+  const engravedW = paneW >= 300 && !ownPageWidth ? Math.min(paneW, 1600) : DEFAULT_PAGE_WIDTH;
   let prefix = '';
   // Line flow ({compose} default, core/abc-shorthand.js): a source newline
   // does NOT end a staff line — measures flow to the page width and `$`
   // forces a break — unless the document sets its own %%linebreak.
   if (!/^%%linebreak\b/m.test(content)) prefix += `%%linebreak ${DEFAULT_LINEBREAK}\n`;
-  if (paneW >= 300 && !/^%%pagewidth\b/m.test(content)) {
-    prefix += `%%pagewidth ${Math.min(paneW, 1600)}\n`;
+  if (paneW >= 300 && !ownPageWidth) {
+    prefix += `%%pagewidth ${engravedW}\n`;
     if (!/^%%leftmargin\b/m.test(content))  prefix += '%%leftmargin 14\n';
     if (!/^%%rightmargin\b/m.test(content)) prefix += '%%rightmargin 14\n';
   }
@@ -315,9 +325,11 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     // Width the score was engraved for, so callers can re-engrave when the pane
     // ends up meaningfully different (first layout, window resize). null when
     // the document sets its own %%pagewidth — the user's layout is fixed.
-    pageWidth: /^%%pagewidth\b/m.test(content)
-      ? null
-      : (prefix ? Math.min(paneW, 1600) : 794),
+    // LANDMINE (fixed 2026-10): this used to read `prefix ? paneW : 794`, and
+    // once the %%linebreak default made `prefix` non-empty on every render a
+    // hidden pane reported 0 → no observer → the 794px engraving stayed,
+    // scaled down to a thumbnail on phones (the pane is hidden while typing).
+    pageWidth: ownPageWidth ? null : engravedW,
 
     highlightRange(from, to) {
       markPairs(to > from ? [{ from, to }] : null, 'uf-hl');

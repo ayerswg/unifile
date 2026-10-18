@@ -1800,6 +1800,15 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   width: clamp(100%, 100cqw - 64px, 1100px);
   margin-left: calc((100% - clamp(100%, 100cqw - 64px, 1100px)) / 2);
 }
+/* Phones: a slim gutter (the engraving adds its own 14px margins), so the
+   staff gets the width — 64px of chrome on a 400px pane is a lot of score. */
+@media (max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+  .preview-content .abc2svg-wrap,
+  .preview-content .abc-preview-wrap {
+    width: clamp(100%, 100cqw - 24px, 1100px);
+    margin-left: calc((100% - clamp(100%, 100cqw - 24px, 1100px)) / 2);
+  }
+}
 
 .preview-empty {
   color: var(--text-muted);
