@@ -16,8 +16,10 @@
 // over each one via abc.out_svg/out_sxsy (which handle staff-coordinate
 // scaling). Those rects then drive, via CSS classes:
 //   click → source   (rect click → istart/iend → 'dsl-select')
-//   .uf-hl           editor-selection / clicked-note highlight
-//   .uf-play         playback "now sounding" highlight
+//   .uf-hl           editor-selection / clicked-note highlight — on the
+//                    symbol's OWN glyphs (heads, stem, flags, dots, accidentals,
+//                    ledger lines; the beam too once every note under it is lit)
+//   .uf-play         playback "now sounding" highlight (same glyph targets)
 //   .uf-range        selected playback range band
 //   .uf-muted        muted-voice dim on a mixed staff (bg-tinted overlay);
 //                    fully muted staves get a full-width .uf-staff-veil band
@@ -51,6 +53,18 @@ abc2svg.loadjs  = abc2svg.loadjs  || function (_fn, relay) { if (relay) relay();
 // voice's slur arcs above the band otherwise stayed crisp).
 const SKIP_ANNO = new Set(['beam', 'slur', 'tuplet']);
 
+/** Source offsets of every symbol under the beam starting at `s1` — the voice
+ *  chain from the `beam_st` symbol to the `beam_end` one (grace-note beams
+ *  chain the same way). */
+function beamMembers(s1) {
+  const out = [];
+  for (let n = s1, guard = 0; n && guard < 512; n = n.next, guard++) {
+    if (n.istart != null) out.push(n.istart);
+    if (n.beam_end) break;
+  }
+  return out;
+}
+
 /**
  * Core engraving pass. Returns { chunks, errors, annos } where `chunks` are the
  * raw SVG strings abc2svg emitted (one per staff system) and `annos` records
@@ -81,7 +95,11 @@ function engrave(content, { annotate = false, preserveSheet = false } = {}) {
     // (below, in renderAbc2svg) are the reliable route.
     user.anno_stop = (type, start, stop, x, y, w, h, s) => {
       const deco = SKIP_ANNO.has(type);
-      annos.push({ start, end: stop, voice: s?.p_v?.id ?? null, staff: s?.st ?? null, type, deco });
+      const anno = { start, end: stop, voice: s?.p_v?.id ?? null, staff: s?.st ?? null, type, deco };
+      // A beam is annotated with its FIRST note's range only; remember every
+      // symbol under it so the highlight can light the beam once all are lit.
+      if (type === 'beam') anno.members = beamMembers(s);
+      annos.push(anno);
       // The abc2svg editor's exact pattern: out_sxsy/sh map staff coords → SVG.
       abc.out_svg(`<rect class="${deco ? 'abcd' : 'abcr'} _${start}_" x="`);
       abc.out_sxsy(x, '" y="', y);
@@ -134,6 +152,240 @@ function explodeGlyphTexts(el) {
       t.appendChild(ts);
     });
   });
+}
+
+/**
+ * abc2svg also batches STEMS (one `<path class="sW" d="Mx yv-21Mx yv-19…">`
+ * per flush), bar lines (`bW`, same shape) and LEDGER LINES (one `<path
+ * class="stroke" d="Mx y m-6 0h12 m120 0h12…">` per staff row). Split each
+ * into one <path> per subpath, in absolute coordinates, same attributes —
+ * rendering is identical, but a single stem or ledger line becomes an element
+ * the highlight can colour. Paths using anything beyond M/m/H/h/V/v/L/l are
+ * left untouched.
+ */
+function explodeBatchedPaths(el) {
+  el.querySelectorAll('svg path.sW, svg path.bW, svg path.stroke').forEach((p) => {
+    const segs = splitSubpaths(p.getAttribute('d') || '');
+    if (!segs || !segs.length) return;
+    if (segs.length === 1) { p.setAttribute('d', segs[0]); return; }
+    for (const d of segs) {
+      const q = p.cloneNode(false);
+      q.setAttribute('d', d);
+      p.parentNode.insertBefore(q, p);
+    }
+    p.remove();
+  });
+}
+
+/** 'M96.1 92.0v18.7M114.6 89.0v19.6' → ['M96.1 92V110.7', 'M114.6 89V108.6'].
+ *  Subpaths that only move (no drawing) are dropped; null when the path has
+ *  commands other than M/m/H/h/V/v/L/l. */
+function splitSubpaths(d) {
+  const re = /([A-Za-z])|(-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?)/g;
+  const r = (v) => String(Math.round(v * 100) / 100);
+  const out = [];
+  let cmd = null, x = 0, y = 0, cur = null, drew = false, nums = [], m;
+  const flush = () => { if (cur && drew) out.push(cur); cur = null; drew = false; };
+  while ((m = re.exec(d))) {
+    if (m[1]) {
+      cmd = m[1];
+      nums = [];
+      if (!'MmHhVvLl'.includes(cmd)) return null;
+      continue;
+    }
+    if (!cmd) return null;
+    nums.push(parseFloat(m[2]));
+    switch (cmd) {
+      case 'M': case 'm':
+        if (nums.length === 2) {
+          x = cmd === 'm' ? x + nums[0] : nums[0];
+          y = cmd === 'm' ? y + nums[1] : nums[1];
+          flush();
+          cur = `M${r(x)} ${r(y)}`;
+          cmd = cmd === 'm' ? 'l' : 'L';     // further pairs are implicit linetos
+          nums = [];
+        }
+        break;
+      case 'L': case 'l':
+        if (nums.length === 2) {
+          x = cmd === 'l' ? x + nums[0] : nums[0];
+          y = cmd === 'l' ? y + nums[1] : nums[1];
+          cur += `L${r(x)} ${r(y)}`; drew = true; nums = [];
+        }
+        break;
+      case 'H': case 'h':
+        x = cmd === 'h' ? x + nums[0] : nums[0];
+        cur += `H${r(x)}`; drew = true; nums = [];
+        break;
+      case 'V': case 'v':
+        y = cmd === 'v' ? y + nums[0] : nums[0];
+        cur += `V${r(y)}`; drew = true; nums = [];
+        break;
+    }
+  }
+  flush();
+  return out;
+}
+
+// ── Glyph → symbol mapping, from the SVG's own coordinates (no layout) ─────
+//
+// Every glyph abc2svg draws for a symbol — notehead tspans, the stem segment,
+// flags/dots/accidentals (glyphs too), ledger lines — carries its position in
+// the same user space the annotation rect was emitted in (both go through
+// abc2svg's sx/sy, or share the same `<g transform>` when a voice is scaled).
+// So a glyph belongs to the smallest annotation box containing its anchor
+// point, computed from ATTRIBUTES: no getBoundingClientRect, which is 0×0 in a
+// hidden pane (the phone's render pane while the editor shows — where the
+// lazy screen-space map of 2026-09 never latched and every highlight fell
+// back to the rect tint) and unreliable for tspans on WebKit.
+
+const mulM = (m, n) => [
+  m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+  m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+  m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
+];
+const applyM = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+const IDENTITY = [1, 0, 0, 1, 0, 0];
+
+/** An SVG `transform` attribute → affine matrix [a b c d e f]. */
+function parseTransform(str) {
+  let m = IDENTITY;
+  const re = /(translate|scale|rotate|matrix)\(([^)]*)\)/g;
+  let t;
+  while ((t = re.exec(str))) {
+    const v = t[2].split(/[\s,]+/).filter(Boolean).map(Number);
+    let n = null;
+    switch (t[1]) {
+      case 'translate': n = [1, 0, 0, 1, v[0] || 0, v[1] || 0]; break;
+      case 'scale':     n = [v[0] ?? 1, 0, 0, v[1] ?? v[0] ?? 1, 0, 0]; break;
+      case 'rotate': {
+        const a = (v[0] || 0) * Math.PI / 180, cos = Math.cos(a), sin = Math.sin(a);
+        n = [cos, sin, -sin, cos, 0, 0];
+        if (v.length > 2) n = mulM(mulM([1, 0, 0, 1, v[1], v[2]], n), [1, 0, 0, 1, -v[1], -v[2]]);
+        break;
+      }
+      case 'matrix':    n = v.length === 6 ? v : null; break;
+    }
+    if (n) m = mulM(m, n);
+  }
+  return m;
+}
+
+/** Matrix from `el`'s user space to its <svg> root (ancestor <g transform>s). */
+function rootMatrix(el, memo) {
+  if (!el || el.tagName === 'svg') return IDENTITY;
+  let m = memo.get(el);
+  if (!m) {
+    m = rootMatrix(el.parentElement, memo);
+    const tr = el.getAttribute('transform');
+    if (tr) m = mulM(m, parseTransform(tr));
+    memo.set(el, m);
+  }
+  return m;
+}
+
+const numAttr = (el, a) => parseFloat(el.getAttribute(a));
+
+/** The anchor point (in the element's own user space) identifying which
+ *  symbol a drawn glyph belongs to; null for elements that are not a symbol's
+ *  glyph (staff lines, titles/lyrics, slur arcs, beams — handled apart). */
+function glyphAnchor(g) {
+  switch (g.tagName) {
+    case 'tspan':
+      // A glyph's origin is its left edge (noteheads: vertically centred).
+      return [numAttr(g, 'x') + 1, numAttr(g, 'y')];
+    case 'text': {
+      if (g.getAttribute('class') || g.firstElementChild) return null;   // font text / exploded container
+      const tr = g.getAttribute('transform');
+      if (tr) {                                      // scaled glyph: translate(X,Y) scale(…)
+        const m = /translate\(\s*([-\d.]+)[\s,]+([-\d.]+)/.exec(tr);
+        return m ? [+m[1], +m[2]] : null;
+      }
+      const x = g.getAttribute('x'), y = g.getAttribute('y');
+      if (x == null || y == null || x.includes(',')) return null;
+      return [+x + 1, +y];
+    }
+    case 'use': {
+      const href = g.getAttribute('href') || g.getAttribute('xlink:href') || '';
+      if (/^#st/.test(href)) return null;           // the staff-lines def
+      return [numAttr(g, 'x'), numAttr(g, 'y')];
+    }
+    case 'path': {
+      const cls = g.getAttribute('class') || '';
+      const d = g.getAttribute('d') || '';
+      let m;
+      if ((cls === 'sW' || cls === 'bW') && (m = /^M([-\d.]+) ([-\d.]+)V([-\d.]+)$/.exec(d))) {
+        return [+m[1], (+m[2] + +m[3]) / 2];         // stem / bar: its midpoint
+      }
+      if (cls === 'stroke' && (m = /^M([-\d.]+) ([-\d.]+)H([-\d.]+)$/.exec(d))) {
+        return [(+m[1] + +m[3]) / 2, +m[2]];         // ledger line: its midpoint
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Assign every drawn glyph to its symbol (`sym.glyphs`), per system svg, and
+ * every beam's polygon paths to its beam record (`beam.glyphs`: the unclassed
+ * paths abc2svg emits right before the beam's annotation rect — draw_beams
+ * opens and closes the annotation around its own output).
+ */
+function buildGlyphMap(el, syms, decoSyms) {
+  const PAD = 1.5, CELL = 64;
+  const bySvg = new Map();
+  for (const s of syms) {
+    const svg = s.el.ownerSVGElement;
+    if (!svg) continue;
+    let list = bySvg.get(svg);
+    if (!list) bySvg.set(svg, list = []);
+    list.push(s);
+  }
+  for (const [svg, list] of bySvg) {
+    const memo = new Map();
+    // Annotation boxes in root coordinates, bucketed by x for the lookup.
+    const buckets = new Map();
+    for (const s of list) {
+      const r = s.el;
+      const x = numAttr(r, 'x'), y = numAttr(r, 'y'), w = numAttr(r, 'width'), h = numAttr(r, 'height');
+      if (![x, y, w, h].every(isFinite)) continue;
+      const m = rootMatrix(r.parentElement, memo);
+      const pts = [applyM(m, x, y), applyM(m, x + w, y), applyM(m, x, y + h), applyM(m, x + w, y + h)];
+      const x0 = Math.min(...pts.map(p => p[0])), x1 = Math.max(...pts.map(p => p[0]));
+      const y0 = Math.min(...pts.map(p => p[1])), y1 = Math.max(...pts.map(p => p[1]));
+      const box = { s, x0, x1, y0, y1, area: (x1 - x0) * (y1 - y0) };
+      for (let c = Math.floor((x0 - PAD) / CELL); c <= Math.floor((x1 + PAD) / CELL); c++) {
+        let b = buckets.get(c);
+        if (!b) buckets.set(c, b = []);
+        b.push(box);
+      }
+    }
+    svg.querySelectorAll('tspan, text, use, path').forEach((g) => {
+      if (g.classList.contains('abcr') || g.classList.contains('abcd')) return;
+      const a = glyphAnchor(g);
+      if (!a) return;
+      const parent = g.tagName === 'tspan' ? g.parentElement.parentElement : g.parentElement;
+      const [px, py] = applyM(rootMatrix(parent, memo), a[0], a[1]);
+      let best = null;
+      for (const box of buckets.get(Math.floor(px / CELL)) ?? []) {
+        if (px < box.x0 - PAD || px > box.x1 + PAD || py < box.y0 - PAD || py > box.y1 + PAD) continue;
+        if (!best || box.area < best.area) best = box;
+      }
+      if (best) (best.s.glyphs ??= []).push(g);
+    });
+  }
+  for (const d of decoSyms) {
+    if (d.type !== 'beam') continue;
+    const paths = [];
+    for (let n = d.el.previousElementSibling; n; n = n.previousElementSibling) {
+      if (n.tagName !== 'path' || n.getAttribute('class')) break;
+      if (!/^m[-\d. ]+l/i.test(n.getAttribute('d') || '')) break;
+      paths.push(n);
+    }
+    if (paths.length) d.glyphs = paths;
+  }
 }
 
 /**
@@ -201,6 +453,7 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   el.innerHTML = chunks.join('');
   makeResponsive(el);
   explodeGlyphTexts(el);
+  explodeBatchedPaths(el);
 
   // Pair each rect with its anno record via the istart baked into its class.
   // NOT by emission index: abc2svg buffers SVG output per staff and joins the
@@ -219,6 +472,7 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     return {
       start: start - prefix.length, end: a.end - prefix.length,
       voice: a.voice, staff: a.staff, type: a.type, el: r, glyphs: null,
+      members: a.members?.map(m => m - prefix.length) ?? null,
     };
   };
   const syms = [...el.querySelectorAll('rect.abcr')]
@@ -228,49 +482,32 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   const decoSyms = [...el.querySelectorAll('rect.abcd')]
     .map(r => pair(r, decoByStart)).filter(Boolean);
 
-  // Map drawn glyphs to symbols geometrically: an element belongs to the
-  // smallest annotation box containing its centre (screen space, so staff
-  // <g transform> contexts don't matter). Gives the red/green note colouring
-  // its targets — the note's own paths/texts/uses, like abcjs's note groups.
-  // Built LAZILY on first highlight use: at render time the pane may have no
-  // layout yet (hidden pane / first paint), where every box measures 0×0.
-  // Until it succeeds, highlights fall back to the overlay-rect tint.
-  let glyphsMapped = false;
-  const ensureGlyphMap = () => {
-    if (glyphsMapped) return;
-    const symBoxes = syms
-      .map(s => ({ s, b: s.el.getBoundingClientRect() }))
-      .filter(({ b }) => b.width > 0 && b.height > 0);
-    if (!symBoxes.length) return;               // no layout yet — retry next call
-    let assigned = 0;
-    el.querySelectorAll('svg :is(path, text, tspan, use, ellipse, circle, polygon)').forEach((gl) => {
-      if (gl.classList.contains('abcr')) return;
-      if (gl.tagName === 'text' && gl.firstElementChild) return;   // exploded container
-      const b = gl.getBoundingClientRect();
-      if (!b.width && !b.height) return;
-      const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
-      let best = null;
-      for (const { s, b: rb } of symBoxes) {
-        if (cx < rb.x || cx > rb.right || cy < rb.y || cy > rb.bottom) continue;
-        if (b.width > rb.width * 3) continue;   // spans neighbours (staff/bar lines)
-        const area = rb.width * rb.height;
-        if (!best || area < best.area) best = { s, area };
-      }
-      if (best) { (best.s.glyphs ??= []).push(gl); assigned++; }
-    });
-    // Only latch a map that actually assigned glyphs: at render time the music
-    // font may not have loaded yet, so every tspan measures 0×0 and nothing
-    // maps — latching then would freeze the empty map forever. Retrying on the
-    // next highlight call (font loaded by then) succeeds.
-    if (assigned) glyphsMapped = true;
-    else syms.forEach(s => { s.glyphs = null; });
-  };
+  // Every drawn glyph → its symbol (and every beam polygon → its beam), from
+  // the SVG's own coordinates — built now, hidden pane or not (see
+  // buildGlyphMap). Gives the red/green colouring its targets: the note's own
+  // heads, stem, flags, dots, accidentals and ledger lines, like abcjs's note
+  // groups; a symbol that drew nothing we recognise falls back to a rect tint.
+  buildGlyphMap(el, syms, decoSyms);
+  const symByStart = new Map(syms.map(s => [s.start, s]));
+  const beams = decoSyms.filter(d => d.type === 'beam' && d.glyphs && d.members?.length);
 
   // Playback cursor bar: an HTML div positioned over the rect that's sounding.
   const cursor = document.createElement('div');
   cursor.className = 'uf-a2s-cursor';
   cursor.style.display = 'none';
   el.appendChild(cursor);
+  // The bar is placed from SCREEN geometry, so it must be re-placed whenever
+  // the wrap's size changes: a window/split resize rescales the responsive
+  // svg under it, and the phone's render pane APPEARING is the first time
+  // there is any geometry at all — the position asked for while the pane was
+  // display:none (the cue after an editor selection) had hidden the bar, and
+  // nothing re-asked until the next transport event (the "cursor is gone"
+  // report, 2026-10). Remember the last request and replay it on resize.
+  let lastCursorPairs = null;
+  let placeCursor = () => {};
+  try {
+    new ResizeObserver(() => { if (lastCursorPairs) placeCursor(lastCursorPairs); }).observe(el);
+  } catch { /* no ResizeObserver — the next transport event re-places it */ }
 
   // Click → source range (delegated; rects sit on top of their symbols).
   // Match by element identity — sym.start is content-relative while the class
@@ -291,22 +528,29 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   // Note-colouring classes (uf-hl red / uf-play green) go on the symbol's own
   // glyph elements — colouring the note itself like abcjs did. Band/veil
   // classes (uf-range / uf-muted) stay on the overlay rect. Symbols with no
-  // mapped glyphs fall back to a rect tint.
+  // mapped glyphs fall back to a rect tint. A beam lights up only when EVERY
+  // note under it is lit (a selection of the whole group, not one note of it).
   const GLYPH_CLS = new Set(['uf-hl', 'uf-play']);
   const markPairs = (pairs, cls) => {
     clearClass(cls);
     if (!pairs) return;
     const onGlyph = GLYPH_CLS.has(cls);
-    if (onGlyph) ensureGlyphMap();
+    const marked = onGlyph ? new Set() : null;
     for (const p of pairs) {
       inRange(p.from, p.to).forEach((s) => {
         if (onGlyph && s.glyphs) s.glyphs.forEach(g => g.classList.add(cls));
         else s.el.classList.add(cls);
+        marked?.add(s.start);
       });
+    }
+    if (!marked?.size) return;
+    for (const b of beams) {
+      const notes = b.members.filter(m => symByStart.has(m));
+      if (notes.length && notes.every(m => marked.has(m))) b.glyphs.forEach(g => g.classList.add(cls));
     }
   };
 
-  return {
+  const score = {
     el,
     symCount: syms.length,
     _debug: () => ({
@@ -316,9 +560,10 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
       decoSyms: decoSyms.map(s => ({ start: s.start, voice: s.voice, staff: s.staff, type: s.type,
         y: s.el.getAttribute('y'), h: s.el.getAttribute('height'),
         svg: s.el.ownerSVGElement ? [...el.querySelectorAll('svg')].indexOf(s.el.ownerSVGElement) : -1 })),
-      mapped: glyphsMapped,
+      mapped: true,
       symsWithGlyphs: syms.filter(s => s.glyphs?.length).length,
       totalGlyphs: syms.reduce((n, s) => n + (s.glyphs?.length ?? 0), 0),
+      beamsWithGlyphs: beams.length,
       tspans: el.querySelectorAll('svg tspan').length,
       firstRectBox: (() => { const b = syms[0]?.el.getBoundingClientRect(); return b ? [b.x, b.y, b.width, b.height].map(Math.round) : null; })(),
     }),
@@ -487,6 +732,12 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
 
     /** Park the cursor bar on the first symbol of the first matching pair. */
     cursorAt(pairs) {
+      lastCursorPairs = pairs;
+      placeCursor(pairs);
+    },
+  };
+
+  placeCursor = (pairs) => {
       let target = null;
       for (const p of (pairs ?? [])) {
         const hits = inRange(p.from, p.to);
@@ -505,8 +756,9 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
       cursor.style.top     = `${sr.top - wrap.top}px`;
       cursor.style.height  = `${sr.height}px`;
       cursor.style.display = '';
-    },
   };
+
+  return score;
 }
 
 /** Export: one self-contained SVG (systems stacked as nested <svg y=…>). */

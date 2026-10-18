@@ -339,6 +339,7 @@ if (typeof globalThis !== 'undefined') {
     a2s_debug: _a2sScore?._debug?.() ?? null,
     sectionOffset: _sectionOffset,
     noteEvents: _noteEvents.length,
+    events: _noteEvents.map(e => ({ ms: e.milliseconds, starts: e.startCharArray ?? [e.startChar], ends: e.endCharArray ?? [e.endChar] })),
   }), { exportSvg: abc2svgExportSvg, exportPrintBody: abc2svgExportPrintBody });
 }
 
@@ -692,6 +693,19 @@ state.on('editor-select', ({ from, to }) => {
 // this one note".  Range-play is driven solely by editor text selections.
 state.on('dsl-select', ({ from }) => {
   _lastEditorSel = { from, to: from };
+  if (state.abcPlaying) {
+    // Mid-playback a click on a note (score or piano roll) is a SEEK — the
+    // DAW's click-to-locate: the audio, the green highlight and the cursor bar
+    // all jump to that note. The editor caret is collapsed there now, so any
+    // range the playback was bound to no longer matches the selection: play
+    // on to the end from the clicked note (a plain seek).
+    const ms = _charToMs(_toSec(from));
+    if (ms == null) return;
+    _selRangeMs = null;
+    state.emit('abc-range', null);
+    seekTo(ms);
+    return;
+  }
   // Clicking a note in the preview cues the transport to that note.
   _syncTransportToSelection(from, from);
   // …and sounds it (forced: re-clicking the same note plays it again).
@@ -1490,30 +1504,59 @@ function _highlightEvent(event) {
     return;
   }
 
-  // Editor: emit all voice char ranges for green text-colour highlighting.
-  // abcjs char indices are section-relative → add _sectionOffset to map them to
-  // document positions; and trim leading decorations/whitespace so the green
-  // covers the note, not its `!legato!`/`.` marks (abcjs's startChar can point
-  // at the decoration that precedes the note).  Muted / non-soloed voices are
-  // skipped entirely — neither the SVG note nor the editor cursor lights up
-  // (`elements[i]` parallels `startCharArray[i]`, one entry per sounding voice).
+  // Everything SOUNDING at this moment: the moment's own onsets plus every
+  // earlier note still held in another voice (a bass half note stays green
+  // while the treble's eighths pass over it — the highlight is what plays, not
+  // what just started; see _soundingEntries). Editor: emit all their char
+  // ranges for green text-colour highlighting. abcjs char indices are
+  // section-relative → _toDoc maps them to document positions; and trim
+  // leading decorations/whitespace so the green covers the note, not its
+  // `!legato!`/`.` marks (abcjs's startChar can point at the decoration that
+  // precedes the note). Muted / non-soloed voices are skipped entirely —
+  // neither the SVG note nor the editor cursor lights up.
   const doc    = state.currentContent ?? '';
-  const starts = event.startCharArray ?? [event.startChar];
-  const ends   = event.endCharArray   ?? [event.endChar];
-  const groups = event.elements ?? [];
   const ranges = [];
   const secPairs = [];   // section-relative pairs for the abc2svg score
-  starts.forEach((s, i) => {
-    if (s === undefined || ends[i] === undefined) return;
-    if (_isMutedAtChar(s)) return;
-    if (_playEl) (groups[i] ?? []).forEach(el => el?.classList?.add('abcjs-note_playing'));
-    secPairs.push({ from: s, to: ends[i] });
-    const to   = _toDoc(ends[i]);
-    const from = _trimToNoteStart(doc, _toDoc(s), to);
+  for (const e of _soundingEntries(event.milliseconds)) {
+    if (_isMutedAtChar(e.startChar)) continue;
+    if (_playEl) e.elements.forEach(el => el?.classList?.add('abcjs-note_playing'));
+    secPairs.push({ from: e.startChar, to: e.endChar });
+    const to   = _toDoc(e.endChar);
+    const from = _trimToNoteStart(doc, _toDoc(e.startChar), to);
     if (from < to) ranges.push({ from, to });
-  });
+  }
   _a2sScore?.setPlaying(secPairs.length ? secPairs : null);
   state.emit('abc-play-cursor', ranges.length ? ranges : null);
+}
+
+// A timing event is a MOMENT: one entry per voice that has an onset right then
+// (`startCharArray[i]` / `elements[i]`). A voice's entry keeps sounding until
+// that voice's NEXT moment (its next note or rest), so flatten the moments into
+// per-entry spans [ms, endMs) once per timing table and ask "what sounds at
+// ms?" — the moment's own entries plus the held ones. Memoised on the current
+// _noteEvents array (rebuilt each render, like _flatNotes).
+let _soundingCache = { src: null, list: [] };
+function _soundingEntries(ms) {
+  if (_soundingCache.src !== _noteEvents) {
+    const list = [];
+    const open = new Map();   // voice id → its latest entry, awaiting its end
+    for (const ev of _noteEvents) {
+      const ss  = ev.startCharArray ?? (ev.startChar !== undefined ? [ev.startChar] : []);
+      const ee  = ev.endCharArray   ?? (ev.endChar   !== undefined ? [ev.endChar]   : []);
+      const els = ev.elements ?? [];
+      ss.forEach((s, i) => {
+        if (s == null || ee[i] == null) return;
+        const voice = _voiceMap.at(s) ?? '';
+        const prev = open.get(voice);
+        if (prev) prev.endMs = ev.milliseconds;
+        const entry = { ms: ev.milliseconds, endMs: Infinity, startChar: s, endChar: ee[i], elements: els[i] ?? [] };
+        open.set(voice, entry);
+        list.push(entry);
+      });
+    }
+    _soundingCache = { src: _noteEvents, list };
+  }
+  return _soundingCache.list.filter(e => e.ms <= ms + 0.5 && ms < e.endMs - 0.5);
 }
 
 // Wall-clock visual driver.  abcjs's own TimingCallbacks fire the cursor on a
