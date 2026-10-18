@@ -31,7 +31,11 @@ import abc2svg from 'abc2svg/abc2svg-1.js';
 // String-tablature module (%%strtab): self-registers into abc2svg.modules and
 // hooks every new Abc instance (pass-through when no %%strtab directive).
 import 'abc2svg/strtab-1.js';
+// play-1.js's pure half (the build slices it out — build/abc2svg-toaudio.mjs):
+// the timed events of the tune abc2svg just parsed, see core/abc-timing.js.
+import { ToAudio } from 'abc2svg/play-1.js';
 import { DEFAULT_LINEBREAK } from '../core/abc-shorthand.js';
+import { timingFromEvents, graceStartsOf } from '../core/abc-timing.js';
 
 /** abc2svg's own page width when none is injected (A4 at 96 dpi, px). */
 const DEFAULT_PAGE_WIDTH = 794;
@@ -71,9 +75,16 @@ function beamMembers(s1) {
  * each annotated symbol { start, end, voice } in emission order (1:1 with the
  * `rect.abcr` elements when `annotate` is on).
  */
-function engrave(content, { annotate = false, preserveSheet = false } = {}) {
+function engrave(content, { annotate = false, preserveSheet = false, timing = false } = {}) {
   const chunks = [], errors = [], annos = [];
   let abc = null;
+  // `timing`: capture the FIRST tune's time-sequenced model (abc2svg hands it
+  // to `user.get_abcmodel` per tune, before engraving it) and, once the
+  // engraving is done, run play-1.js's ToAudio over it — the order abc2svg's
+  // own front end (abcemb-1.js) uses: it stores the model there and feeds the
+  // player later. ToAudio relinks grace-note timing in place, so it must not
+  // run on a model abc2svg is still about to draw.
+  let model = null;
   // Every Abc instance's first style insertion WIPES the shared document
   // stylesheet (abc2svg.sheet) and refills it with its own class names. An
   // export engraves with %%fullsvg, whose class names are suffixed (f0x…) —
@@ -87,6 +98,9 @@ function engrave(content, { annotate = false, preserveSheet = false } = {}) {
     errmsg: (msg) => errors.push(String(msg)),
     img_out: (s) => chunks.push(s),
   };
+  if (timing) {
+    user.get_abcmodel = (tsfirst, voice_tb) => { if (!model) model = { tsfirst, voice_tb }; };
+  }
   if (annotate) {
     // NOTE: do NOT try to wrap each symbol's output in a <g> via anno_start/
     // anno_stop — abc2svg buffers SVG per staff and interleaves symbol output,
@@ -120,7 +134,20 @@ function engrave(content, { annotate = false, preserveSheet = false } = {}) {
       }
     }
   }
-  return { chunks, errors, annos };
+  let events = [], voices = [], truncated = false, graceStarts = null;
+  if (model) {
+    try {
+      graceStarts = graceStartsOf(model.tsfirst, abc2svg.C);   // before ToAudio relinks the chain
+      const audio = ToAudio();
+      audio.add(model.tsfirst, model.voice_tb);
+      events = audio.clear() ?? [];
+      truncated = !!ToAudio.truncated;
+      voices = model.voice_tb.map(v => String(v.id ?? ''));
+    } catch (e) {
+      errors.push('timing: ' + (e && e.message ? e.message : String(e)));
+    }
+  }
+  return { chunks, errors, annos, events, voices, truncated, graceStarts };
 }
 
 /**
@@ -447,7 +474,7 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     if (!/^%%rightmargin\b/m.test(content)) prefix += '%%rightmargin 14\n';
   }
 
-  const { chunks, errors, annos } = engrave(prefix + content, { annotate: true });
+  const { chunks, errors, annos, events, voices, truncated, graceStarts } = engrave(prefix + content, { annotate: true, timing: true });
   if (!chunks.length) return null;
 
   el.innerHTML = chunks.join('');
@@ -553,6 +580,18 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   const score = {
     el,
     symCount: syms.length,
+    // WHEN each note sounds, by the engine that drew it (core/abc-timing.js):
+    // `timing.notes[].start` is content-relative like `sym.start`, so a timed
+    // note and its glyphs share a key. abcjs.js compares this against its own
+    // table (`_engineParity`) and the one-parser work swaps its consumers over.
+    timing: timingFromEvents(events, { offset: -prefix.length, voices, graceStarts }),
+    // abc2svg's `errmsg` lines for this engraving (`unifile:LINE:COL message`,
+    // line numbers count the injected prefix lines) — abc2svg warns where abcjs
+    // silently stops, e.g. "Empty line in tune header - ignored".
+    errors,
+    // play-1.js's event walk hit the step guard (a repeat structure that never
+    // ends as written); `timing` holds what it reached.
+    timingTruncated: truncated,
     _debug: () => ({
       syms: syms.map(s => ({ start: s.start, voice: s.voice, staff: s.staff, type: s.type,
         y: s.el.getAttribute('y'), h: s.el.getAttribute('height'),

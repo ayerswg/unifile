@@ -131,10 +131,21 @@ const FIELD_RE = /^[A-Za-z+]:/;
  * header has no `K:`. abc2svg drops music before `K:` and fields before `X:`
  * outright (no error — the tune is simply empty); abcjs assumes exactly these
  * values. A leading `---` front matter block, `%` comments and `%%` directives
- * never count as music; a blank line ends a tune (the next `X:` starts one).
+ * never count as music; an EMPTY line ends a tune (the next `X:` starts one).
+ *
+ * Blank lines. Standard ABC ends a tune at an empty line, and abcjs follows it
+ * to the letter — its parse loop stops at the first one, silently, so a tune
+ * with an empty line between its header fields parsed to a title and NO notes:
+ * abc2svg (which ignores an empty line in a header with a warning) drew the
+ * whole score while nothing played (real bug, 2026-10). An empty line in a tune
+ * HEADER is therefore turned into a `%` comment line here, so every engine reads
+ * the tune the engraver draws; an empty line in the BODY ends the tune for both
+ * engines alike and is left as it is. Both are reported in `blanks` for the
+ * lint (`tuneBlankLines`). Whitespace-only lines are nothing to either engine.
  * @param {string} text  ABC source (voice prefixes expanded or not — `@id`
  *   lines are music either way)
  * @returns {{ text: string, changed: boolean, inserted: {at: number, text: string}[],
+ *             blanks: {at: number, where: 'header'|'body'}[],
  *             toExpanded: (i: number) => number, toSource: (i: number) => number }}
  *   `inserted` lists each insertion at its SOURCE offset. The maps are
  *   monotone; a position inside an inserted line maps back to the insertion
@@ -157,27 +168,32 @@ export function completeHeader(text) {
   const hasX = lines.slice(i).some((l) => /^X:/.test(l));
   // state: 0 = outside a tune, 1 = in a tune header, 2 = in a tune body
   let state = 0, hasK = false, firstTune = !hasX;
+  const blanks = [];
+  let orphanBlank = null;                  // the empty line that ended the last tune body
   for (; i < lines.length; i++) {
     const line = lines[i];
     const raw = line.replace(/\r?\n$/, '');
-    if (/^\s*$/.test(raw)) {               // blank: ends a tune body
-      if (state === 2) state = 0;
-    } else if (raw[0] === '%') {           // comment / directive
+    if (raw === '') {                      // an EMPTY line (see "Blank lines" below)
+      if (state === 2) { state = 0; orphanBlank = pos; }
+      else if (state === 1) { inserted.push({ at: pos, text: '%' }); blanks.push({ at: pos, where: 'header' }); }
+    } else if (/^\s*$/.test(raw) || raw[0] === '%') {   // whitespace-only / comment / directive
       // nothing
     } else if (/^X:/.test(raw)) {
-      state = 1; hasK = false;
+      state = 1; hasK = false; orphanBlank = null;
     } else if (FIELD_RE.test(raw)) {       // an information field
       if (firstTune) { inserted.push({ at: pos, text: 'X:1\n' }); firstTune = false; state = 1; hasK = false; }
+      if (orphanBlank != null) { blanks.push({ at: orphanBlank, where: 'body' }); orphanBlank = null; }
       if (state === 1 && raw[0] === 'K') { hasK = true; state = 2; }
     } else {                               // music
       if (firstTune) { inserted.push({ at: pos, text: 'X:1\nK:C\n' }); firstTune = false; state = 2; hasK = true; }
       else if (state === 1 && !hasK) { inserted.push({ at: pos, text: 'K:C\n' }); hasK = true; state = 2; }
+      if (orphanBlank != null) { blanks.push({ at: orphanBlank, where: 'body' }); orphanBlank = null; }
     }
     pos += line.length;
   }
   if (!inserted.length) {
     const id = (n) => n;
-    return { text: src, changed: false, inserted, toExpanded: id, toSource: id };
+    return { text: src, changed: false, inserted, blanks, toExpanded: id, toSource: id };
   }
   let out = '', last = 0, delta = 0;
   const marks = [];                        // { s: source at, e: expanded at, n: inserted length }
@@ -192,6 +208,7 @@ export function completeHeader(text) {
     text: out,
     changed: true,
     inserted,
+    blanks,
     toExpanded(n) {
       let d = 0;
       for (const m of marks) { if (m.s <= n) d += m.n; else break; }
@@ -219,14 +236,30 @@ export function completeHeader(text) {
 export function expandAbc(text) {
   const v = expandVoices(text);
   const h = completeHeader(v.text);
-  if (!h.changed) return v;
+  const blanks = h.blanks.map((b) => ({ at: v.toSource(b.at), where: b.where }));
+  if (!h.changed) return { ...v, blanks };
   return {
     text: h.text,
     changed: true,
     inserted: h.inserted.map((ins) => ({ at: v.toSource(ins.at), text: ins.text })),
+    blanks,
     toExpanded: (i) => h.toExpanded(v.toExpanded(i)),
     toSource: (e) => v.toSource(h.toSource(e)),
   };
+}
+
+/**
+ * The empty lines INSIDE a tune — the ones standard ABC treats as "the tune
+ * ends here" (see completeHeader): `where: 'header'` = between the tune's
+ * fields (the engines are made to ignore it; other ABC tools will not),
+ * `where: 'body'` = an empty line in the music that is FOLLOWED by more fields
+ * or music before the next `X:` — everything after it is dropped by every
+ * engine. Trailing empty lines and those between complete tunes are not listed.
+ * @param {string} text  ABC source (`@id` prefixes allowed)
+ * @returns {{ at: number, where: 'header'|'body' }[]}  `at` = the empty line's SOURCE offset
+ */
+export function tuneBlankLines(text) {
+  return expandAbc(text).blanks;
 }
 
 /**

@@ -681,7 +681,8 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .plugin-ext-no-file { color: var(--text-muted); }
 
 /* ABC soundfont load-error banner (auto-dismissed after 8 s) */
-.abc-soundfont-error {
+.abc-soundfont-error,
+.abc-engine-warning {
   background: color-mix(in srgb, var(--warning) 15%, transparent);
   border: 1px solid var(--warning);
   color: var(--text);
