@@ -86,3 +86,87 @@ test('abc-voices: @id lines count as voice lines in the map and the tag', () => 
   // The expanded text yields the same order (so colours agree across editor + engines).
   assert.deepEqual(buildVoiceMap(expandVoices(src).text).order, ['1', '2']);
 });
+
+// ---------------------------------------------------------------------------
+// Header completion (X: / K:) — abc2svg engraves nothing without them.
+// ---------------------------------------------------------------------------
+import { completeHeader, expandAbc } from '../src/core/abc-shorthand.js';
+
+test('completeHeader: a tune with no K: gets K:C before its first music line', () => {
+  const src = 'X:1\nV:1 clef=treble\nV:2 clef=bass\n[V:1] [g,,d,,e,,] cde |\n[V:2] c,, |\n%\n[V:1] abcde |\n[V:2] bde |\n';
+  const r = completeHeader(src);
+  assert.equal(r.changed, true);
+  assert.equal(r.text, 'X:1\nV:1 clef=treble\nV:2 clef=bass\nK:C\n[V:1] [g,,d,,e,,] cde |\n[V:2] c,, |\n%\n[V:1] abcde |\n[V:2] bde |\n');
+  assert.deepEqual(r.inserted, [{ at: src.indexOf('[V:1]'), text: 'K:C\n' }]);
+});
+
+test('completeHeader: no X: at all → X:1 (and K:C when that is missing too)', () => {
+  assert.equal(completeHeader('cde |\n').text, 'X:1\nK:C\ncde |\n');
+  assert.equal(completeHeader('%%linebreak $\n% a sketch\nM:4/4\nK:G\ncde |\n').text,
+               '%%linebreak $\n% a sketch\nX:1\nM:4/4\nK:G\ncde |\n');
+  assert.equal(completeHeader('T:Tune\nV:1\n@1 cde |\n').text, 'X:1\nT:Tune\nV:1\nK:C\n@1 cde |\n');
+});
+
+test('completeHeader: a complete tune is left alone (identity maps)', () => {
+  for (const src of ['X:1\nK:C\ncde |\n', 'X:1\nT:x\nM:4/4\nK:Gm\n|: abc :|\n', '', '%%pagewidth 600\n', '---\ntitle: Intro\n---\nX:1\nK:C\nc|']) {
+    const r = completeHeader(src);
+    assert.equal(r.changed, false, JSON.stringify(src));
+    assert.equal(r.text, src);
+    assert.equal(r.toExpanded(3), 3);
+    assert.equal(r.toSource(3), 3);
+  }
+});
+
+test('completeHeader: comments, directives, blank lines and front matter are not music', () => {
+  // Only the music line triggers the K: — not the comment or directive before it.
+  const r = completeHeader('X:1\n% comment\n%%MIDI program 1\n\ncde |\n');
+  assert.equal(r.text, 'X:1\n% comment\n%%MIDI program 1\n\nK:C\ncde |\n');
+  // A leading front matter block is skipped (its `---` lines are not music).
+  assert.equal(completeHeader('---\ntitle: Intro\n---\nX:1\ncde |\n').text, '---\ntitle: Intro\n---\nX:1\nK:C\ncde |\n');
+  // Inline [K:] is not a header K:.
+  assert.equal(completeHeader('X:1\n[K:G] cde |\n').text, 'X:1\nK:C\n[K:G] cde |\n');
+});
+
+test('completeHeader: every tune of a multi-tune file is completed on its own', () => {
+  const r = completeHeader('X:1\nK:C\nc|\n\nX:2\nT:Second\nd|\n');
+  assert.equal(r.text, 'X:1\nK:C\nc|\n\nX:2\nT:Second\nK:C\nd|\n');
+});
+
+test('completeHeader: offset maps round-trip every source character', () => {
+  const src = 'T:Tune\nV:1\n[V:1] cde |\n';
+  const r = completeHeader(src);
+  const exp = r.text;
+  assert.equal(exp, 'X:1\nT:Tune\nV:1\nK:C\n[V:1] cde |\n');
+  for (let i = 0; i < src.length; i++) {
+    const e = r.toExpanded(i);
+    assert.equal(exp[e], src[i], `source ${i}`);
+    assert.equal(r.toSource(e), i, `expanded ${e}`);
+  }
+  for (let e = 1; e < exp.length; e++) assert.ok(r.toSource(e) >= r.toSource(e - 1));
+  // Inside an inserted line → the line it was inserted before.
+  assert.equal(r.toSource(exp.indexOf('X:1') + 1), 0);
+  assert.equal(r.toSource(exp.indexOf('K:C') + 2), src.indexOf('[V:1]'));
+  assert.equal(r.toSource(exp.length), src.length);
+  assert.equal(r.toExpanded(src.length), exp.length);
+});
+
+test('expandAbc: voice prefixes expanded, then headers completed, maps composed', () => {
+  const src = 'X:1\nV:1 clef=treble\nV:2 clef=bass\n@1 [g,,d,,e,,] cde |\n@2 c,, |\n%\n@1 abcde |\n@2 bde |\n';
+  const r = expandAbc(src);
+  assert.equal(r.text, 'X:1\nV:1 clef=treble\nV:2 clef=bass\nK:C\n[V:1] [g,,d,,e,,] cde |\n[V:2] c,, |\n%\n[V:1] abcde |\n[V:2] bde |\n');
+  assert.deepEqual(r.inserted, [{ at: src.indexOf('@1'), text: 'K:C\n' }]);
+  const exp = r.text;
+  for (const tok of ['g,,d,,e,,', 'cde', 'c,,', 'abcde', 'bde']) {
+    const e = exp.indexOf(tok), s = src.indexOf(tok);
+    assert.equal(r.toSource(e), s, tok);
+    assert.equal(r.toExpanded(s), e, tok);
+    assert.equal(src.slice(r.toSource(e), r.toSource(e + tok.length)), tok);
+  }
+  // Inside the inserted K:C → the `@` of the first music line.
+  assert.equal(r.toSource(exp.indexOf('K:C') + 1), src.indexOf('@1'));
+  // A complete tune: expandAbc is exactly expandVoices.
+  const plain = expandAbc('X:1\nK:C\n@1 c|\n');
+  assert.equal(plain.text, 'X:1\nK:C\n[V:1] c|\n');
+  assert.equal(plain.inserted, undefined);
+  assert.equal(expandAbc('X:1\nK:C\nc|').changed, false);
+});

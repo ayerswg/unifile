@@ -26,7 +26,7 @@ import { state } from '../ui/state.js';
 import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
-import { expandVoices, sourceLineBreaks, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
+import { expandAbc, sourceLineBreaks, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -351,7 +351,7 @@ let _sectionOffset = 0;
 // they report is in the EXPANDED text. _toDoc / _toSec are the ONE boundary
 // between that space and the editor's document offsets — use them instead of
 // adding / subtracting _sectionOffset by hand.
-let _srcMap = expandVoices('');
+let _srcMap = expandAbc('');
 
 /** Expanded-section char → document offset. */
 function _toDoc(sectionChar) { return _sectionOffset + _srcMap.toSource(sectionChar); }
@@ -366,10 +366,11 @@ async function render(rawContent, el) {
   // Stop any in-progress playback when the content changes.
   if (_synth) stopPlayback();
 
-  // Voice shorthand: `@id` line prefixes become `[V:id]` for both engines.
+  // Voice shorthand: `@id` line prefixes become `[V:id]` for both engines, and
+  // a tune missing `X:` / `K:` gets them (abc2svg draws nothing without them).
   // Everything below works in the expanded text; _toDoc/_toSec (and the maps
   // handed to the piano roll) translate at the editor boundary.
-  const srcMap = expandVoices(rawContent);
+  const srcMap = expandAbc(rawContent);
   const content = srcMap.text;
   _srcMap = srcMap;
 
@@ -446,20 +447,20 @@ async function render(rawContent, el) {
     // do not break staff lines) with abcjs's own re-wrapping (`wrap` needs a
     // staffwidth). The hidden audio/timing render never needs it.
     const abcjsVisible = !useAbc2svg() || !!tablature;
-    const wrapOpts = abcjsVisible && !sourceLineBreaks(content)
-      ? { staffwidth: Math.max(300, (el.clientWidth || 760) - 30),
-          wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }
-      : {};
+    const flowOpts = () => (sourceLineBreaks(content) ? {} : {
+      staffwidth: Math.max(300, (el.clientWidth || 760) - 30),
+      wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 },
+    });
+    const wrapOpts = abcjsVisible ? flowOpts() : {};
 
     // Declared before renderAbc so the clickListener closure can capture the
     // binding; assigned after renderAbc once we have the tuneObjects back.
     let localEngraver    = null;
     let localTuneObjects = null;
 
-    const tuneObjects = abcjs.renderAbc(container, content, {
+    const abcjsOpts = {
       responsive: 'resize',
       add_classes: true,
-      ...wrapOpts,
       ...(tablature ? { tablature } : {}),
       // abcjs highlights the clicked note (abcjs-note_selected + fill="#ff0000").
       // We tell the editor which source range to jump to, and show the play button.
@@ -484,7 +485,8 @@ async function render(rawContent, el) {
           _setNoteSelected(true); // show the play button
         }
       }
-    });
+    };
+    let tuneObjects = abcjs.renderAbc(container, content, { ...abcjsOpts, ...wrapOpts });
 
     localEngraver    = tuneObjects?.[0]?.engraver ?? null;
     localTuneObjects = tuneObjects ?? null;
@@ -529,7 +531,21 @@ async function render(rawContent, el) {
         },
       });
       if (localScore) container.style.display = 'none';
-      else engravingEl.remove();
+      else {
+        // abc2svg could not engrave this content, so the abcjs render is the
+        // score the user sees — redraw it flowing (its hidden timing render
+        // above was drawn without the re-wrap, one staff line per source
+        // line, which is not the {compose} default).
+        engravingEl.remove();
+        const flow = flowOpts();
+        if (flow.wrap) {
+          tuneObjects = abcjs.renderAbc(container, content, { ...abcjsOpts, ...flow });
+          localEngraver    = tuneObjects?.[0]?.engraver ?? null;
+          localTuneObjects = tuneObjects ?? null;
+          _engraver    = localEngraver;
+          _tuneObjects = localTuneObjects;
+        }
+      }
 
       // Watch the wrap's width and re-engrave when it differs meaningfully
       // from the width the score was engraved for (first-layout settle,
@@ -2485,7 +2501,7 @@ function _withDerivedTitle(content) {
 }
 
 async function renderToString(content) {
-  content = expandVoices(_withDerivedTitle(content)).text;
+  content = expandAbc(_withDerivedTitle(content)).text;
   const tmp = document.createElement('div');
   document.body.appendChild(tmp);
   try {
@@ -2510,7 +2526,7 @@ async function renderToString(content) {
 // ---------------------------------------------------------------------------
 
 async function exportSVG(content) {
-  content = expandVoices(_withDerivedTitle(content)).text;
+  content = expandAbc(_withDerivedTitle(content)).text;
   const tablature = parseTabDirectives(content);
   // abc2svg engraving for exports too (same engine as the on-screen score);
   // falls through to abcjs on failure, %%tablature docs, or the escape hatch.
@@ -2530,7 +2546,7 @@ async function exportSVG(content) {
 }
 
 async function exportPDF(content) {
-  content = expandVoices(_withDerivedTitle(content)).text;
+  content = expandAbc(_withDerivedTitle(content)).text;
   // ── 1. Render offscreen with oneSvgPerLine ─────────────────────────────────
   // oneSvgPerLine splits the single large SVG into one <div><svg></svg></div>
   // per staff system.  Each SVG carries a viewBox so it can be scaled by CSS
@@ -2639,7 +2655,7 @@ async function exportPDF(content) {
 
 async function exportMIDI(content) {
   // abcjs synth API for MIDI
-  const midiData = abcjs.synth.getMidiFile(expandVoices(content).text, {});
+  const midiData = abcjs.synth.getMidiFile(expandAbc(content).text, {});
   return new Blob([midiData], { type: 'audio/midi' });
 }
 
@@ -2687,7 +2703,7 @@ const ABC_HEADER_DOCS = {
   M: 'Meter, e.g. 4/4, 6/8, or C.',
   L: 'Default note length, e.g. 1/8.',
   Q: 'Tempo, e.g. 1/4=120.',
-  K: 'Key signature — required, ends the tune header. e.g. K:C, K:Gm, K:D dorian.',
+  K: 'Key signature — ends the tune header (C major assumed when missing). e.g. K:C, K:Gm, K:D dorian.',
   V: 'Voice, e.g. V:1 clef=treble.',
   P: 'Parts ordering.',
   I: 'Instruction / directive.',
@@ -3010,9 +3026,10 @@ function _unusedMarkings(region, body) {
  * unexpected characters, …).  LINE/COL are relative to the parsed body.
  */
 function _abcParseWarnings(view, bodyFrom, body, docLen) {
-  // abcjs sees the voice shorthand expanded (`@1` → `[V:1]`); lines stay 1:1
-  // and the columns map back through the expansion's offset map.
-  const ex = expandVoices(body);
+  // abcjs sees the voice shorthand expanded (`@1` → `[V:1]`) and the headers
+  // completed (an inserted `K:C` line); LINE:COL is turned into an offset in
+  // that text and mapped back through the expansion's offset map.
+  const ex = expandAbc(body);
   let tunes;
   try { tunes = abcjs.parseOnly(ex.text); } catch { return []; }
   if (!Array.isArray(tunes)) return [];
@@ -3066,10 +3083,12 @@ function abcLintSource(view) {
     // Missing required headers — anchor on the first body line.
     const firstLine = view.state.doc.lineAt(Math.min(bodyFrom, docLen));
     const anchor = { from: firstLine.from, to: Math.min(firstLine.to, firstLine.from + 1) };
+    // {compose} supplies these when they are missing (core/abc-shorthand.js
+    // completeHeader) — the tune renders; a hint, not an error.
     if (!/^\s*X:\s*\d+/m.test(body))
-      diags.push({ ...anchor, severity: 'warning', message: 'No X: (tune number) header — every ABC tune needs one.' });
+      diags.push({ ...anchor, severity: 'info', message: 'No X: (tune number) header — X:1 assumed. Standard ABC starts every tune with one.' });
     if (!/^\s*K:/m.test(body))
-      diags.push({ ...anchor, severity: 'warning', message: 'No K: (key) header — abcjs needs one to render the tune.' });
+      diags.push({ ...anchor, severity: 'info', message: 'No K: (key) header — C major assumed. K: sets the key and ends the tune header.' });
 
     diags.push(..._slurIssues(bodyFrom, body));
     diags.push(..._abcParseWarnings(view, bodyFrom, body, docLen));

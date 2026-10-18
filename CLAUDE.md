@@ -391,7 +391,22 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
   formatter adds NO ` \` continuations except where the original line continues or a `w:` lyric line
   follows it (lyrics bind to the source line above; the join keeps them on the whole line). abcjs knows
   neither `%%linebreak` nor `$`: the linter drops those two warnings. Help: "Voice Shorthand @id" and
-  "Line Flow" under Voices & layout in `DSL_HELP.abcjs`.
+  "Line Flow" under Voices & layout in `DSL_HELP.abcjs`. (3) **Header completion (2026-10,
+  `completeHeader`, composed with the prefix expansion as `expandAbc` — THE function every engine
+  call in abcjs.js goes through: render, exports, lint, MIDI).** abc2svg follows the standard to the
+  letter and SILENTLY DROPS every music line before a `K:` and every field before an `X:` (no error —
+  the tune is just empty), while abcjs renders the tune assuming C major. A sketch with `V:` lines
+  and no `K:` therefore engraved nothing in abc2svg, the app fell back to abcjs, and abcjs's hidden
+  timing render had been drawn WITHOUT the re-wrap — one staff line per source newline, the user's
+  "measures don't flow" report (real bug). Now a document with no `X:` gets `X:1` before its first
+  field/music line and a tune whose header has no `K:` gets `K:C` before its first music line (`%`
+  comments, `%%` directives, blank lines and a leading `---` front matter block are never music; an
+  inline `[K:G]` is not a header `K:`); the maps handle the inserted lines (a position inside one maps
+  to the line it was inserted before), so lines are NO LONGER 1:1 between source and expanded text —
+  the lint maps abcjs's LINE:COL to an expanded offset first, then through `toSource`. The X:/K: lint
+  diagnostics are `info` hints ("C major assumed") now, not warnings. And when abc2svg fails for any
+  other reason, the abcjs render that becomes visible is redrawn with the flow `wrap` options
+  (`flowOpts()` in `render`) so the fallback keeps the default line flow.
 - **Voice colour bars (editor.js `voiceFadeField`, 2026-10).** In a document with ≥ 2 voices every line
   of a voice carries a 3px bar in its left margin (`.cm-voice-line`, an inset box-shadow with `--vc` set
   per line — nothing moves, no gutter) and its voice tag (`@1` / `[V:1]` / `V:1`, `.cm-voice-tag`) is
