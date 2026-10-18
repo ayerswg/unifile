@@ -40,6 +40,7 @@ import { createHash } from 'crypto';
 import { execSync } from 'child_process';
 import { appName } from '../src/core/brand.js';
 import { detectCommit, detectChannel } from './build-id.mjs';
+import { toAudioSource } from './abc2svg-toaudio.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT      = join(__dirname, '..');
@@ -133,6 +134,17 @@ const abc2svgExportPlugin = {
       const src = await readFile(args.path, 'utf8');
       return {
         contents: `import abc2svg from './abc2svg-1.js';\nvar user = {};\n${src}`,
+        loader: 'js',
+      };
+    });
+    // play-1.js = ToAudio (the pure timed-event generator {compose} wants) +
+    // the Web Audio / Web MIDI players + a tail that injects a stylesheet at
+    // load. Only ToAudio is bundled: `import { ToAudio } from 'abc2svg/play-1.js'`
+    // (see build/abc2svg-toaudio.mjs for the slice and why).
+    build.onLoad({ filter: /abc2svg[\\/]play-1\.js$/ }, async (args) => {
+      const src = await readFile(args.path, 'utf8');
+      return {
+        contents: `import abc2svg from './abc2svg-1.js';\n${toAudioSource(src)}\nexport { ToAudio };\n`,
         loader: 'js',
       };
     });

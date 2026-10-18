@@ -67,7 +67,11 @@ src/
     abc-voices.js    Parses ABC voice lines (`V:`, `[V:id]`, `@id`): voiceIdOfLine / voiceTagOfLine / buildVoiceMap — shared by
                      the editor's voice colour bars + M/S marks and abcjs.js for mute/solo + the piano roll
     abc-shorthand.js {compose}'s two extensions on ABC (pure, `test/abc-shorthand.test.mjs`): the `@id` voice prefix
-                     (expandVoices → `[V:id]` + the offset maps) and the line-flow default (`%%linebreak $`)
+                     (expandVoices → `[V:id]` + the offset maps) and the line-flow default (`%%linebreak $`);
+                     completeHeader also comments out header blank lines + lists in-tune blanks (`tuneBlankLines`)
+    abc-timing.js    abc2svg's timing in the app's terms (pure, `test/abc-timing.test.mjs`): `timingFromEvents` turns
+                     play-1.js ToAudio rows into notes/rests/controls keyed by istart; `graceStartsOf` — see "abc2svg's
+                     timing travels with every engraving" in the ABC section
     assets.js        Document ASSETS (`data.assets`, images by name, base64, outside the text): naming, `![…](name)`
                      resolution, save-time pruning — Marpit-free so app.js can import it in every build
     slides/          The {slides} deck engine (pure, Node-tested): deck.js (Marpit render, `---`/`===` split, exports'
@@ -146,6 +150,10 @@ build/
                      (`npm i --no-save @marp-team/marp-core` first; web-font @imports stripped)
   gen-fa-aliases.mjs  One-off: Font Awesome's legacy icon names (FA4/FA5 → FA6) → src/core/fa-aliases.js
                      (network: `npm pack`s @fortawesome/fontawesome-free at the bundled pack's version)
+  abc2svg-toaudio.mjs  Slices `ToAudio` (the timed-event generator) out of abc2svg's play-1.js for the bundle AND
+                     the tests, with a step guard on its repeat walk (see the ABC section: "abc2svg's timing…")
+  abc2svg-node.mjs   abc2svg in Node for the tests: `loadAbc2svg()` + `engraveModel(source)` (engrave headlessly,
+                     return the first tune's ToAudio rows, voices, grace istarts, errmsg lines)
 templates/           quine.html, pwa.html, sw.js, manifest.json, icons/<abbrev>/*.png
 docs/                The website (Cloudflare Pages; rendered by render-site.mjs) + committed build artifacts
 dist/                Build output (gitignored)
@@ -365,6 +373,43 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
 - **Tablature — two directives, two engines.** `%%tablature`/`%%tab` (the abcjs pragma, ADDS a tab staff below the notation) keeps the **abcjs renderer** — render + both exports guard on `parseTabDirectives` so those docs are pixel-identical to before. abc2svg-native `%%strtab <strings>` (strtab-1.js, bundled; CONVERTS the voice into a tab staff) works in abc2svg mode — strings are listed **highest first** (`%%strtab E4 B3 G3 D3 A2 E2` = guitar). The build plugin prepends `import abc2svg…; var user = {};` to strtab-1.js (it assumes the frontends' script-tag globals, and ESM strict mode would throw on the bare `user`). Fret digits get a hardcoded white `feFlood` halo — themed via `.abc2svg-wrap feFlood { flood-color: var(--bg) }`.
 - **Verifying in the preview tools**: rAF is suspended in a hidden/unfronted browser tab — rAF-coalesced paths (reverse highlight) silently don't run, and `getBoundingClientRect` is all-zeros (cursorAt hides the bar on zero geometry rather than mispositioning). Front the tab (screenshot) before asserting on highlight state. `globalThis.__ufAbcDebug()` reports engraver/score/sym-count/offset state; `__ufAbcDebug.exportSvg/exportPrintBody` expose the export paths.
 
+- **abc2svg's timing travels with every engraving (2026-10 — the first step of the ONE-PARSER plan).** The two
+  engines read the SAME text differently and the app only noticed when one produced nothing: an empty line between
+  a tune's header fields (the user's four-voice sketch, `T:` then a blank) engraved a complete score — abc2svg ignores
+  it with "Empty line in tune header - ignored" — while abcjs, whose parse loop is literally `while (line)`, stopped
+  at it silently and timed a title and no notes; Play flipped to ⏸ over silence and the synth threw on an empty
+  buffer. So: `abc2svg-render.js engrave({ timing: true })` captures the first tune's time-sequenced model through
+  `user.get_abcmodel` and, AFTER the engraving (abc2svg's own front end, abcemb-1.js, keeps that order — ToAudio
+  relinks grace-note timing in place), runs play-1.js's `ToAudio().add(tsfirst, voice_tb)` over it. The result is
+  `score.timing` (`src/core/abc-timing.js timingFromEvents`, pure, `test/abc-timing.test.mjs`): notes / rests /
+  controls with `start` = the content-relative istart — THE SAME KEY the annotation rects carry — ms onset and
+  duration (ties joined, repeats unrolled), voice id, `grace: true` on grace notes (`graceStartsOf`, walked before
+  ToAudio); `score.errors` = abc2svg's `errmsg` lines; `score.timingTruncated` when the walk hit the step guard.
+  **Only ToAudio is bundled**: `build/abc2svg-toaudio.mjs` slices the function out of play-1.js (the rest is the
+  Audio5/Midi5 players and a tail IIFE that injects a `.abcr` stylesheet into `document` at load — it must never
+  run, it would restyle our rects) and injects a step counter into its one `while(s)` loop (`MAX_STEPS` 200k, ~0.3 s):
+  abc2svg 1.22.1's own player loops FOREVER on `|: … :| … |1 … :|2 …` (the second ending jumps back to a `|:` whose
+  `:|` jumps again). The esbuild plugin wraps the slice so `import { ToAudio } from 'abc2svg/play-1.js'` works;
+  `build/abc2svg-node.mjs engraveModel()` loads abc2svg + the same slice for Node tests (abc2svg-1.js exports under
+  CommonJS; play-1.js itself cannot load in Node). **Parity (`_engineParity`, abcjs.js, after every render):** the
+  number of distinct sounding SOURCE POSITIONS — principal notes only — on each side (abcjs's `midiPitches[].startChar`
+  vs abc2svg's `timing.notes[].start`); a difference shows a `.abc-engine-warning` banner in the preview quoting
+  abc2svg's first error, and logs both sets. Sizes only, never the positions: abcjs's startChar is the START OF THE
+  TOKEN (a leading `(`, `!deco!` or space included — the landmine above), abc2svg's istart the note letter; repeats
+  collapse to one position; ties join on both sides; abcjs realises `!trill!`/`~` as up to 16 notes that carry no
+  startChar; grace notes are rows of their own in abc2svg and ride on their principal in abcjs. A Play whose
+  timing table is empty returns without flipping the transport. **Engine differences that are NOT bugs:** the
+  default tempo without `Q:` is 120 bpm in abc2svg and 180 in abcjs, so `score.timing.totalMs` ≠ `_totalMs` until
+  playback moves over. **Blank lines:** standard ABC ends a tune at an EMPTY line (whitespace-only lines are nothing to
+  either engine). `completeHeader` turns an empty line in a tune HEADER into a `%` line for the engines (both then read
+  the whole tune — the user's document plays) and reports every in-tune blank in `blanks` (`tuneBlankLines`) for the
+  lint: header = warning (other ABC software still sees an empty tune), body followed by music = error (nothing
+  below it renders or plays, in either engine). **Next steps of the plan:** swap `_noteEvents`' consumers
+  (`_buildNoteEvents`, `_emitRollData`, `_charToMs`, `_soundingEntries`, the audition, Web MIDI, the cursor) onto
+  `score.timing`; drive abcjs's `CreateSynth` with a prebuilt `sequence` (`start`/`duration` in seconds, pass
+  `millisecondsPerMeasure: 1000` — with a sequence its `meterSize` is 1) so the offline piano stays; replace
+  `TimingCallbacks` with our own clock; abcjs then parses only `%%tablature` documents (its renderer) and the
+  decoration rescanning, the `index < endChar` pointer and the `%%linebreak` lint exceptions become deletable.
 - **Transport** (`dsl-footer.js` + abcjs.js): play/pause, seekable scrubber, current/total time. Persistent bottom bar.
   **A Play is ASYNC and shows it (2026-10, `state.abcStarting`):** `startPlayback` awaits the AudioContext resume, the
   sample decode and abcjs's `prime()` (which mixes the WHOLE tune into one buffer in JS — a second or more on a phone for

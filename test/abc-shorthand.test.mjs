@@ -119,8 +119,9 @@ test('completeHeader: a complete tune is left alone (identity maps)', () => {
 
 test('completeHeader: comments, directives, blank lines and front matter are not music', () => {
   // Only the music line triggers the K: — not the comment or directive before it.
+  // The empty line sits in the header, so it becomes a `%` line (see the blank-line tests).
   const r = completeHeader('X:1\n% comment\n%%MIDI program 1\n\ncde |\n');
-  assert.equal(r.text, 'X:1\n% comment\n%%MIDI program 1\n\nK:C\ncde |\n');
+  assert.equal(r.text, 'X:1\n% comment\n%%MIDI program 1\n%\nK:C\ncde |\n');
   // A leading front matter block is skipped (its `---` lines are not music).
   assert.equal(completeHeader('---\ntitle: Intro\n---\nX:1\ncde |\n').text, '---\ntitle: Intro\n---\nX:1\nK:C\ncde |\n');
   // Inline [K:] is not a header K:.
@@ -169,4 +170,62 @@ test('expandAbc: voice prefixes expanded, then headers completed, maps composed'
   assert.equal(plain.text, 'X:1\nK:C\n[V:1] c|\n');
   assert.equal(plain.inserted, undefined);
   assert.equal(expandAbc('X:1\nK:C\nc|').changed, false);
+});
+
+// ---------------------------------------------------------------------------
+// Blank lines inside a tune — standard ABC ends the tune there; abcjs stops at
+// the first one silently while abc2svg ignores one in the header (2026-10).
+// ---------------------------------------------------------------------------
+import { tuneBlankLines } from '../src/core/abc-shorthand.js';
+
+test('completeHeader: an empty line in the tune HEADER becomes a % line (both engines then read the whole tune)', () => {
+  const src = 'X:1\nT:Example\n\nV:1 clef=treble\nV:2 clef=bass\n\n@1 cdef |\n@2 abcd |\n';
+  const r = completeHeader(src);
+  assert.equal(r.text, 'X:1\nT:Example\n%\nV:1 clef=treble\nV:2 clef=bass\n%\nK:C\n@1 cdef |\n@2 abcd |\n');
+  assert.deepEqual(r.blanks, [{ at: src.indexOf('\n\n') + 1, where: 'header' }, { at: src.indexOf('bass\n\n') + 5, where: 'header' }]);
+  // The maps still round-trip the music: the `c` of `cdef` maps into the expanded text and back.
+  const c = src.indexOf('cdef');
+  assert.equal(r.text[r.toExpanded(c)], 'c');
+  assert.equal(r.toSource(r.toExpanded(c)), c);
+  // A position on an inserted `%` maps back to the blank line it stands for.
+  assert.equal(r.toSource(r.text.indexOf('%\nV:1')), src.indexOf('\n\n') + 1);
+});
+
+test('completeHeader: an empty line in the tune BODY ends it (left alone); listed only when music follows', () => {
+  // Music after the blank → that music is lost to every engine → reported.
+  const lost = 'X:1\nK:C\ncdef |\n\nabcd |\n';
+  assert.equal(completeHeader(lost).text, lost);
+  assert.deepEqual(completeHeader(lost).blanks, [{ at: lost.indexOf('|\n\n') + 2, where: 'body' }]);
+  // A field after the blank is lost too (abc2svg drops fields before an X:).
+  assert.deepEqual(completeHeader('X:1\nK:C\nc|\n\nW:words\n').blanks, [{ at: 11, where: 'body' }]);
+  // Trailing blank lines, blanks between complete tunes, comments/directives after the tune: fine.
+  assert.deepEqual(completeHeader('X:1\nK:C\ncdef |\n\n\n').blanks, []);
+  assert.deepEqual(completeHeader('X:1\nK:C\nc|\n\nX:2\nK:G\nd|\n').blanks, []);
+  assert.deepEqual(completeHeader('X:1\nK:C\nc|\n\n% the end\n%%MIDI program 1\n').blanks, []);
+  // Two blanks in a row before the orphaned music → the first one is reported.
+  assert.deepEqual(completeHeader('X:1\nK:C\nc|\n\n\nd|\n').blanks, [{ at: 11, where: 'body' }]);
+});
+
+test('completeHeader: whitespace-only lines are nothing to either engine (no tune end, no % line)', () => {
+  const src = 'X:1\nT:x\n  \nK:C\nc|\n \nd|\n';
+  const r = completeHeader(src);
+  assert.equal(r.changed, false);
+  assert.deepEqual(r.blanks, []);
+});
+
+test('tuneBlankLines: offsets are SOURCE offsets even with @id prefixes before them', () => {
+  const src = 'X:1\nK:C\n@1 cdef |\n@2 abcd |\n\n@1 gabc |\n';
+  assert.deepEqual(tuneBlankLines(src), [{ at: src.indexOf('|\n\n') + 2, where: 'body' }]);
+  const hdr = 'T:x\nV:1\n\n@1 cdef |\n';                 // no X: either — the header still counts
+  assert.deepEqual(tuneBlankLines(hdr), [{ at: hdr.indexOf('\n\n') + 1, where: 'header' }]);
+  assert.deepEqual(tuneBlankLines('---\ntitle: t\n---\n\nX:1\nK:C\nc|\n'), []);   // before the tune: fine
+});
+
+test('expandAbc: the header blank line is commented for the engines, blanks carry source offsets', () => {
+  const src = '@1 cdef |\n';                               // nothing to flag
+  assert.deepEqual(expandAbc(src).blanks, []);
+  const src2 = 'X:1\nV:1\n\n@1 cdef |\n';
+  const r = expandAbc(src2);
+  assert.equal(r.text, 'X:1\nV:1\n%\nK:C\n[V:1] cdef |\n');
+  assert.deepEqual(r.blanks, [{ at: 8, where: 'header' }]);
 });

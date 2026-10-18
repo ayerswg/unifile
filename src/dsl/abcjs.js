@@ -26,7 +26,7 @@ import { state } from '../ui/state.js';
 import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
-import { expandAbc, sourceLineBreaks, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
+import { expandAbc, sourceLineBreaks, tuneBlankLines, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -335,6 +335,9 @@ if (typeof globalThis !== 'undefined') {
     engraver: !!_engraver,
     a2s: !!_a2sScore,
     a2sSyms: _a2sScore?.symCount ?? null,
+    a2sNotes: _a2sScore?.timing?.notes.length ?? null,   // abc2svg's timed notes (core/abc-timing.js)
+    a2sTotalMs: _a2sScore?.timing?.totalMs ?? null,
+    a2sErrors: _a2sScore?.errors ?? null,
     a2sLive: _a2sScore ? document.contains(_a2sScore.el) : null,
     a2s_debug: _a2sScore?._debug?.() ?? null,
     sectionOffset: _sectionOffset,
@@ -614,6 +617,7 @@ async function render(rawContent, el) {
     state.emit('abc-duration', { total: _totalMs });
     state.emit('abc-range', null);
     _emitRollData();
+    _engineParity(localScore, el);
     // Score-level overlay: the playback cursor bar + range band that span the
     // staves in the render pane.  Created against the freshly-rendered SVG.
     _setupScoreCursor(container);
@@ -2042,6 +2046,54 @@ function _emitRollData() {
 }
 
 /** Total tune duration (ms) from the cached events, for the transport display. */
+/**
+ * Two engines read this tune — abc2svg draws it, abcjs times it — and when they
+ * disagree the app used to show a complete score over a player that had read
+ * nothing (an empty line between header fields: abcjs's parse loop stops at the
+ * first empty line, silently; abc2svg ignores it with a warning — real bug,
+ * 2026-10). Compare what each one found and say so in the preview.
+ *
+ * The measure is the set of SOURCE POSITIONS that sound: repeats play a note
+ * several times but it is one position, abcjs realises `!trill!` as sixteen
+ * notes with no position of their own, and both engines join a tie into one
+ * note — so the sets match on a tune both read alike and differ exactly when
+ * one of them dropped or invented music. Logged in detail on the console.
+ */
+function _engineParity(score, el) {
+  el.querySelectorAll('.abc-engine-warning').forEach(n => n.remove());
+  const timing = score?.timing;
+  if (!timing) return;                       // abcjs is the visible engraver too — nothing to compare
+  // Principal notes only: abc2svg times each grace note as a row of its own,
+  // abcjs folds them into the note they decorate (one element, one startChar).
+  const drawn = new Set(timing.notes.filter(n => !n.grace).map(n => n.start));
+  const played = new Set();
+  for (const ev of _noteEvents) {
+    for (const p of ev.midiPitches ?? []) if (p?.startChar != null) played.add(p.startChar);
+  }
+  const notes = [];
+  if (score.timingTruncated) {
+    notes.push('The repeats in this tune never end as written, so the timing was cut short.');
+  }
+  // Sizes only: abcjs's startChar is the start of the whole token (a leading
+  // `(`, `!deco!` or space included — the landmine above), abc2svg's istart the
+  // note letter, so the positions themselves never line up exactly.
+  if (drawn.size !== played.size) {
+    const first = score.errors?.map(m => String(m).replace(/^\w+:\d+:\d+\s*(Error:\s*)?/, ''))[0];
+    notes.push(
+      played.size === 0
+        ? `The score shows ${drawn.size} notes but the player found none to play.`
+        : `The score and the player read this tune differently: ${drawn.size} notes drawn, ${played.size} timed.`,
+      first ? `abc2svg says: ${first}.` : 'A blank line inside the tune is the usual cause — see the editor\'s lint.',
+    );
+    console.warn('[abcjs] engine parity:', { drawn: [...drawn], played: [...played], abc2svgErrors: score.errors });
+  }
+  if (!notes.length) return;
+  const banner = document.createElement('div');
+  banner.className = 'abc-engine-warning';
+  banner.textContent = '⚠ ' + notes.join(' ');
+  el.prepend(banner);
+}
+
 function _durationFromEvents() {
   if (!_noteEvents.length) return 0;
   const last = _noteEvents[_noteEvents.length - 1];
@@ -2323,6 +2375,12 @@ async function startPlayback(opts = {}) {
   }
 
   const noteEvents = (previewTc.noteTimings ?? []).filter(e => e.type === 'event');
+
+  // Nothing timed = nothing to play (an empty tune, or one abcjs read as empty
+  // while the score shows notes — `_engineParity` says so in the preview). Stay
+  // stopped rather than flip the transport to ⏸ over silence: the synth throws
+  // on an empty buffer ("Cannot set properties of undefined (setting 'onended')").
+  if (!noteEvents.length) return;
 
   // Char→ms mapping (via the flattened per-voice note list) is voice-aware: a
   // selection in ANY voice resolves to the right note in source order, and the
@@ -3185,6 +3243,25 @@ function _abcParseWarnings(view, bodyFrom, body, docLen) {
   return out;
 }
 
+/**
+ * Empty lines inside the tune (core/abc-shorthand.js `tuneBlankLines`). Standard
+ * ABC ends a tune at an empty line, and abcjs follows it to the letter: in the
+ * HEADER {compose} papers over it (the engines get a `%` line, so the tune renders
+ * and plays — a warning, because any other ABC software reads an empty tune); in
+ * the BODY both engines stop and everything below is lost — an error.
+ */
+function _blankLineIssues(view, bodyFrom, body) {
+  const docLen = view.state.doc.length;
+  return tuneBlankLines(body).map(({ at, where }) => {
+    const line = view.state.doc.lineAt(Math.min(bodyFrom + at, docLen));
+    return where === 'header'
+      ? { from: line.from, to: line.to, severity: 'warning',
+          message: 'Blank line inside the tune header: standard ABC ends the tune here. {compose} reads past it, but other ABC software will see an empty tune — delete the line or make it a % comment.' }
+      : { from: line.from, to: line.to, severity: 'error',
+          message: 'Blank line inside the tune: ABC ends the tune here, so nothing below it renders or plays. Delete the line or make it a % comment.' };
+  });
+}
+
 /** Whole-document linter: front-matter schema + abcjs parser + structural checks. */
 function abcLintSource(view) {
   const doc = view.state.doc.toString();
@@ -3210,6 +3287,7 @@ function abcLintSource(view) {
       diags.push({ ...anchor, severity: 'info', message: 'No K: (key) header — C major assumed. K: sets the key and ends the tune header.' });
 
     diags.push(..._slurIssues(bodyFrom, body));
+    diags.push(..._blankLineIssues(view, bodyFrom, body));
     diags.push(..._abcParseWarnings(view, bodyFrom, body, docLen));
   }
 
