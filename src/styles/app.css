@@ -1878,14 +1878,22 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .abc2svg-wrap rect.abcr.uf-range { fill-opacity: .13; }  /* playback-range band */
 /* Note highlights colour the symbol's own glyph elements (mapped per symbol in
    abc2svg-render.js), matching the old abcjs look: clicked/selected note = red,
-   sounding note = green, each with a soft glow. No invert filter here (abc2svg
+   sounding note = green, each with a glow. No invert filter here (abc2svg
    draws with currentColor), so the colours are direct — `fill` (!important
    beats presentation attributes) for filled heads/flags, `color` resolves the
-   currentColor strokes (stems, staff-relative lines). */
-.abc2svg-wrap svg .uf-hl   { fill: #ff0000 !important; color: #ff0000; filter: drop-shadow(0 0 4px #ff0000); }
-.abc2svg-wrap svg .uf-play { fill: #00c800 !important; color: #00c800; filter: drop-shadow(0 0 4px #00c800); }
-[data-theme="light"] .abc2svg-wrap svg .uf-hl   { fill: #d20f39 !important; color: #d20f39; filter: drop-shadow(0 0 4px #d20f39); }
-[data-theme="light"] .abc2svg-wrap svg .uf-play { fill: #40a02b !important; color: #40a02b; filter: drop-shadow(0 0 4px #40a02b); }
+   currentColor strokes (stems, staff-relative lines).
+   THE GLOW IS TWO LAYERS because the noteheads are <tspan>s: WebKit (every
+   iPhone browser) applies neither `filter` nor `opacity` to SVG text spans, so
+   a drop-shadow alone lit the stems and left the heads flat there. A wide
+   translucent stroke painted UNDER the glyph (`paint-order: stroke`) is a halo
+   every engine draws on text; the drop-shadow adds the soft spread where it
+   is supported (Chromium, Firefox) and is the whole glow on paths. */
+.abc2svg-wrap { --uf-hl: #ff0000; --uf-play: #00c800; }
+[data-theme="light"] .abc2svg-wrap { --uf-hl: #d20f39; --uf-play: #40a02b; }
+.abc2svg-wrap svg .uf-hl   { fill: var(--uf-hl)   !important; color: var(--uf-hl);   filter: drop-shadow(0 0 2px var(--uf-hl))   drop-shadow(0 0 6px var(--uf-hl)); }
+.abc2svg-wrap svg .uf-play { fill: var(--uf-play) !important; color: var(--uf-play); filter: drop-shadow(0 0 2px var(--uf-play)) drop-shadow(0 0 6px var(--uf-play)); }
+.abc2svg-wrap svg :is(tspan, text).uf-hl   { paint-order: stroke; stroke: var(--uf-hl);   stroke-opacity: .5; stroke-width: 3px; stroke-linejoin: round; }
+.abc2svg-wrap svg :is(tspan, text).uf-play { paint-order: stroke; stroke: var(--uf-play); stroke-opacity: .5; stroke-width: 3px; stroke-linejoin: round; }
 /* Fallback when a symbol has no mapped glyphs: tint its overlay rect instead
    (fill-opacity overrides the 0 base; the red/green fill comes from above). */
 .abc2svg-wrap svg rect.abcr.uf-hl   { fill-opacity: .3;  filter: none; }

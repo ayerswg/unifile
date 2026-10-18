@@ -130,7 +130,7 @@ export class ActionFab {
     this.el.dataset.corner = this._corner;
     this.el.dataset.view = view;
     this.el.dataset.primary = primary?.id ?? 'menu';
-    this.el.classList.toggle('playing', primary?.id === 'play' && !!state.abcPlaying);
+    this.el.classList.toggle('playing', primary?.id === 'play' && !!(state.abcPlaying || state.abcStarting));
     {
       const glyph = primary?.glyph ?? '⋯';
       this.el.innerHTML = `<span class="uf-fab-mark" aria-hidden="true">{${esc(glyph)}}</span>`;

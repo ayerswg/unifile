@@ -85,7 +85,7 @@ export function listBubbleActions(ctx = {}, view = 'editor') {
   const acts = [];
 
   const play = () => {
-    const playing = !!state.abcPlaying;
+    const playing = !!(state.abcPlaying || state.abcStarting);   // starting = the synth is priming: ⏸ already
     acts.push(mk({ id: 'play', label: playing ? 'Pause' : 'Play', key: 'Play / pause',
       glyph: playing ? '⏸' + TEXT : '▶' + TEXT, run: () => state.emit('abc-play') }));
   };

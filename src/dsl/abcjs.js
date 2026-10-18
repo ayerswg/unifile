@@ -317,7 +317,7 @@ function _watchWidth(watchEl, engravedW, stillCurrent, reengrave) {
   try {
     const check = () => {
       if (!stillCurrent()) return;
-      if (state.abcPlaying) { _a2sResizeTimer = setTimeout(check, 1000); return; }
+      if (state.abcPlaying || state.abcStarting) { _a2sResizeTimer = setTimeout(check, 1000); return; }
       const w = watchEl.clientWidth;
       if (w && Math.abs(w - engravedW) / w > 0.1) reengrave();   // re-measures and re-engraves
     };
@@ -693,7 +693,7 @@ state.on('editor-select', ({ from, to }) => {
 // this one note".  Range-play is driven solely by editor text selections.
 state.on('dsl-select', ({ from }) => {
   _lastEditorSel = { from, to: from };
-  if (state.abcPlaying) {
+  if (state.abcPlaying || state.abcStarting) {
     // Mid-playback a click on a note (score or piano roll) is a SEEK — the
     // DAW's click-to-locate: the audio, the green highlight and the cursor bar
     // all jump to that note. The editor caret is collapsed there now, so any
@@ -731,7 +731,7 @@ state.on('editor-type', ({ pos, ch }) => {
 // from the current position so the newly muted/soloed voices take effect at once.
 state.on('abc-voices-change', () => {
   _applyVoiceFade();
-  if (state.abcPlaying) {
+  if (state.abcPlaying || state.abcStarting) {
     const ms = _currentMs();
     stopPlayback({ keepPosition: true });
     startPlayback({ startMs: ms });
@@ -828,7 +828,7 @@ function _pitchesAtStart(startChar) {
  *  Consecutive cursor events inside the same token play once; `force` (preview
  *  click, fresh keystroke) always plays. */
 function _auditionAt(adjChar, { force = false } = {}) {
-  if (state.abcPlaying || !_noteEvents.length) return;
+  if (state.abcPlaying || state.abcStarting || !_noteEvents.length) return;
   const note = _flatNotes().find(n => n.startChar <= adjChar && adjChar < n.endChar);
   if (!note) { _lastAuditionChar = -1; return; }
   if (!force && note.startChar === _lastAuditionChar) return;
@@ -2143,7 +2143,7 @@ function _selectionMsRange(from, to) {
  * `from`/`to` are full-document offsets.
  */
 function _syncTransportToSelection(from, to) {
-  if (state.abcPlaying) return;
+  if (state.abcPlaying || state.abcStarting) return;
   if ((state.activeDslId ?? state.data?.dslType) !== 'abcjs') return;
   if (!_noteEvents.length) return;
 
@@ -2222,8 +2222,11 @@ function togglePlay() {
   // matter or a non-abcjs section (activeDslId !== 'abcjs'); that must NOT disable
   // the transport — startPlayback falls back to the beginning when nothing is cued.
   if (!_tuneObjects?.[0]) return;
-  if (state.abcPlaying) {
-    _pausedAtMs = _currentMs();
+  if (state.abcPlaying || state.abcStarting) {
+    // Playing → pause here. Still STARTING (the synth is priming after the
+    // previous tap) → cancel that start: it stays cued where it was going to
+    // begin, so the next tap plays from there. Never a second synth.
+    if (state.abcPlaying) _pausedAtMs = _currentMs();
     stopPlayback({ keepPosition: true });
   } else if (_selRangeMs && _pausedAtMs <= _selRangeMs.startMs + 1) {
     // A range is selected and we're still cued to its start → play just the range
@@ -2239,12 +2242,40 @@ function togglePlay() {
 function seekTo(ms) {
   ms = Math.max(0, Math.min(ms, _totalMs || ms));
   _pausedAtMs = ms;
-  if (state.abcPlaying) {
+  if (state.abcPlaying || state.abcStarting) {
     stopPlayback({ keepPosition: true });
     startPlayback({ startMs: ms });
   } else {
     _emitProgress(ms);
   }
+}
+
+// A Play tap starts the synth ASYNCHRONOUSLY: AudioContext resume, decoding the
+// piano samples, then abcjs mixing the whole tune into one buffer (`prime`) —
+// a second or more on a phone for a longer tune. Until 2026-10 nothing showed
+// during that window (▶ still up, no cursor, no highlight), so a second tap
+// came — and landed either as a PAUSE on the playback that had just begun or,
+// still inside the prime, as a SECOND startPlayback: two synths on one
+// transport ("have to tap Play twice", "no cursor, no green"). Now:
+//   • `state.abcStarting` covers the window — the transport reads as playing
+//     at once (⏸, the bubble's pulse, the cursor bar on the first note) and a
+//     tap meanwhile is a pause (togglePlay cancels the pending start);
+//   • every start carries a generation; a stop/pause/seek bumps it and the
+//     superseded start abandons itself after its next await, never installing
+//     its synth, timing callbacks or progress loop.
+let _startGen = 0;
+
+function _setStarting(v) {
+  if (!!state.abcStarting === !!v) return;
+  state.abcStarting = !!v;
+  if (v) state.emit('abc-play-state', { playing: true, starting: true });
+}
+
+/** A start that gave up before any sound: back to the stopped look. */
+function _abortStart() {
+  if (!state.abcStarting) return;
+  state.abcStarting = false;
+  state.emit('abc-play-state', { playing: false });
 }
 
 async function startPlayback(opts = {}) {
@@ -2254,6 +2285,8 @@ async function startPlayback(opts = {}) {
   if (_synth) {
     stopPlayback({ keepPosition: true });
   }
+  const gen = ++_startGen;
+  const superseded = () => gen !== _startGen;
 
   const tune = _tuneObjects[0];
   // Translate full-doc editor positions to section-relative positions so they
@@ -2321,6 +2354,13 @@ async function startPlayback(opts = {}) {
   // Bound the wall-clock visual driver to the same range end as the audio.
   _visualStopMs = stopMs;
 
+  // Feedback NOW, before the awaits below: the transport shows ⏸ / the bubble
+  // pulses, and the cursor bar + scrubber sit on the first note that will
+  // sound. The cued position is also what a pause-during-start keeps.
+  _pausedAtMs = startSeconds * 1000;
+  _setStarting(true);
+  _emitProgress(_pausedAtMs);
+
   // ── 2.5  MIDI output path (replaces the internal synth when a port is set) ──
   //
   // Route to the selected external MIDI port (e.g. IAC → Kontakt) as live
@@ -2336,6 +2376,7 @@ async function startPlayback(opts = {}) {
     });
 
     _playEl?.classList.add('abc-playing');
+    state.abcStarting = false;
     state.abcPlaying = true;
     state.emit('abc-play-state', { playing: true });
 
@@ -2370,8 +2411,10 @@ async function startPlayback(opts = {}) {
     await _audioContext.resume();
   } catch {
     _audioContext = null;
+    if (!superseded()) _abortStart();
     return;
   }
+  if (superseded()) return;
 
   if (abcjs.synth?.CreateSynth) {
     // ── 3a.  Soundfont synth path (default: bundled offline piano) ────────
@@ -2401,6 +2444,7 @@ async function startPlayback(opts = {}) {
         },
       });
       await synth.prime();
+      if (superseded()) { try { synth.stop(); } catch { /* never started */ } return; }
       _synth = synth;
     } catch (err) {
       // Synth setup failed (e.g. a custom URL is wrong / unreachable, or a note
@@ -2419,6 +2463,7 @@ async function startPlayback(opts = {}) {
       _synth = null;
       // Keep the persistent context; just make sure it's running for oscillators.
       try { await _audioContext.resume(); } catch { /* ignore */ }
+      if (superseded()) return;
     }
   }
 
@@ -2437,6 +2482,7 @@ async function startPlayback(opts = {}) {
   // ── 5.  Start ────────────────────────────────────────────────────────────
 
   _playEl?.classList.add('abc-playing');
+  state.abcStarting = false;
   state.abcPlaying = true;
   state.emit('abc-play-state', { playing: true });
 
@@ -2444,6 +2490,9 @@ async function startPlayback(opts = {}) {
   // sure it's running again right before start, or the first notes are silent.
   if (_audioContext && _audioContext.state !== 'running') {
     try { await _audioContext.resume(); } catch { /* ignore */ }
+    // A stop that landed during that resume has already torn down what we
+    // installed above (synth, timing callbacks) — nothing left to start.
+    if (superseded()) return;
   }
 
   if (typeof _synth?.start === 'function') {
@@ -2468,6 +2517,8 @@ function stopPlayback(opts = {}) {
   if (_stopping) return;
   _stopping = true;
   try {
+  _startGen++;                 // a start still priming abandons itself
+  state.abcStarting = false;
   try { _timingCallbacks?.stop(); } catch { /* ignore */ }
   _timingCallbacks = null;
   _stopProgress();

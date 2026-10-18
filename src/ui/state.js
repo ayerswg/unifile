@@ -127,6 +127,10 @@ class AppState extends EventBus {
     /** @type {boolean} Whether ABC audio is currently playing */
     this.abcPlaying = false;
 
+    /** @type {boolean} A Play is starting (the synth is priming): the transport
+     *  already reads as playing, and a tap meanwhile is a pause (abcjs.js) */
+    this.abcStarting = false;
+
     /** @type {boolean} Whether a valid ABC tune is loaded and ready to play */
     this.abcHasTune = false;
 
