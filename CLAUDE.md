@@ -64,7 +64,10 @@ src/
                      (`test/device-file.test.mjs`)
     front-matter.js  Nested-YAML-subset parser/serializer for the leading `---`…`---` block
     doc-sections.js  Parses `#!dslId@ver+ext` shebang sections
-    abc-voices.js    Parses ABC `V:` voice lines (voiceIdOfLine / buildVoiceMap) — shared by the gutter + abcjs.js for mute/solo
+    abc-voices.js    Parses ABC voice lines (`V:`, `[V:id]`, `@id`): voiceIdOfLine / voiceTagOfLine / buildVoiceMap — shared by
+                     the editor's voice colour bars + M/S marks and abcjs.js for mute/solo + the piano roll
+    abc-shorthand.js {compose}'s two extensions on ABC (pure, `test/abc-shorthand.test.mjs`): the `@id` voice prefix
+                     (expandVoices → `[V:id]` + the offset maps) and the line-flow default (`%%linebreak $`)
     assets.js        Document ASSETS (`data.assets`, images by name, base64, outside the text): naming, `![…](name)`
                      resolution, save-time pruning — Marpit-free so app.js can import it in every build
     slides/          The {slides} deck engine (pure, Node-tested): deck.js (Marpit render, `---`/`===` split, exports'
@@ -363,6 +366,39 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
 - **iOS audio**: reuse ONE persistent AudioContext (never `close()` it), unlock with a silent buffer in the user gesture, and set `navigator.audioSession.type = 'playback'` so the hardware mute switch doesn't silence it.
 - **Unified `midi.map`** (front matter): maps any abcjs marking (dynamics `ff`/`pp`, accents `>`, articulations `legato`/`pizzicato`, custom names) to a MIDI action combining `note` (keyswitch), `cc`, `program`, and a `velocity` effect. `velocity: 112`=absolute level (sticky), `0.8`=scale, `+30`=per-note bump (accents). Per-voice overrides under `midi.voices.<n>` (channel/volume(CC7)/pan(CC10)/velocity scale/map). `midi.octave` = the octave middle-C (60) is called (`c3` default = Kontakt). See README/inline docs for the full schema.
 - **abcjs quirk:** it *drops* unknown `!name!` decorations, so we scan the rendered source (`_lastAbcSource`) ourselves for markings; and abcjs reports a note's `startChar` inconsistently vs its own leading decoration, so we match tokens to notes by walking events in source order with an `index < endChar` pointer, not `≤ startChar`.
+- **Voice shorthand `@id` + line flow (2026-10, `src/core/abc-shorthand.js`, pure, `test/abc-shorthand.test.mjs`).**
+  Two unifile extensions on top of ABC, both plain text transforms so every consumer agrees:
+  (1) **`@id` at a line start = `[V:id]`** (`@1 A2 B2 |`, `@RH|c2|`; id = `[A-Za-z0-9_]+`, the voice's own
+  token; only at a line start — mid-line switches stay `[V:id]`). Chosen because `@` starts no ABC token in
+  either engine (abc2svg's char table ignores it, abcjs warns "unknown character") and a bare `id:` would
+  collide with field letters (`T:` tenor vs title, `M:` melody vs meter — real SATB/piano names).
+  `expandVoices(text)` rewrites the prefixes for the engines and returns `toExpanded` / `toSource` offset
+  maps: **the expansion is 3 chars longer per prefixed line, so every abcjs `startChar` / abc2svg `istart`
+  lives in the EXPANDED text while the editor's offsets live in the source.** `abcjs.js` keeps `_srcMap`
+  per render and `_toDoc(sectionChar)` / `_toSec(docPos)` are THE boundary (never `± _sectionOffset` by
+  hand — every click-back, highlight, audition, transport cue and the roll's edits go through them;
+  `abc-roll-data` carries `toDoc`/`fromDoc` + `rawSource` for the piano roll's freshness check, whose
+  `source` is the expanded text). Exports, `renderToString` and the linter expand too (lint maps abcjs's
+  LINE:COL back through the map; lines stay 1:1). `abc-voices.js` recognises the prefix (`voiceIdOfLine`,
+  `buildVoiceMap` — now a binary search; `voiceTagOfLine` = the token the editor tints), the tokenizer
+  styles it as a keyword, `@` at a line start completes the tune's voice ids, the formatter keeps it on
+  the first measure of its line. (2) **Line flow: the default is `%%linebreak $`** — a source newline never
+  ends a staff line, measures flow to the pane / print column / SVG width, `$` forces a break — injected
+  by `abc2svg-render.js` (the in-app prefix AND both exports, `withDefaultDirective`) unless the document
+  sets its own `%%linebreak`; `%%linebreak <EOL>` is the opt-out (`sourceLineBreaks(text)`), which the
+  abcjs fallback renderer (tablature docs / the escape hatch: abcjs's `wrap` + `staffwidth` re-wrap,
+  which ignores source newlines) and the "one measure per line" formatter follow — in flow mode the
+  formatter adds NO ` \` continuations except where the original line continues or a `w:` lyric line
+  follows it (lyrics bind to the source line above; the join keeps them on the whole line). abcjs knows
+  neither `%%linebreak` nor `$`: the linter drops those two warnings. Help: "Voice Shorthand @id" and
+  "Line Flow" under Voices & layout in `DSL_HELP.abcjs`.
+- **Voice colour bars (editor.js `voiceFadeField`, 2026-10).** In a document with ≥ 2 voices every line
+  of a voice carries a 3px bar in its left margin (`.cm-voice-line`, an inset box-shadow with `--vc` set
+  per line — nothing moves, no gutter) and its voice tag (`@1` / `[V:1]` / `V:1`, `.cm-voice-tag`) is
+  tinted the same. The colour is `voiceColorVar(order.indexOf(id))` — the SAME `--voice-N` tokens and
+  score-order index the piano roll's notes and chips use, so a voice is one colour everywhere. Tune-level
+  field lines (`K:`, `M:`, `T:` …) get no voice; `V:` and `w:`/`W:` do. Single-voice documents show
+  nothing. The field rebuilds on every doc change (it needs the whole document's voice order).
 - **Editor tokenizer + completion (`abcLanguage` / `abcBodyComplete`, fixed 2026-10).** A note is `[\^_=]{0,2}[A-Ga-g][,']*` + its length (`2`, `/2`, `3/2`, `/`) — the old regex read `b` AFTER a pitch as a flat (`Ab` is TWO notes in ABC; flats are `_B`) and knew no `^`/`_`/`=` accidentals. Inline fields `[K:G]` `[V:2]` `[M:3/4]` are one `keyword` token (their letters must not read as pitches), chord brackets / grace braces are punctuation, rests cover `z x Z X`, bars cover `|] [| || |: :| ::` and the endings `|1 [2`, tuplets `(3`, broken rhythm `> <`, the one-letter decorations (`.` `~` `H L M O P S T u v` before a note) and `\` continuations are `meta`. Completion adds: `V:` / `[V:` → the voice ids the tune declares (`abcVoiceIds`), then the voice properties (`clef= name= …`), `clef=` → the clefs, `M:` / `L:` / `Q:` → the usual values (header or inline), `[` + a letter → the inline fields, `%%` at a line start → the formatting / MIDI directives (`ABC_DIRECTIVES`, with docs); `K:` and `!…!` as before.
 
 ---
@@ -1135,7 +1171,7 @@ Institutional knowledge — **do not silently "simplify" these; each fixed a rea
 - **The phone top bar is the sole top chrome on mobile** (desktop top bar hidden). Its dropdown (`.ps-menu`) opens centred under the title; `#uf-pane-switch` needs `z-index` above `#uf-main` because it's DOM-first (paints under main otherwise). The **safe-area inset is on `#unifile-app` itself** (`padding-top: env(safe-area-inset-top)` + `background:var(--bg)` — the SAME colour as the blended bar and the page, and `theme-color` in pwa.html matches; `--bg-alt` there drew a darker band around the island — real bug; border-box keeps `--app-height`), so the bar sits below the notch. Bar is **56px portrait / 46px landscape** and hides while typing (`data-editing`). (Historical: a segmented three-tab slider with per-segment menus, and before it an auto-hiding title bar — superseded by the circles + title dropdown.)
 - **Save UX (mobile):** no banners — passive markers. The device behind (`state.needsSave`) → the dirty dot (after the title) + a **pending node** at the top of the history list (dashed hollow node: optional note + "Save as A04" with a "major" switch + Save, so a save is composed where it lands). The **"on device" marker** sits on the version the device file carries (`state.deviceFile.savedHead`). Saving lives on the action bubble in the history view (Save A04 · Save with a note… · Save as B00); the library view's bubble is New · Open from device. `commit-bar.js`, `commit-dialog.js` ("Save with message…"), the branch pill, the merge dialog and the New-document confirmation modal are gone.
 - **Document title is the single source of truth.** The centred top-bar title edits `data.title`; ABC derives its `T:` from it (a DOM heading in the live preview so char-positions still map 1:1; `_withDerivedTitle` string-injects for exports). An explicit `T:` in the source overrides. Preview re-renders on rename (`preview.js` tracks `_lastTitle`).
-- **No gutter at all (2026-10)** — no rail, no line numbers, no fold column, no active-line tint: the caret marks the line (iA Writer). Comments are highlights in the text (see Comments); the ABC M/S marks are `::before` pseudo-elements in the line's left margin. The side margin lives on `.cm-line` padding (not `.cm-content`) so selection/decoration backgrounds reach the edge.
+- **No gutter at all (2026-10)** — no rail, no line numbers, no fold column, no active-line tint: the caret marks the line (iA Writer). Comments are highlights in the text (see Comments); the ABC M/S marks are `::before` pseudo-elements in the line's left margin, and the ABC voice colour bars are inset box-shadows on the line (see "Voice colour bars"). The side margin lives on `.cm-line` padding (not `.cm-content`) so selection/decoration backgrounds reach the edge.
 - **Zoom fix:** viewport `maximum-scale=1, user-scalable=no, viewport-fit=cover`; `.cm-content`/inputs forced to `font-size:16px` to stop Safari focus-zoom.
 
 iOS-specific behavior can't be verified in the local Chromium preview — verify mechanism/geometry there, then test on-device (and remove+re-add the PWA to drop the cached service worker).

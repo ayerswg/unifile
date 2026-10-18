@@ -29,6 +29,7 @@ import abc2svg from 'abc2svg/abc2svg-1.js';
 // String-tablature module (%%strtab): self-registers into abc2svg.modules and
 // hooks every new Abc instance (pass-through when no %%strtab directive).
 import 'abc2svg/strtab-1.js';
+import { DEFAULT_LINEBREAK } from '../core/abc-shorthand.js';
 
 /** True when abc2svg is the active engraver (default; 'abcjs' opts out). */
 export function useAbc2svg() {
@@ -174,6 +175,10 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
   // editor stay in sync.
   const paneW = Math.round(el.clientWidth || el.parentElement?.clientWidth || 0);
   let prefix = '';
+  // Line flow ({compose} default, core/abc-shorthand.js): a source newline
+  // does NOT end a staff line — measures flow to the page width and `$`
+  // forces a break — unless the document sets its own %%linebreak.
+  if (!/^%%linebreak\b/m.test(content)) prefix += `%%linebreak ${DEFAULT_LINEBREAK}\n`;
   if (paneW >= 300 && !/^%%pagewidth\b/m.test(content)) {
     prefix += `%%pagewidth ${Math.min(paneW, 1600)}\n`;
     if (!/^%%leftmargin\b/m.test(content))  prefix += '%%leftmargin 14\n';
@@ -503,6 +508,7 @@ export function abc2svgExportSvg(content) {
   // renders as a tofu box. The directive's value suffixes abc2svg's class names
   // (f0x…) so they can't collide with page CSS.
   content = withDefaultDirective(content, 'fullsvg', 'x');
+  content = withDefaultDirective(content, 'linebreak', DEFAULT_LINEBREAK);   // flow, as on screen
   const { chunks } = engrave(content, { preserveSheet: true }); // no annotation rects in exports
   if (!chunks.length) return null;
   const tmp = document.createElement('div');
@@ -540,6 +546,8 @@ export function abc2svgExportPrintBody(content) {
   content = withDefaultDirective(content, 'pagewidth',   '7.5in');
   content = withDefaultDirective(content, 'leftmargin',  '0');
   content = withDefaultDirective(content, 'rightmargin', '0');
+  // Measures flow to the print column exactly as they flow to the pane.
+  content = withDefaultDirective(content, 'linebreak', DEFAULT_LINEBREAK);
   // Embed the music font in each svg — the print window is a fresh document
   // without abc2svg's injected stylesheet (see abc2svgExportSvg).
   content = withDefaultDirective(content, 'fullsvg', 'x');

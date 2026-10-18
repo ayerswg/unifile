@@ -30,7 +30,8 @@ import { state, VIEW_MODES, PANELS } from './state.js';
 import { getDSL, listDSLs, commentTokensFor } from '../dsl/registry.js';
 import { parseDocSections, activeSectionAt } from '../core/doc-sections.js';
 import { parseGlobalFrontMatter } from '../core/front-matter.js';
-import { buildVoiceMap } from '../core/abc-voices.js';
+import { buildVoiceMap, voiceTagOfLine } from '../core/abc-voices.js';
+import { voiceColorVar } from '../core/voice-colors.js';
 import { toggleCommentEdits, commentSpecFor } from '../core/line-comment.js';
 import {
   commentsExtension,
@@ -178,41 +179,70 @@ function _docVoiceMap(doc) {
   return _docVmapCache.vmap;
 }
 
-/** The voice a doc line belongs to (via `V:` lines OR inline `[V:id]`), or null. */
+/** The voice a doc line belongs to (via `V:` lines, inline `[V:id]` or the
+ *  `@id` shorthand), or null. */
 function _voiceIdAtLine(doc, line) {
   if ((state.data?.dslType) !== 'abcjs') return null;
   // Blank / `%` comment / `%%` directive lines never sound — no voice for them.
   const t = line.text.trim();
   if (t === '' || t.startsWith('%')) return null;
+  // Information fields (`K:`, `M:`, `Q:`, `T:` … — a `K:` after the header's
+  // `V:` lines, a mid-tune `M:` change) are the tune's, not a voice's; only
+  // `V:` itself and the lyric lines `w:` / `W:` belong to a voice.
+  if (/^[A-Za-z]:/.test(t) && !/^[VwW]:/.test(t)) return null;
   return _docVoiceMap(doc).at(line.from);
 }
 
 // ---------------------------------------------------------------------------
-// Muted-voice fade (editor)
+// Voice lines (editor): the colour bar + the muted-voice fade
 //
-// Lines belonging to a muted/non-soloed ABC voice are dimmed so it's clear
-// they won't sound or highlight during playback, and every line of a muted
-// (M) / soloed (S) voice carries a mark in its left margin (CSS ::before on
-// the line class — no gutter). Rebuilt on doc change and whenever the
-// mute/solo selection changes (refreshVoiceFadeEffect).
+// In a multi-voice ABC document every line that belongs to a voice carries
+// that voice's COLOUR in its left margin — a 3px bar (an inset box-shadow on
+// the line, so the text does not move) — and its voice tag (`@1`, `[V:1]`,
+// `V:1`) is tinted the same, so a score reads by colour: the piano roll's
+// notes and voice chips use the very same `--voice-N` tokens, assigned by
+// score order (core/voice-colors.js + abc-voices.js buildVoiceMap().order).
+// A single-voice document shows no bars (it would be noise on every line).
+//
+// Lines belonging to a muted/non-soloed voice are dimmed so it's clear they
+// won't sound or highlight during playback, and every line of a muted (M) /
+// soloed (S) voice carries a mark in its left margin (CSS ::before on the
+// line class — no gutter). Rebuilt on doc change and whenever the mute/solo
+// selection changes (refreshVoiceFadeEffect).
 // ---------------------------------------------------------------------------
 
 const refreshVoiceFadeEffect = StateEffect.define();
 
 function _buildVoiceFade(editorState) {
   if ((state.data?.dslType) !== 'abcjs') return Decoration.none;
-  if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return Decoration.none;
   const doc = editorState.doc;
+  const vmap = _docVoiceMap(doc);
+  const coloured = vmap.order.length >= 2;
+  if (!coloured && state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return Decoration.none;
   const builder = new RangeSetBuilder();
   for (let n = 1; n <= doc.lines; n++) {
     const line = doc.line(n);
     const id = _voiceIdAtLine(doc, line);
     if (id == null) continue;
     const cls = [];
+    let attributes;
+    if (coloured) {
+      cls.push('cm-voice-line');
+      attributes = { style: `--vc:${voiceColorVar(vmap.order.indexOf(id))}` };
+    }
     if (state.abcSoloVoices.has(id)) cls.push('cm-voice-S');
     else if (state.abcMutedVoices.has(id)) cls.push('cm-voice-M');
     if (state.isVoiceMuted(id)) cls.push('cm-voice-muted');
-    if (cls.length) builder.add(line.from, line.from, Decoration.line({ class: cls.join(' ') }));
+    if (!cls.length) continue;
+    builder.add(line.from, line.from, Decoration.line({ class: cls.join(' '), attributes }));
+    // The voice tag that names the line's voice, in the voice's colour. (A
+    // line decoration sorts before a mark at the same position — keep this
+    // order, RangeSetBuilder insists on it.)
+    const tag = coloured ? voiceTagOfLine(line.text) : null;
+    if (tag && tag.to > tag.from) {
+      builder.add(line.from + tag.from, line.from + tag.to,
+        Decoration.mark({ class: 'cm-voice-tag', attributes }));
+    }
   }
   return builder.finish();
 }

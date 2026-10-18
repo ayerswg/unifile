@@ -7,12 +7,20 @@
  * line reads as a grid without depending on the viewport width, and line diffs
  * become per-measure diffs.
  *
- * Score line breaks are preserved. ABC treats a source newline as a staff-line
- * break, so a measure that was NOT the last on its original line is emitted
- * with a trailing ` \` — the ABC line-continuation, honoured by both engraving
- * engines (abc2svg joins continued lines; abcjs rewrites `\`+newline in place,
- * keeping char offsets stable). The last measure of an original line ends the
- * staff line exactly as before. Running the formatter twice is a no-op.
+ * Line flow (core/abc-shorthand.js): by default a {compose} document FLOWS —
+ * a source newline never ends a staff line (`%%linebreak $`), so the
+ * measures simply go one per line, nothing else. A line that already ends in
+ * the ` \` continuation keeps it on every measure it is split into, and so
+ * does a line a `w:` lyric line follows: ABC binds lyrics to the source line
+ * above them, and ` \` joins lines, so the whole original line stays one
+ * lyric line. Only when the document pins `%%linebreak <EOL>` (every source
+ * line is a staff line) is every non-last measure given ` \`, which keeps the
+ * score's line breaks exactly as they were (both engines honour the
+ * continuation; abcjs rewrites `\`+newline in place, keeping char offsets
+ * stable). Running the formatter twice is a no-op either way.
+ *
+ * A `@id` voice prefix (the unifile shorthand for `[V:id]`) stays with the
+ * first measure of its line, like an inline field does.
  *
  * What counts as a measure line: anything that is not blank, a `%` comment, a
  * `#!` section marker, or an information field (`X:`, `K:`, `V:`, `w:` …), and
@@ -22,6 +30,8 @@
  * inner runs collapsed to one space) so beaming — the presence of a space
  * between two notes — is preserved while the layout is tidy.
  */
+
+import { sourceLineBreaks } from '../core/abc-shorthand.js';
 
 // Barline tokens: | || |: :| |] [| :|: — a run of | with optional leading/
 // trailing : and an optional trailing ]. Split keeps these as their own cells.
@@ -84,6 +94,9 @@ export function splitMeasures(line) {
 export function alignAbcVoices(text) {
   const lines = text.split('\n');
   const out = [];
+  // Only a document that pins source line breaks needs every split measure
+  // chained back into its staff line.
+  const keepBreaks = sourceLineBreaks(text);
 
   // Skip a leading front-matter block (`---` … `---`) verbatim — a YAML value
   // could otherwise look like a measure line (e.g. a `|` block scalar).
@@ -106,9 +119,14 @@ export function alignAbcVoices(text) {
 
     const measures = splitMeasures(body);
     if (!measures.length) { out.push(line); continue; }
+    // In flow mode the inner measures are chained only when the original line
+    // is part of a joined group: it continues, or a lyric line binds to it.
+    const lyricsFollow = /^\s*[wW]:/.test(lines[i + 1] ?? '');
+    const chainInner = keepBreaks || continued || lyricsFollow;
     measures.forEach((m, k) => {
       const last = k === measures.length - 1;
-      out.push(last && !continued ? m : `${m} \\`);
+      const cont = last ? continued : chainInner;
+      out.push(cont ? `${m} \\` : m);
     });
   }
 
