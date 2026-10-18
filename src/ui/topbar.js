@@ -1059,7 +1059,7 @@ M:4/4
 L:1/8
 K:G              &lt;- K: ends the header
 GABc d2 e2 |     &lt;- music body</code></pre>
-<p class="help-note">A document is an optional <code>---</code> <strong>front matter</strong> block, then the <strong>tune header</strong> (fields like <code>X:</code> <code>T:</code> <code>M:</code>), then the <strong>music body</strong>. <code>K:</code> is required and marks where the header ends and the notes begin.</p>`
+<p class="help-note">A document is an optional <code>---</code> <strong>front matter</strong> block, then the <strong>tune header</strong> (fields like <code>X:</code> <code>T:</code> <code>M:</code>), then the <strong>music body</strong>. <code>K:</code> marks where the header ends and the notes begin — leave it (or <code>X:</code>) out and {compose} assumes <code>X:1</code> / <code>K:C</code> (C major).`
       },
       {
         group: 'Getting started',

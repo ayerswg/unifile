@@ -28,6 +28,20 @@
  *    `%%linebreak <EOL>` (`sourceLineBreaks` reads that opt-out, so the
  *    abcjs fallback renderer and the "one measure per line" formatter follow
  *    the same rule as abc2svg).
+ *
+ * 3. HEADER COMPLETION. Standard ABC requires `X:` to open a tune and `K:` to
+ *    end its header — abc2svg honours that to the letter and SILENTLY DROPS
+ *    every music line it meets before a `K:` (and every field before an
+ *    `X:`), while abcjs renders the tune anyway, assuming C major. A sketch
+ *    like `V:1 clef=treble` / `@1 cde |` therefore engraved NOTHING in
+ *    abc2svg and the app fell back to abcjs — which, drawn as the hidden
+ *    timing render, broke a staff line at every source newline (real bug:
+ *    "the measures don't flow"). `completeHeader` supplies what is missing —
+ *    `X:1` before the first field or music line of a document with no `X:`,
+ *    `K:C` (abcjs's own default) before the first music line of a tune whose
+ *    header has no `K:` — so both engines see the same, complete tune. It is
+ *    an insertion with the same kind of offset maps as the voice prefix;
+ *    `expandAbc` composes the two and is what every engine call goes through.
  */
 
 /** `@id` at the very start of a line: the id is the voice's own token. */
@@ -104,6 +118,114 @@ export function expandVoices(text) {
       if (e < m.e + 3 + m.n) return e - GROW * k - 2; // an id character
       return e - GROW * (k + 1);                    // `]` and everything after
     },
+  };
+}
+
+// A line abc2svg reads as an information field: a letter (or `+`) and `:`.
+const FIELD_RE = /^[A-Za-z+]:/;
+
+/**
+ * Supply the tune headers standard ABC requires when the document leaves them
+ * out: `X:1` when there is no `X:` line at all (before the first field or
+ * music line), and `K:C` before the first music line of every tune whose
+ * header has no `K:`. abc2svg drops music before `K:` and fields before `X:`
+ * outright (no error — the tune is simply empty); abcjs assumes exactly these
+ * values. A leading `---` front matter block, `%` comments and `%%` directives
+ * never count as music; a blank line ends a tune (the next `X:` starts one).
+ * @param {string} text  ABC source (voice prefixes expanded or not — `@id`
+ *   lines are music either way)
+ * @returns {{ text: string, changed: boolean, inserted: {at: number, text: string}[],
+ *             toExpanded: (i: number) => number, toSource: (i: number) => number }}
+ *   `inserted` lists each insertion at its SOURCE offset. The maps are
+ *   monotone; a position inside an inserted line maps back to the insertion
+ *   point (the line it was inserted before).
+ */
+export function completeHeader(text) {
+  const src = String(text ?? '');
+  const inserted = [];
+  const lines = src.split(/(?<=\n)/);
+  let pos = 0;
+  let i = 0;
+  // A leading front matter block is not ABC.
+  if (/^---[ \t]*\r?\n?$/.test(lines[0] ?? '')) {
+    pos += lines[0].length;
+    for (i = 1; i < lines.length; i++) {
+      pos += lines[i].length;
+      if (/^---[ \t]*\r?\n?$/.test(lines[i])) { i++; break; }
+    }
+  }
+  const hasX = lines.slice(i).some((l) => /^X:/.test(l));
+  // state: 0 = outside a tune, 1 = in a tune header, 2 = in a tune body
+  let state = 0, hasK = false, firstTune = !hasX;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    const raw = line.replace(/\r?\n$/, '');
+    if (/^\s*$/.test(raw)) {               // blank: ends a tune body
+      if (state === 2) state = 0;
+    } else if (raw[0] === '%') {           // comment / directive
+      // nothing
+    } else if (/^X:/.test(raw)) {
+      state = 1; hasK = false;
+    } else if (FIELD_RE.test(raw)) {       // an information field
+      if (firstTune) { inserted.push({ at: pos, text: 'X:1\n' }); firstTune = false; state = 1; hasK = false; }
+      if (state === 1 && raw[0] === 'K') { hasK = true; state = 2; }
+    } else {                               // music
+      if (firstTune) { inserted.push({ at: pos, text: 'X:1\nK:C\n' }); firstTune = false; state = 2; hasK = true; }
+      else if (state === 1 && !hasK) { inserted.push({ at: pos, text: 'K:C\n' }); hasK = true; state = 2; }
+    }
+    pos += line.length;
+  }
+  if (!inserted.length) {
+    const id = (n) => n;
+    return { text: src, changed: false, inserted, toExpanded: id, toSource: id };
+  }
+  let out = '', last = 0, delta = 0;
+  const marks = [];                        // { s: source at, e: expanded at, n: inserted length }
+  for (const ins of inserted) {
+    out += src.slice(last, ins.at) + ins.text;
+    marks.push({ s: ins.at, e: ins.at + delta, n: ins.text.length });
+    delta += ins.text.length;
+    last = ins.at;
+  }
+  out += src.slice(last);
+  return {
+    text: out,
+    changed: true,
+    inserted,
+    toExpanded(n) {
+      let d = 0;
+      for (const m of marks) { if (m.s <= n) d += m.n; else break; }
+      return n + d;
+    },
+    toSource(e) {
+      let d = 0;
+      for (const m of marks) {
+        if (e < m.e) break;
+        if (e < m.e + m.n) return m.s;   // inside the inserted line → where it went
+        d += m.n;
+      }
+      return e - d;
+    },
+  };
+}
+
+/**
+ * The full source → engine transform: voice prefixes expanded, then the
+ * headers completed. Same shape as `expandVoices`; `toExpanded` / `toSource`
+ * compose both maps. This is THE boundary abcjs.js uses for every engine call
+ * (render, exports, lint, MIDI) so every char offset the engines report maps
+ * back to the editor through one function.
+ */
+export function expandAbc(text) {
+  const v = expandVoices(text);
+  const h = completeHeader(v.text);
+  if (!h.changed) return v;
+  return {
+    text: h.text,
+    changed: true,
+    inserted: h.inserted.map((ins) => ({ at: v.toSource(ins.at), text: ins.text })),
+    toExpanded: (i) => h.toExpanded(v.toExpanded(i)),
+    toSource: (e) => v.toSource(h.toSource(e)),
   };
 }
 
