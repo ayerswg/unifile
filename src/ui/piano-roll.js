@@ -216,7 +216,7 @@ export class PianoRoll {
       this._maybeFit();
       this._renderChips();
       this._updateTime();
-      this._updatePlayBtn(state.abcPlaying);
+      this._updatePlayBtn(state.abcPlaying || state.abcStarting);
       this._scheduleDraw();
       this._canvas.focus({ preventScroll: true });
     }
