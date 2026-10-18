@@ -306,6 +306,29 @@ let _a2sScore = null;
 let _a2sResizeObs   = null;
 let _a2sResizeTimer = 0;
 
+/**
+ * Re-engrave when `watchEl`'s width drifts >10% from `engravedW`, the width
+ * the visible score was laid out for (debounced; one observer per render —
+ * render() disconnects the previous). `stillCurrent` guards against a render
+ * that has since been replaced; during playback the check is deferred rather
+ * than dropped, so a pane switched to mid-tune still reflows when it stops.
+ */
+function _watchWidth(watchEl, engravedW, stillCurrent, reengrave) {
+  try {
+    const check = () => {
+      if (!stillCurrent()) return;
+      if (state.abcPlaying) { _a2sResizeTimer = setTimeout(check, 1000); return; }
+      const w = watchEl.clientWidth;
+      if (w && Math.abs(w - engravedW) / w > 0.1) reengrave();   // re-measures and re-engraves
+    };
+    _a2sResizeObs = new ResizeObserver(() => {
+      clearTimeout(_a2sResizeTimer);
+      _a2sResizeTimer = setTimeout(check, 250);
+    });
+    _a2sResizeObs.observe(watchEl);
+  } catch { /* ResizeObserver unsupported — engraved width stays as-is */ }
+}
+
 // Debug introspection for preview automation (harmless in production).
 if (typeof globalThis !== 'undefined') {
   globalThis.__ufAbcDebug = Object.assign(() => ({
@@ -447,10 +470,18 @@ async function render(rawContent, el) {
     // do not break staff lines) with abcjs's own re-wrapping (`wrap` needs a
     // staffwidth). The hidden audio/timing render never needs it.
     const abcjsVisible = !useAbc2svg() || !!tablature;
-    const flowOpts = () => (sourceLineBreaks(content) ? {} : {
-      staffwidth: Math.max(300, (el.clientWidth || 760) - 30),
-      wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 },
-    });
+    // The width a flowing abcjs score is engraved for; null when the source's
+    // own line breaks rule (then width does not change the layout). A hidden
+    // pane measures 0 → the 760 default, re-engraved once it shows.
+    let engravedForW = null;
+    const flowOpts = () => {
+      if (sourceLineBreaks(content)) return {};
+      engravedForW = el.clientWidth || 760;
+      return {
+        staffwidth: Math.max(300, engravedForW - 30),
+        wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 },
+      };
+    };
     const wrapOpts = abcjsVisible ? flowOpts() : {};
 
     // Declared before renderAbc so the clickListener closure can capture the
@@ -549,23 +580,17 @@ async function render(rawContent, el) {
 
       // Watch the wrap's width and re-engrave when it differs meaningfully
       // from the width the score was engraved for (first-layout settle,
-      // window/split resize). pageWidth is null when the doc pins its own
-      // %%pagewidth — then the layout is the author's, don't second-guess it.
-      if (localScore?.pageWidth) {
-        try {
-          _a2sResizeObs = new ResizeObserver(() => {
-            clearTimeout(_a2sResizeTimer);
-            _a2sResizeTimer = setTimeout(() => {
-              if (_a2sScore !== localScore || state.abcPlaying) return;
-              const w = engravingEl.clientWidth;
-              if (w && Math.abs(w - localScore.pageWidth) / w > 0.1) {
-                render(rawContent, el);   // re-measures and re-engraves
-              }
-            }, 250);
-          });
-          _a2sResizeObs.observe(engravingEl);
-        } catch { /* ResizeObserver unsupported — engraved width stays as-is */ }
-      }
+      // window/split resize, the phone's render pane appearing — it is
+      // display:none while the editor shows, so the render that ran behind
+      // it measured 0 and engraved the default page). pageWidth is null when
+      // the doc pins its own %%pagewidth — then the layout is the author's,
+      // don't second-guess it.
+      if (localScore?.pageWidth) _watchWidth(engravingEl, localScore.pageWidth, () => _a2sScore === localScore, () => render(rawContent, el));
+      else if (!localScore && engravedForW) _watchWidth(container, engravedForW, () => _playEl === container, () => render(rawContent, el));
+    } else if (engravedForW) {
+      // The abcjs render IS the score (tablature docs, the escape hatch):
+      // the same re-engrave on a meaningful width change.
+      _watchWidth(container, engravedForW, () => _playEl === container, () => render(rawContent, el));
     }
     _a2sScore = localScore;
 
