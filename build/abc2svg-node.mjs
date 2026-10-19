@@ -48,7 +48,9 @@ export function engraveModel(source) {
   let model = null;
   const user = {
     read_file: () => '',
-    errmsg: (m) => errors.push(String(m)),
+    // abc2svg calls errmsg(text, line, col): text = "fname:LINE:COL Error: …",
+    // line/col 0-based, col −1 when unknown (see core/abc-timing.js parseErrmsg).
+    errmsg: (msg, l, c) => errors.push({ msg: String(msg), l, c }),
     img_out: (s) => chunks.push(s),
     get_abcmodel: (tsfirst, voice_tb) => { if (!model) model = { tsfirst, voice_tb }; },
   };

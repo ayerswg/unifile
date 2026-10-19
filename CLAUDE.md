@@ -69,9 +69,12 @@ src/
     abc-shorthand.js {compose}'s two extensions on ABC (pure, `test/abc-shorthand.test.mjs`): the `@id` voice prefix
                      (expandVoices → `[V:id]` + the offset maps) and the line-flow default (`%%linebreak $`);
                      completeHeader also comments out header blank lines + lists in-tune blanks (`tuneBlankLines`)
-    abc-timing.js    abc2svg's timing in the app's terms (pure, `test/abc-timing.test.mjs`): `timingFromEvents` turns
-                     play-1.js ToAudio rows into notes/rests/controls keyed by istart; `graceStartsOf` — see "abc2svg's
-                     timing travels with every engraving" in the ABC section
+    abc-timing.js    abc2svg's timing in the app's terms (pure, `test/abc-timing.test.mjs`): `modelInfo` (token ends,
+                     written lengths, tempo, grace istarts, meter), `timingFromEvents` (ToAudio rows → notes/rests/
+                     controls keyed by istart), `momentsFromTiming` (abcjs's noteTimings shape for the consumers),
+                     `sequenceFromTiming` (CreateSynth's input), `parseErrmsg` (abc2svg's errmsg → an editor diagnostic)
+    midi-file.js     Standard MIDI File (format 1, one tick = one ms) from abc2svg's timing — the {compose} MIDI export
+                     (pure, `test/midi-file.test.mjs`)
     assets.js        Document ASSETS (`data.assets`, images by name, base64, outside the text): naming, `![…](name)`
                      resolution, save-time pruning — Marpit-free so app.js can import it in every build
     slides/          The {slides} deck engine (pure, Node-tested): deck.js (Marpit render, `---`/`===` split, exports'
@@ -355,9 +358,20 @@ The leading `---`…`---` block. **Custom minimal YAML-subset parser** (not a re
 
 The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont committed to `src/assets/piano-soundfont.js`; `abcjs-piano-loader.js` is a **CommonJS** drop-in for abcjs's internal `./load-note` — must stay CJS or abcjs's `require()` interop breaks).
 
-### Dual-engine engraving: abc2svg draws, abcjs plays (2026-07)
+### One parser: abc2svg draws AND times the score; abcjs mixes the piano and draws tablature (2026-07 → 2026-10)
 
-**abc2svg** (Moine's JS successor to abcm2ps; `dsl/abc2svg-render.js`) is the **default score renderer** — visibly better beams/slurs/optical spacing than abcjs. **abcjs still parses the same source for everything audible**: `render()` runs `abcjs.renderAbc` into a *hidden* `.abc-preview-wrap` (keeping engraver/TimingCallbacks/synth/noteTimings alive), then abc2svg engraves the visible `.abc2svg-wrap`. If abc2svg fails on some content, the abcjs render is shown instead. Escape hatch: `localStorage.uf_engraver='abcjs'` (no rebuild).
+**abc2svg** (Moine's JS successor to abcm2ps; `dsl/abc2svg-render.js`) is the **score renderer** — visibly better
+beams/slurs/optical spacing than abcjs — and, since the one-parser work (2026-10, three PRs: #57 timing + parity,
+#58 the swap, then this), **the only engine that reads the text on the normal path**: `render()` engraves the
+visible `.abc2svg-wrap` and the SAME parse yields `score.timing` (when every note sounds), the lint's diagnostics
+(`abc2svgDiagnostics`), the MIDI export (`abc2svgTiming` → `core/midi-file.js`) and the quine's static preview.
+**abcjs parses only when it is the engraver the user sees**: `%%tablature` documents, the escape hatch
+(`localStorage.uf_engraver='abcjs'`, no rebuild) and content abc2svg cannot engrave — then abcjs draws into
+`.abc-preview-wrap` and its own timing table / synth input / `getMidiFile` are used. Otherwise abcjs is a sample
+player: `CreateSynth` mixes the offline piano at the times abc2svg says (a prebuilt `sequence`), `playEvent` sounds
+the audition. The hidden per-keystroke `abcjs.renderAbc` that fed the transport until 2026-10 is gone — one parse
+per render, and a tune that abcjs read differently (the blank-line bug) can no longer silently play nothing while
+drawing fine.
 
 - **Bundling**: abc2svg is a `<script>`-tag lib (global `abc2svg`, no exports); `abc2svgExportPlugin` in build.mjs appends `export default abc2svg;` to `abc2svg-1.js` at load time. ~200 KB gzipped bundle growth.
 - **Interactivity = annotation rects** (the pattern abc2svg's own `edit-1.js` uses): a `user.anno_stop` callback per engraved symbol emits an invisible `<rect class="abcr _<istart>_">` via `abc.out_svg`/`out_sxsy`/`sh` (these handle staff-coord scaling — don't hand-roll). The rects drive click→source, selection highlight (`.uf-hl`), playback highlight (`.uf-play`), range band (`.uf-range`), muted-voice dim (`.uf-muted`), and the cursor bar (`.uf-a2s-cursor`, an absolutely-positioned div). **Pair rects↔annos by the istart in the class name, NOT emission order** — abc2svg buffers SVG per staff and joins at flush, reordering rects.
@@ -431,10 +445,29 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
   `score` is null → `_noteEvents = _abcjsEvents`). **Default tempo is now abc2svg's 120 bpm** for a tune with no
   `Q:` (abcjs's was 180); dynamics (`!p!` `!ff!`) no longer shape the internal piano's velocity (ToAudio carries
   none — the Web MIDI `midi.map` velocity path is unaffected). A score abc2svg timed as empty plays nothing even if
-  abcjs read notes: what you see is what plays, the parity banner says why. **Still to do:** drop the hidden abcjs
-  render for non-tablature documents (needs a MIDI-file writer from `timing` and the keyswitch plan's voice identity
-  from `_voiceMap`), then the decoration rescanning, the `index < endChar` pointer and the `%%linebreak` lint
-  exceptions go.
+  abcjs read notes: what you see is what plays, the preview notice says why.
+- **ONE PARSER, FULL STOP (2026-10, the third PR): no abcjs parse unless abcjs draws.** `render()` calls
+  `abcjs.renderAbc` only when `abcjsVisible` (tablature / the escape hatch) or after abc2svg failed to engrave
+  (`adoptAbcjs()`); `_setHasTune(localScore || tune)`, and `togglePlay`/`startPlayback` accept either engine's
+  timing. What had to move off abcjs's tune object: (1) **`_buildKeyswitchPlan()`** reads its notes from the timing
+  table (`_noteEvents`, de-duplicated per token), the voice number from `_voiceMap.order` (the piano roll's / colour
+  bars' index, 1-based like `midi.voices.<n>`), the `!name!` marks from the source scan as before and the one-letter
+  shorthands (`.` `~` `H L M O P S T u v`, `SHORTHAND_DECO`) from the char before the note's token — abcjs's
+  `el.decoration` used to supply those; (2) **MIDI export = `core/midi-file.js midiFileFromTiming`** (pure,
+  `test/midi-file.test.mjs`): SMF format 1, 500 ppq at 500 000 µs/♩ so ONE TICK IS ONE MILLISECOND (tempo changes are
+  already baked into ToAudio's ms), a tempo + title track, one track per voice with its `%%MIDI program` and name,
+  offs sorted before ons at the same tick, channel 9 skipped, `%%MIDI control` rows as CCs, grace notes in; fed by
+  `abc2svgTiming(expanded)` (headless engrave, `preserveSheet`), abcjs's `getMidiFile` only when abc2svg timed nothing;
+  (3) **the lint's parser diagnostics are abc2svg's** (`abc2svgDiagnostics` → `_abcParseWarnings`): `user.errmsg(text,
+  line, col)` is captured STRUCTURED (`{msg, l, c}`, 0-based; `c = −1` = no column and then `l` is the line AFTER
+  the problem — "Empty line in tune header", "No end of tuplet" — see `parseErrmsg` in core/abc-timing.js, which also
+  subtracts the injected prefix lines and downgrades "… - ignored" to a warning); the abcjs-only exceptions
+  (`%%linebreak`, `$`) are gone with abcjs's linter; (4) **`_engineParity` became `_scoreNotices`**: with one parser
+  there is nothing to compare, so the preview banner now shows abc2svg's errors (first two, with line numbers), a
+  truncated repeat walk, and a score with glyphs but no timed note; (5) **`renderToString`** (the quine's static
+  preview) is `abc2svgExportSvg` in an `.abc2svg-wrap`. `__ufAbcDebug.abcjsRendered()` / `.exportMidi` for
+  Playwright. Verified: the normal path renders with NO abcjs svg, plays and ends; the escape hatch still draws, times
+  and plays with abcjs (its 180 bpm default shows there).
 - **Transport** (`dsl-footer.js` + abcjs.js): play/pause, seekable scrubber, current/total time. Persistent bottom bar.
   **A Play is ASYNC and shows it (2026-10, `state.abcStarting`):** `startPlayback` awaits the AudioContext resume, the
   sample decode and abcjs's `prime()` (which mixes the WHOLE tune into one buffer in JS — a second or more on a phone for
@@ -453,7 +486,7 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
 - **Web MIDI output** (Chromium-only): route playback to an external instrument (e.g. Kontakt via IAC) *instead of* the internal piano. Picker is in **Settings → Audio output**. `_startMidiPlayback` builds a time-sorted note queue pumped with look-ahead timestamps; panic (all-notes-off) on stop.
 - **iOS audio**: reuse ONE persistent AudioContext (never `close()` it), unlock with a silent buffer in the user gesture, and set `navigator.audioSession.type = 'playback'` so the hardware mute switch doesn't silence it.
 - **Unified `midi.map`** (front matter): maps any abcjs marking (dynamics `ff`/`pp`, accents `>`, articulations `legato`/`pizzicato`, custom names) to a MIDI action combining `note` (keyswitch), `cc`, `program`, and a `velocity` effect. `velocity: 112`=absolute level (sticky), `0.8`=scale, `+30`=per-note bump (accents). Per-voice overrides under `midi.voices.<n>` (channel/volume(CC7)/pan(CC10)/velocity scale/map). `midi.octave` = the octave middle-C (60) is called (`c3` default = Kontakt). See README/inline docs for the full schema.
-- **abcjs quirk:** it *drops* unknown `!name!` decorations, so we scan the rendered source (`_lastAbcSource`) ourselves for markings; and abcjs reports a note's `startChar` inconsistently vs its own leading decoration, so we match tokens to notes by walking events in source order with an `index < endChar` pointer, not `≤ startChar`.
+- **Markings come from the SOURCE, matched to notes by containment.** `_buildKeyswitchPlan` scans the rendered source (`_lastAbcSource`) for `!name!` tokens and the one-letter shorthands and assigns each to the timing table's note whose token contains it, else the next note (`noteForIndex`) — no engine hands us decorations (abcjs *drops* unknown `!name!` ones; abc2svg's rows carry none). Historical landmine, still true on the abcjs path (tablature, the escape hatch): abcjs's `startChar` is the token START (a leading `(`, `!deco!` or space included) while abc2svg's istart is the note letter, so never match positions by equality across the two.
 - **Voice shorthand `@id` + line flow (2026-10, `src/core/abc-shorthand.js`, pure, `test/abc-shorthand.test.mjs`).**
   Two unifile extensions on top of ABC, both plain text transforms so every consumer agrees:
   (1) **`@id` at a line start = `[V:id]`** (`@1 A2 B2 |`, `@RH|c2|`; id = `[A-Za-z0-9_]+`, the voice's own
@@ -1329,7 +1362,7 @@ Version is the **NEWER of the latest git tag and `package.json`'s `version`** (`
 
 - **`state.on(...)` must be called directly**, not `this._unsub?.push?.(state.on(...))` — the optional-chaining short-circuit skips evaluating the `state.on` argument, so the listener never registers. App is a forever-singleton and doesn't track unsubscribers.
 - **`RangeSetBuilder` requires ranges added in sorted `from` order** — e.g. in front-matter highlighting, add the key mark before the trailing-comment mark.
-- **abcjs drops `!name!` decorations** and reports note `startChar` inconsistently (see ABC section).
+- **abcjs parses only when it draws** (`%%tablature`, the escape hatch, an abc2svg failure); everything timed, the lint and the MIDI export come from abc2svg's parse (see ABC section). On the abcjs path its `startChar` is a token START, not the note letter.
 - **Front-matter values with inline `# comments`** must be stripped (whitespace-preceded `#` only, to preserve `C#3`).
 - **iOS**: none of the mobile viewport hacks are optional (see Mobile section). The `.unifile.json`/quine data must round-trip; the model picker re-serializes the whole front matter.
 - **Quine grep:** code strings are gzip+base64'd inside `.html` quines — grep the PWA `app.js` to confirm a build contains something.
