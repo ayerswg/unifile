@@ -27,6 +27,7 @@ import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matte
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
 import { expandAbc, sourceLineBreaks, tuneBlankLines, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
+import { momentsFromTiming, sequenceFromTiming } from '../core/abc-timing.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -356,7 +357,6 @@ function _rangeHighlightNow(adjFrom, adjTo) {
 // Active playback handles (null when not playing).
 // _synth is used as a boolean sentinel — truthy while playing.
 let _synth = null;
-let _timingCallbacks = null;
 let _audioContext = null;
 // iOS: backgrounding the app interrupts the audio session and leaves the
 // AudioContext dead — resume() reports success but no sound comes out until the
@@ -608,8 +608,7 @@ async function render(rawContent, el) {
 
     // Transport: build the note-timing table (drives duration, the scrubber, and
     // char→ms mapping for selection-driven seeking) and reset position.
-    if (tuneObjects?.[0]) _buildNoteEvents(tuneObjects[0]);
-    else _noteEvents = [];
+    _buildNoteEvents(tuneObjects?.[0] ?? null, localScore);
     _totalMs = _durationFromEvents();
     _pausedAtMs = 0;
     _selRangeMs = null;
@@ -1280,7 +1279,11 @@ function _buildKeyswitchPlan(tune) {
           }
   } catch { /* tolerate unexpected shapes */ }
   const svToVoice = new Map([...svKeys].sort((a, b) => a - b).map((k, i) => [k, i + 1]));
-  const charToVoice = (sc) => svToVoice.get(notes.find(n => n.startChar === sc)?.sv) ?? 1;
+  // Looked up by ANY char inside the note's token: the timing table's starts are
+  // abc2svg's (the note letter) while abcjs's startChar is the token's start
+  // (a leading `(`, `!deco!` or space included), so exact equality never holds.
+  const noteAt = (sc) => notes.find(n => n.startChar <= sc && sc < n.endChar) ?? notes.find(n => n.startChar === sc) ?? null;
+  const charToVoice = (sc) => svToVoice.get(noteAt(sc)?.sv) ?? 1;
 
   // Assign each token to the note whose span contains it (else the next note),
   // so a `!name!` in one voice's line doesn't leak to another.
@@ -1314,6 +1317,8 @@ function _buildKeyswitchPlan(tune) {
     leadMs, hold, slurName, globalMap,
     charToVoice, channelForVoice, velScaleForVoice, entryFor,
     noteMarks,
+    /** The marks of the note whose token contains `sc` (see noteAt). */
+    marksFor: (sc) => noteMarks.get(noteAt(sc)?.startChar ?? sc) ?? noteMarks.get(sc),
     voiceMix: voiceConfig,   // Map<vn,{channel,volume,pan,velScale,map}>
   };
 }
@@ -1373,7 +1378,7 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopMs, meterSize, ks
       if (ksPlan && sc !== st.lastSc) {
         // Process this note's markings once (not per chord-pitch), in source order.
         st.lastSc = sc;
-        for (const name of ksPlan.noteMarks.get(sc) ?? []) {
+        for (const name of ksPlan.marksFor(sc) ?? []) {
           const e = ksPlan.entryFor(voice, name);
           if (!e) continue;
           if (_isSwitch(e)) st.artic = name;       // sticky articulation switch
@@ -1382,7 +1387,7 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopMs, meterSize, ks
       }
       // Accent-type bumps apply to THIS note only (re-read each pitch is fine).
       if (ksPlan) {
-        for (const name of ksPlan.noteMarks.get(sc) ?? []) {
+        for (const name of ksPlan.marksFor(sc) ?? []) {
           const e = ksPlan.entryFor(voice, name);
           if (e?.velBump) bump += e.velBump;
         }
@@ -1469,12 +1474,12 @@ function _stopMidiPlayback() {
 }
 
 // ---------------------------------------------------------------------------
-// Visual feedback callback (shared by audio + MIDI paths)
+// Visual feedback (shared by the synth, oscillator and MIDI paths)
 //
-// abcjs TimingCallbacks drives the moving cursor regardless of how sound is
-// produced.  This factory builds the per-event handler: it stops at the range
-// end, highlights the sounding SVG notes, and emits 'abc-play-cursor' so the
-// editor colours the current notes green.
+// The transport's wall-clock progress loop (_startProgress) drives the moving
+// cursor regardless of how sound is produced: _applyVisualAt picks the moment
+// sounding now from the timing table, _highlightEvent lights its glyphs in the
+// score and emits 'abc-play-cursor' so the editor colours the notes green.
 // ---------------------------------------------------------------------------
 /** Advance `from` past leading whitespace, `!…!` decorations and `.` so the
  *  play-cursor highlight lands on the note itself, not its preceding marks. */
@@ -1604,16 +1609,9 @@ function _applyVisualAt(targetMs) {
   _highlightEvent(idx >= 0 ? _noteEvents[idx] : null);
 }
 
-// abcjs TimingCallbacks still runs during playback to detect the end of the tune
-// and the range stop point; the visual cursor is handled by _applyVisualAt.
-function _makeVisualEventCallback(stopMs) {
-  return (event) => {
-    if (!event) { stopPlayback(); return; }
-    // Range mode: stop once the moment's onset reaches the selection end (time-
-    // based, so a range confined to one voice still stops all voices together).
-    if (stopMs !== null && event.milliseconds >= stopMs - 0.5) { stopPlayback(); return; }
-  };
-}
+// The end of a run (the range's end, the tune's end) is detected by the same
+// progress loop (_startProgress) — abcjs's TimingCallbacks, which used to fire
+// it, are gone since the timing table comes from abc2svg (2026-10).
 
 const _SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -1964,21 +1962,41 @@ function _acquireAudioContext() {
 }
 
 
-/** Build the note-timing table for a tune and cache it in `_noteEvents`.
- *  setUpAudio() populates midiPitches; TimingCallbacks turns them into events
- *  carrying `milliseconds` + section-relative startChar/endChar (or the *Array
- *  forms for multi-voice moments). */
-function _buildNoteEvents(tune) {
-  try {
-    tune.setUpAudio({});
-    const tc = new abcjs.TimingCallbacks(tune, { eventCallback: () => {} });
-    _noteEvents = (tc.noteTimings ?? []).filter(e => e.type === 'event');
-    const mf = tune.getMeterFraction?.() ?? { num: 4, den: 4 };
-    _meterSize = (mf.num / mf.den) || 1;
-    _meterFrac = mf;
-  } catch { _noteEvents = []; }
+/**
+ * Build the note-timing table (`_noteEvents`) for this render.
+ *
+ * Its SOURCE is abc2svg (2026-10, the one-parser work): `score.timing` is
+ * derived from the very model abc2svg drew, so what you see is what plays —
+ * the transport, the cursor bar, the green highlight, seek, the audition, the
+ * piano roll, Web MIDI and the synth all read this one table.
+ * `momentsFromTiming` keeps abcjs's `noteTimings` shape (one MOMENT per onset,
+ * `startCharArray` / `midiPitches` / `millisecondsPerMeasure`…), which is why
+ * none of those consumers changed. abcjs's own table is still built: it is the
+ * other side of the parity check (`_engineParity`), and THE table when abcjs is
+ * the visible engraver (`%%tablature` documents, the escape hatch — no abc2svg
+ * score then). `score` is null in that case.
+ */
+let _abcjsEvents = [];
+function _buildNoteEvents(tune, score) {
+  _abcjsEvents = [];
+  let mf = null;
+  if (tune) {
+    try {
+      tune.setUpAudio({});
+      const tc = new abcjs.TimingCallbacks(tune, { eventCallback: () => {} });
+      _abcjsEvents = (tc.noteTimings ?? []).filter(e => e.type === 'event');
+      mf = tune.getMeterFraction?.() ?? null;
+    } catch { _abcjsEvents = []; }
+  }
+  if (!mf || !(mf.num > 0 && mf.den > 0)) mf = score?.meter ?? { num: 4, den: 4 };
+  _meterFrac = mf;
+  _meterSize = (mf.num / mf.den) || 1;
+  _noteEvents = score?.timing ? momentsFromTiming(score.timing, { meterSize: _meterSize }) : _abcjsEvents;
+  _timingEndMs = score?.timing?.totalMs ?? 0;
   _lastAuditionChar = -1;   // fresh table — cursor audition dedupe restarts
 }
+/** Where the last note stops SOUNDING per abc2svg's timing (0 when unknown) — the tune's true end. */
+let _timingEndMs = 0;
 
 /**
  * Publish the per-render note table the piano roll draws from.  One entry per
@@ -2067,7 +2085,7 @@ function _engineParity(score, el) {
   // abcjs folds them into the note they decorate (one element, one startChar).
   const drawn = new Set(timing.notes.filter(n => !n.grace).map(n => n.start));
   const played = new Set();
-  for (const ev of _noteEvents) {
+  for (const ev of _abcjsEvents) {
     for (const p of ev.midiPitches ?? []) if (p?.startChar != null) played.add(p.startChar);
   }
   const notes = [];
@@ -2098,9 +2116,11 @@ function _durationFromEvents() {
   if (!_noteEvents.length) return 0;
   const last = _noteEvents[_noteEvents.length - 1];
   // `milliseconds` is the start of the last event; add ~one beat so the bar
-  // reaches the end as the final note rings out.
+  // reaches the end as the final note rings out — but never end before the last
+  // note stops sounding (abc2svg's timing knows; the progress loop stops the run
+  // shortly after this, so a long final note must be allowed to finish).
   const beat = last.millisecondsPerMeasure ? last.millisecondsPerMeasure / 4 : 400;
-  return Math.round(last.milliseconds + beat);
+  return Math.round(Math.max(last.milliseconds + beat, _timingEndMs));
 }
 
 // Flatten multi-voice note events into per-voice { startChar, endChar, ms }
@@ -2245,6 +2265,13 @@ function _startProgress(offsetMs) {
     _emitProgress(clamped);
     // Drive the note highlight a small lead ahead of the audio position.
     _applyVisualAt(clamped + VISUAL_LEAD_MS);
+    // End of the run (this used to be abcjs's TimingCallbacks' job): a range
+    // stops exactly at its end onset — time-based, so a range confined to one
+    // voice stops every voice together; the whole tune gets a short grace past
+    // its last onset so the synth's own onEnded (buffer end + fade) wins when
+    // it fires first, and the oscillator / Web MIDI paths still end on their own.
+    const over = _visualStopMs !== null ? ms >= _visualStopMs - 0.5 : (_totalMs > 0 && ms >= _totalMs + 300);
+    if (over && state.abcPlaying) stopPlayback();
   };
   const raf = () => { tick(); if (state.abcPlaying) _progressRaf = requestAnimationFrame(raf); };
   // setTimeout jogger: keeps the cursor + highlight moving when rAF is throttled
@@ -2355,26 +2382,12 @@ async function startPlayback(opts = {}) {
   // document value is always seen.
   const soundfontUrl = state.data?.pluginExtensions?.abcjs?.['soundfont-url']?.value ?? null;
 
-  // ── 1.  Populate midiPitches by running the MIDI flattener ───────────────
-  //
-  // tune.setUpAudio() runs the sequencer + flattener which mutates each note's
-  // abcelem.midiPitches array.  TimingCallbacks reads those when it builds its
-  // noteTimings, so this MUST be called before creating any TimingCallbacks.
-  try { tune.setUpAudio({}); } catch { /* best-effort — midiPitches may stay empty */ }
-
-  // ── 2.  Determine start seconds and optional stop ms ─────────────────────
+  // ── 1.  The timing table — built per render from abc2svg's model, see
+  //        _buildNoteEvents (abcjs's own table only when abcjs drew the score).
 
   let startSeconds = 0;
   let stopMs       = null;
-
-  let previewTc;
-  try {
-    previewTc = new abcjs.TimingCallbacks(tune, { eventCallback: () => {} });
-  } catch {
-    return; // tune may be malformed
-  }
-
-  const noteEvents = (previewTc.noteTimings ?? []).filter(e => e.type === 'event');
+  const noteEvents = _noteEvents;
 
   // Nothing timed = nothing to play (an empty tune, or one abcjs read as empty
   // while the score shows notes — `_engineParity` says so in the preview). Stay
@@ -2426,22 +2439,14 @@ async function startPlayback(opts = {}) {
   // external instrument makes the sound; we only drive the visual cursor.
   const midiOut = _resolveMidiOut();
   if (midiOut) {
-    const mf = tune.getMeterFraction?.() ?? { num: 4, den: 4 };
-    const meterSize = (mf.num / mf.den) || 1;
-
-    _timingCallbacks = new abcjs.TimingCallbacks(tune, {
-      eventCallback: _makeVisualEventCallback(stopMs),
-    });
-
     _playEl?.classList.add('abc-playing');
     state.abcStarting = false;
     state.abcPlaying = true;
     state.emit('abc-play-state', { playing: true });
 
     const ksPlan = _buildKeyswitchPlan(tune);
-    _startMidiPlayback(midiOut, noteEvents, startSeconds, stopMs, meterSize, ksPlan);
-    _timingCallbacks.start(startSeconds, 'seconds');
-    _startProgress(startSeconds * 1000);
+    _startMidiPlayback(midiOut, noteEvents, startSeconds, stopMs, _meterSize || 1, ksPlan);
+    _startProgress(startSeconds * 1000);   // the progress loop also ends the run (range end / tune end)
     return;
   }
 
@@ -2487,9 +2492,19 @@ async function startPlayback(opts = {}) {
       // score-order index (abcjs's `voicesOff`), so the internal piano plays only
       // the audible voices. Highlighting is filtered separately (_highlightEvent).
       const voicesOff = _mutedVoiceIndices();
+      // abc2svg drew the score → it also says what sounds when: the synth gets
+      // a prebuilt SEQUENCE in seconds (core/abc-timing.js sequenceFromTiming;
+      // `millisecondsPerMeasure: 1000` makes one sequence unit one second) and
+      // only mixes the piano samples. Muted / non-soloed voices are left out of
+      // it (`voicesOff` is abcjs's own-parse mechanism; the fallback below).
+      // Without an abc2svg score (tablature docs, the escape hatch) abcjs
+      // flattens its own parse as before.
+      const a2sTiming = _a2sScore?.timing;
       await synth.init({
         audioContext: _audioContext,
-        visualObj:    tune,
+        ...(a2sTiming
+          ? { sequence: sequenceFromTiming(a2sTiming, { isMuted: _isMutedAtChar }), millisecondsPerMeasure: 1000 }
+          : { visualObj: tune }),
         options: {
           // Omit soundFontUrl to use abcjs's default FluidR3 base — for which
           // this build serves acoustic_grand_piano from the bundle offline.
@@ -2531,13 +2546,11 @@ async function startPlayback(opts = {}) {
     _synth = { stop: () => {} };
   }
 
-  // ── 4.  Timing callbacks (visual feedback only) ──────────────────────────
-
-  _timingCallbacks = new abcjs.TimingCallbacks(tune, {
-    eventCallback: _makeVisualEventCallback(stopMs),
-  });
-
-  // ── 5.  Start ────────────────────────────────────────────────────────────
+  // ── 4.  Start ────────────────────────────────────────────────────────────
+  //
+  // Visual feedback (cursor, highlight) and the end of the run (range end /
+  // tune end) are the progress loop's (_startProgress / _applyVisualAt) — the
+  // abcjs TimingCallbacks that used to detect the end are gone (2026-10).
 
   _playEl?.classList.add('abc-playing');
   state.abcStarting = false;
@@ -2558,9 +2571,6 @@ async function startPlayback(opts = {}) {
     // pausedTimeSec so that start() resumes from there rather than the beginning).
     if (startSeconds > 0) _synth.seek(startSeconds, 'seconds');
     _synth.start();
-    _timingCallbacks.start(startSeconds, 'seconds');
-  } else {
-    _timingCallbacks.start(startSeconds, 'seconds');
   }
 
   // Drive the transport progress bar (works for all audio paths).
@@ -2577,8 +2587,6 @@ function stopPlayback(opts = {}) {
   try {
   _startGen++;                 // a start still priming abandons itself
   state.abcStarting = false;
-  try { _timingCallbacks?.stop(); } catch { /* ignore */ }
-  _timingCallbacks = null;
   _stopProgress();
   _visualStopMs   = null;
   _visualIdx      = -1;

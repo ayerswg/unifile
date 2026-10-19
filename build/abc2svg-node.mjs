@@ -15,7 +15,7 @@
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { toAudioSource } from './abc2svg-toaudio.mjs';
-import { graceStartsOf } from '../src/core/abc-timing.js';
+import { modelInfo } from '../src/core/abc-timing.js';
 
 const require = createRequire(import.meta.url);
 
@@ -24,6 +24,10 @@ let _lib = null;
 export function loadAbc2svg() {
   if (_lib) return _lib;
   const core = require('abc2svg/abc2svg-1.js');
+  // The %%MIDI module is a <script>-tag file hanging hooks off the `abc2svg`
+  // global (the app bundles it the same way, see abc2svg-render.js).
+  globalThis.abc2svg = core.abc2svg;
+  require('abc2svg/MIDI-1.js');
   const playPath = require.resolve('abc2svg/play-1.js');
   const ToAudio = new Function('abc2svg', `${toAudioSource(readFileSync(playPath, 'utf8'))}\nreturn ToAudio;`)(core.abc2svg);
   _lib = { abc2svg: core.abc2svg, Abc: core.Abc, ToAudio };
@@ -50,9 +54,9 @@ export function engraveModel(source) {
   };
   const abc = new Abc(user);
   abc.tosvg('node', source);
-  let events = [], graceStarts = new Set();
+  let events = [], info = { syms: new Map(), graceStarts: new Set(), meter: null };
   if (model) {
-    graceStarts = graceStartsOf(model.tsfirst, loadAbc2svg().abc2svg.C);   // before ToAudio relinks the chain
+    info = modelInfo(model.tsfirst, loadAbc2svg().abc2svg.C, model.voice_tb);   // before ToAudio relinks the chain
     const audio = ToAudio();
     audio.add(model.tsfirst, model.voice_tb);
     events = audio.clear() ?? [];
@@ -60,7 +64,9 @@ export function engraveModel(source) {
   return {
     events,
     voices: model ? model.voice_tb.map(v => String(v.id)) : [],
-    graceStarts,
+    graceStarts: info.graceStarts,
+    syms: info.syms,
+    meter: info.meter,
     errors,
     svg: chunks.join(''),
     truncated: !!ToAudio.truncated,   // the step guard cut the walk short (see abc2svg-toaudio.mjs)
