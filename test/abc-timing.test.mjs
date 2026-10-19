@@ -165,7 +165,7 @@ test('parity: the header blank lines are what made abcjs read an empty tune', ()
   // …while the raw text, as the user wrote it, gives abcjs a title and nothing else.
   const raw = src.replace(/^@(\w+) /gm, '[V:$1] ');
   assert.equal(abcjsPositions(raw).size, 0);
-  assert.match(engraveModel(PREFIX + raw).errors.join('\n'), /Empty line in tune header/);
+  assert.match(engraveModel(PREFIX + raw).errors.map(e => e.msg).join('\n'), /Empty line in tune header/);
 });
 
 test('parity: a blank line in the BODY ends the tune for both engines alike', () => {
@@ -240,4 +240,29 @@ test('sequenceFromTiming: CreateSynth\'s sequence in seconds — one track per v
   const muted = sequenceFromTiming(r.timing, { isMuted: (s) => v2starts.has(s) });
   assert.equal(muted.tracks.length, 1);
   assert.equal(muted.tracks[0][0].channel, 0);
+});
+
+// ── abc2svg's diagnostics for the editor ─────────────────────────────────────
+import { parseErrmsg } from '../src/core/abc-timing.js';
+
+test('parseErrmsg: abc2svg\'s errmsg text + 0-based line/col → an editor diagnostic past the injected prefix', () => {
+  // No column → the problem is on the line BEFORE the one abc2svg names.
+  assert.deepEqual(parseErrmsg({ msg: 'unifile:5:0 Error: Empty line in tune header - ignored', l: 4, c: -1 }, 1),
+                   { line: 2, col: null, severity: 'warning', message: 'Empty line in tune header - ignored' });
+  assert.deepEqual(parseErrmsg({ msg: 'unifile:5:0 Error: No end of tuplet', l: 4, c: -1 }, 1),
+                   { line: 2, col: null, severity: 'error', message: 'No end of tuplet' });
+  // A column → that line, that column.
+  assert.deepEqual(parseErrmsg({ msg: 'unifile:3:7 Error: Bad character', l: 2, c: 6 }, 1),
+                   { line: 1, col: 6, severity: 'error', message: 'Bad character' });
+  assert.equal(parseErrmsg({ msg: 'x:1:0 Error: inside the prefix', l: 0, c: 0 }, 1), null);
+  assert.deepEqual(parseErrmsg({ msg: 'plain text', l: 1, c: 0 }, 0), { line: 1, col: 0, severity: 'error', message: 'plain text' });
+});
+
+test('engraveModel + parseErrmsg: a real abc2svg diagnostic lands on the offending source line', () => {
+  const src = 'X:1\nK:C\ncde | (3ab |\n';
+  const r = engraveModel(PREFIX + src);
+  assert.equal(r.errors.length, 1);
+  const d = parseErrmsg(r.errors[0], 1);
+  assert.equal(d.message, 'No end of tuplet');
+  assert.equal(src.split('\n')[d.line], 'cde | (3ab |');
 });

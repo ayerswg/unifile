@@ -40,7 +40,7 @@ import 'abc2svg/MIDI-1.js';
 // the timed events of the tune abc2svg just parsed, see core/abc-timing.js.
 import { ToAudio } from 'abc2svg/play-1.js';
 import { DEFAULT_LINEBREAK } from '../core/abc-shorthand.js';
-import { timingFromEvents, modelInfo } from '../core/abc-timing.js';
+import { timingFromEvents, modelInfo, parseErrmsg } from '../core/abc-timing.js';
 
 /** abc2svg's own page width when none is injected (A4 at 96 dpi, px). */
 const DEFAULT_PAGE_WIDTH = 794;
@@ -100,7 +100,10 @@ function engrave(content, { annotate = false, preserveSheet = false, timing = fa
   const savedRules = sheet ? [...sheet.cssRules].map(r => r.cssText) : null;
   const user = {
     read_file: () => '',                       // %%abc-include: offline, unsupported
-    errmsg: (msg) => errors.push(String(msg)),
+    // abc2svg calls errmsg(text, line, col): text = "fname:LINE:COL Error: …",
+    // line/col 0-based, col −1 when unknown — core/abc-timing.js parseErrmsg
+    // turns one into an editor diagnostic (the lint) or a preview notice.
+    errmsg: (msg, l, c) => errors.push({ msg: String(msg), l, c }),
     img_out: (s) => chunks.push(s),
   };
   if (timing) {
@@ -130,7 +133,7 @@ function engrave(content, { annotate = false, preserveSheet = false, timing = fa
     abc.tosvg('unifile', content);
     abc2svg.abc_end();
   } catch (e) {
-    errors.push(e && e.message ? e.message : String(e));
+    errors.push({ msg: 'engrave: ' + (e && e.message ? e.message : String(e)), l: 0, c: -1 });
   } finally {
     if (savedRules && abc2svg.sheet === sheet) {
       for (let i = sheet.cssRules.length - 1; i >= 0; i--) sheet.deleteRule(i);
@@ -149,7 +152,7 @@ function engrave(content, { annotate = false, preserveSheet = false, timing = fa
       truncated = !!ToAudio.truncated;
       voices = model.voice_tb.map(v => String(v.id ?? ''));
     } catch (e) {
-      errors.push('timing: ' + (e && e.message ? e.message : String(e)));
+      errors.push({ msg: 'timing: ' + (e && e.message ? e.message : String(e)), l: 0, c: -1 });
     }
   }
   return { chunks, errors, annos, events, voices, truncated,
@@ -598,6 +601,7 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     // line numbers count the injected prefix lines) — abc2svg warns where abcjs
     // silently stops, e.g. "Empty line in tune header - ignored".
     errors,
+    prefixLines: (prefix.match(/\n/g) ?? []).length,   // lines injected before the content (for parseErrmsg)
     // play-1.js's event walk hit the step guard (a repeat structure that never
     // ends as written); `timing` holds what it reached.
     timingTruncated: truncated,
@@ -810,6 +814,35 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
 }
 
 /** Export: one self-contained SVG (systems stacked as nested <svg y=…>). */
+/**
+ * The tune's timing and diagnostics WITHOUT drawing it (the MIDI export, the
+ * editor's lint): the same parse the score gets — the default line-flow
+ * directive in front, nothing else injected — engraved into a throwaway buffer.
+ * @param {string} content  the EXPANDED ABC (abc-shorthand.js expandAbc)
+ * @returns {{ timing: ReturnType<typeof timingFromEvents>, errors: {msg:string,l:number,c:number}[],
+ *             prefixLines: number, truncated: boolean, meter: {num:number,den:number}|null }}
+ */
+export function abc2svgTiming(content) {
+  const src = withDefaultDirective(content, 'linebreak', DEFAULT_LINEBREAK);
+  const prefixLen = src.length - content.length;
+  const prefixLines = (src.slice(0, prefixLen).match(/\n/g) ?? []).length;
+  const { errors, events, voices, truncated, graceStarts, syms, meter } = engrave(src, { timing: true, preserveSheet: true });
+  return {
+    timing: timingFromEvents(events, { offset: -prefixLen, voices, graceStarts, syms }),
+    errors, prefixLines, truncated, meter,
+  };
+}
+
+/**
+ * abc2svg's diagnostics for `content`, as `{ line, col, severity, message }`
+ * in the content's own 0-based lines (core/abc-timing.js parseErrmsg).
+ * @param {string} content  the EXPANDED ABC
+ */
+export function abc2svgDiagnostics(content) {
+  const { errors, prefixLines } = abc2svgTiming(content);
+  return errors.map(e => parseErrmsg(e, prefixLines)).filter(Boolean);
+}
+
 export function abc2svgExportSvg(content) {
   // %%fullsvg: make every emitted <svg> self-contained — abc2svg then embeds a
   // <style> per svg holding ALL the rules it needs, critically the @font-face

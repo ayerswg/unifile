@@ -267,3 +267,31 @@ export function sequenceFromTiming(timing, { isMuted = null, volume = 95 } = {})
   const ordered = [...tracks.keys()].sort((a, b) => a - b).map(k => tracks.get(k));
   return { tempo: 120, instrument: 0, tracks: ordered, totalDuration: total };
 }
+
+/**
+ * One of abc2svg's `user.errmsg(text, line, col)` calls as a diagnostic the
+ * editor can place. abc2svg's `text` is `fname:LINE:COL Error: message` (its
+ * LINE/COL are 1-based renderings of `line`/`col`, which are 0-based; `col` is
+ * −1 when it has no column — then `line` is the line AFTER the problem, as in
+ * "Empty line in tune header" and "No end of tuplet", so the diagnostic goes
+ * to the end of the line before). `prefixLines` = lines the caller injected in
+ * front of the user's text (`%%linebreak $` …), subtracted so `line` indexes
+ * the user's text; a diagnostic inside the prefix is dropped (null).
+ * @param {{ msg: string, l: number, c: number }} e
+ * @param {number} [prefixLines]
+ * @returns {{ line: number, col: number|null, severity: 'error'|'warning', message: string }|null}
+ */
+export function parseErrmsg({ msg, l, c }, prefixLines = 0) {
+  const text = String(msg ?? '');
+  const m = /^[^:\s]*:\d+:-?\d+\s+(Error|Warning|Fatal)?:?\s*([\s\S]*)$/.exec(text);
+  const label = m?.[1] ?? 'Error';
+  const message = (m ? m[2] : text).trim();
+  let line = Number.isFinite(l) ? l : 0;
+  let col = Number.isFinite(c) && c >= 0 ? c : null;
+  if (col == null && line > 0) line -= 1;        // "the line after" → the line itself
+  line -= prefixLines;
+  if (line < 0) return null;
+  const ignored = /\bignored\b/i.test(message);
+  const severity = label === 'Warning' || ignored ? 'warning' : 'error';
+  return { line, col, severity, message };
+}
