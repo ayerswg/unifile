@@ -31,11 +31,16 @@ import abc2svg from 'abc2svg/abc2svg-1.js';
 // String-tablature module (%%strtab): self-registers into abc2svg.modules and
 // hooks every new Abc instance (pass-through when no %%strtab directive).
 import 'abc2svg/strtab-1.js';
+// The %%MIDI module: without it abc2svg's core treats every `%%MIDI program /
+// channel / control …` line as a module to fetch (nothing offline can) and the
+// tune's timing carries no instruments — ToAudio's rows need `p_v.instr` and
+// the `midiprog` / `midictl` block symbols this module creates.
+import 'abc2svg/MIDI-1.js';
 // play-1.js's pure half (the build slices it out — build/abc2svg-toaudio.mjs):
 // the timed events of the tune abc2svg just parsed, see core/abc-timing.js.
 import { ToAudio } from 'abc2svg/play-1.js';
 import { DEFAULT_LINEBREAK } from '../core/abc-shorthand.js';
-import { timingFromEvents, graceStartsOf } from '../core/abc-timing.js';
+import { timingFromEvents, modelInfo } from '../core/abc-timing.js';
 
 /** abc2svg's own page width when none is injected (A4 at 96 dpi, px). */
 const DEFAULT_PAGE_WIDTH = 794;
@@ -134,10 +139,10 @@ function engrave(content, { annotate = false, preserveSheet = false, timing = fa
       }
     }
   }
-  let events = [], voices = [], truncated = false, graceStarts = null;
+  let events = [], voices = [], truncated = false, info = null;
   if (model) {
     try {
-      graceStarts = graceStartsOf(model.tsfirst, abc2svg.C);   // before ToAudio relinks the chain
+      info = modelInfo(model.tsfirst, abc2svg.C, model.voice_tb);   // before ToAudio relinks the chain
       const audio = ToAudio();
       audio.add(model.tsfirst, model.voice_tb);
       events = audio.clear() ?? [];
@@ -147,7 +152,8 @@ function engrave(content, { annotate = false, preserveSheet = false, timing = fa
       errors.push('timing: ' + (e && e.message ? e.message : String(e)));
     }
   }
-  return { chunks, errors, annos, events, voices, truncated, graceStarts };
+  return { chunks, errors, annos, events, voices, truncated,
+           graceStarts: info?.graceStarts ?? null, syms: info?.syms ?? null, meter: info?.meter ?? null };
 }
 
 /**
@@ -474,7 +480,7 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     if (!/^%%rightmargin\b/m.test(content)) prefix += '%%rightmargin 14\n';
   }
 
-  const { chunks, errors, annos, events, voices, truncated, graceStarts } = engrave(prefix + content, { annotate: true, timing: true });
+  const { chunks, errors, annos, events, voices, truncated, graceStarts, syms: timingSyms, meter } = engrave(prefix + content, { annotate: true, timing: true });
   if (!chunks.length) return null;
 
   el.innerHTML = chunks.join('');
@@ -584,7 +590,10 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     // `timing.notes[].start` is content-relative like `sym.start`, so a timed
     // note and its glyphs share a key. abcjs.js compares this against its own
     // table (`_engineParity`) and the one-parser work swaps its consumers over.
-    timing: timingFromEvents(events, { offset: -prefix.length, voices, graceStarts }),
+    timing: timingFromEvents(events, { offset: -prefix.length, voices, graceStarts, syms: timingSyms }),
+    // The tune's meter (num/den) from its first M:, null when it has none —
+    // abcjs.js's fallback when abcjs parsed no tune to ask.
+    meter,
     // abc2svg's `errmsg` lines for this engraving (`unifile:LINE:COL message`,
     // line numbers count the injected prefix lines) — abc2svg warns where abcjs
     // silently stops, e.g. "Empty line in tune header - ignored".

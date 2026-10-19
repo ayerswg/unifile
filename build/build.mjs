@@ -130,7 +130,9 @@ const abc2svgExportPlugin = {
       const src = await readFile(args.path, 'utf8');
       return { contents: src + '\nexport default abc2svg;\n', loader: 'js' };
     });
-    build.onLoad({ filter: /abc2svg[\\/]strtab-1\.js$/ }, async (args) => {
+    // strtab-1.js (string tablature) and MIDI-1.js (the %%MIDI parameters —
+    // program/channel/control into the model, which the timing reads).
+    build.onLoad({ filter: /abc2svg[\\/](strtab|MIDI)-1\.js$/ }, async (args) => {
       const src = await readFile(args.path, 'utf8');
       return {
         contents: `import abc2svg from './abc2svg-1.js';\nvar user = {};\n${src}`,

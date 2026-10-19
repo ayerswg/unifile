@@ -404,12 +404,37 @@ The most complex DSL. Ships an **offline acoustic piano** (FluidR3 soundfont com
   either engine). `completeHeader` turns an empty line in a tune HEADER into a `%` line for the engines (both then read
   the whole tune — the user's document plays) and reports every in-tune blank in `blanks` (`tuneBlankLines`) for the
   lint: header = warning (other ABC software still sees an empty tune), body followed by music = error (nothing
-  below it renders or plays, in either engine). **Next steps of the plan:** swap `_noteEvents`' consumers
-  (`_buildNoteEvents`, `_emitRollData`, `_charToMs`, `_soundingEntries`, the audition, Web MIDI, the cursor) onto
-  `score.timing`; drive abcjs's `CreateSynth` with a prebuilt `sequence` (`start`/`duration` in seconds, pass
-  `millisecondsPerMeasure: 1000` — with a sequence its `meterSize` is 1) so the offline piano stays; replace
-  `TimingCallbacks` with our own clock; abcjs then parses only `%%tablature` documents (its renderer) and the
-  decoration rescanning, the `index < endChar` pointer and the `%%linebreak` lint exceptions become deletable.
+  below it renders or plays, in either engine).
+- **ONE PARSER FOR TIMING (2026-10, the swap): `_noteEvents` IS abc2svg's timing.** `_buildNoteEvents(tune, score)`
+  builds the table from `score.timing` through `momentsFromTiming` (core/abc-timing.js) — abcjs's `noteTimings`
+  SHAPE (one MOMENT per onset: `milliseconds`, `millisecondsPerMeasure`, `startCharArray`/`endCharArray` with one
+  entry per voice starting then, `midiPitches[{pitch, startChar, endChar, duration(whole notes), volume 95,
+  instrument}]`, `elements: []`, `left: 0` so the "placed" filters keep it) — so the transport, the cursor bar, the
+  green highlight (`_soundingEntries`), seek (`_charToMs` / `_selectionMsRange`), the audition, the piano roll
+  (`_emitRollData`), Web MIDI and the oscillators all read it UNCHANGED. What changed around it: (1) **the synth
+  gets a prebuilt sequence** — `CreateSynth.init({ sequence: sequenceFromTiming(timing, { isMuted: _isMutedAtChar }),
+  millisecondsPerMeasure: 1000 })` (with a sequence the synth's meterSize is 1, so one unit = one second; one
+  track per voice, `program` first from `%%MIDI program`, grace notes in, muted voices out, pitches rounded —
+  the synth looks samples up by integer pitch) — abcjs only mixes the offline piano's samples at abc2svg's times;
+  (2) **abcjs's TimingCallbacks are gone**: the wall-clock progress loop (`_startProgress`, which already drove the
+  cursor) now also ENDS the run — a range stops at its end onset (time-based, every voice together), the whole tune
+  300 ms past its last onset so the synth's own `onEnded` (buffer end + fade) wins when it fires first; (3) the
+  meter comes from abcjs's tune when it parsed one, else `score.meter` (abc2svg's first voice `meter.a_meter`);
+  (4) `modelInfo(tsfirst, C, voice_tb)` (walked BEFORE ToAudio, which relinks grace timing) gives each istart its
+  token END (`s.iend`), written length and the tempo in force (ToAudio's own `play_factor` rule), so a note knows
+  `end`, `durWhole` and `msPerWhole`; (5) **abc2svg's `MIDI-1.js` is bundled** (same plugin as strtab —
+  `import abc2svg` prefix): without it the core treats every `%%MIDI …` line as a module to FETCH and the timing has
+  no instruments; (6) `_buildKeyswitchPlan` looks notes up by CONTAINMENT (`noteAt(sc)`, `marksFor(sc)`): its
+  table is abcjs's (token-start positions) while the timing's starts are abc2svg's letters. abcjs still parses the
+  hidden render — for the parity check (`_abcjsEvents`), the meter, `_buildKeyswitchPlan`'s voice identity, MIDI
+  export (`getMidiFile`) and as THE table when abcjs is the visible engraver (`%%tablature`, the escape hatch:
+  `score` is null → `_noteEvents = _abcjsEvents`). **Default tempo is now abc2svg's 120 bpm** for a tune with no
+  `Q:` (abcjs's was 180); dynamics (`!p!` `!ff!`) no longer shape the internal piano's velocity (ToAudio carries
+  none — the Web MIDI `midi.map` velocity path is unaffected). A score abc2svg timed as empty plays nothing even if
+  abcjs read notes: what you see is what plays, the parity banner says why. **Still to do:** drop the hidden abcjs
+  render for non-tablature documents (needs a MIDI-file writer from `timing` and the keyswitch plan's voice identity
+  from `_voiceMap`), then the decoration rescanning, the `index < endChar` pointer and the `%%linebreak` lint
+  exceptions go.
 - **Transport** (`dsl-footer.js` + abcjs.js): play/pause, seekable scrubber, current/total time. Persistent bottom bar.
   **A Play is ASYNC and shows it (2026-10, `state.abcStarting`):** `startPlayback` awaits the AudioContext resume, the
   sample decode and abcjs's `prime()` (which mixes the WHOLE tune into one buffer in JS — a second or more on a phone for

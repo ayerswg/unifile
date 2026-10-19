@@ -24,7 +24,7 @@ const PREFIX = '%%linebreak $\n';          // what the app injects in front of e
 function a2s(src) {
   const ex = expandAbc(src).text;
   const r = engraveModel(PREFIX + ex);
-  return { ...r, ex, timing: timingFromEvents(r.events, { offset: -PREFIX.length, voices: r.voices, graceStarts: r.graceStarts }) };
+  return { ...r, ex, timing: timingFromEvents(r.events, { offset: -PREFIX.length, voices: r.voices, graceStarts: r.graceStarts, syms: r.syms }) };
 }
 
 /**
@@ -57,7 +57,9 @@ test('timingFromEvents: rows → notes / rests / controls in ms, prefix offset a
   ];
   const t = timingFromEvents(rows, { offset: -10, voices: ['RH', 'LH'] });
   assert.deepEqual(t.notes.map(n => [n.start, n.ms, n.durMs, n.midi, n.voice]), [[4, 0, 500, 60, 'LH'], [10, 500, 250, 72, 'RH'], [10, 500, 250, 76, 'RH']]);
-  assert.deepEqual(t.rests, [{ start: 14, ms: 750, durMs: 250, voice: 'LH', voiceIndex: 1 }]);
+  // No model info given → the token is one char and the tempo abc2svg's default.
+  assert.deepEqual(t.notes.map(n => [n.end, n.msPerWhole, +n.durWhole.toFixed(4)]), [[5, 2000, 0.25], [11, 2000, 0.125], [11, 2000, 0.125]]);
+  assert.deepEqual(t.rests, [{ start: 14, end: 15, ms: 750, durMs: 250, msPerWhole: 2000, voice: 'LH', voiceIndex: 1 }]);
   assert.deepEqual(t.controls, [{ start: 16, ms: 1000, ctrl: 7, value: 100, voiceIndex: 1 }]);
   assert.equal(t.totalMs, 1000);
   assert.equal(countOnsets(t), 2);
@@ -172,4 +174,70 @@ test('parity: a blank line in the BODY ends the tune for both engines alike', ()
   assert.equal(r.timing.notes.length, 4);
   assert.equal(abcjsPositions(r.ex).size, 4);
   assert.deepEqual(expandAbc(src).blanks.map(b => b.where), ['body']);
+});
+
+// ── The two views abcjs.js consumes (the one-parser swap, PR 2) ──────────────
+import { modelInfo, momentsFromTiming, sequenceFromTiming } from '../src/core/abc-timing.js';
+
+test('modelInfo: token extents, written lengths, the tempo in force, grace istarts and the meter', () => {
+  const src = 'X:1\nM:3/4\nL:1/8\nQ:1/4=90\nK:G\nGAB {c}d2 z | fga b2 z2 |\n';
+  const r = a2s(src);
+  assert.deepEqual(r.meter, { num: 3, den: 4 });
+  const g = r.timing.notes.find(n => r.ex[n.start] === 'G');
+  assert.equal(r.ex.slice(g.start, g.end), 'G');
+  assert.equal(Math.round(g.msPerWhole), 2667);                        // ♩ = 90 → a whole note is 2.667 s
+  assert.equal(g.durMs, 333);                                           // an eighth
+  assert.ok(Math.abs(g.durWhole - 0.125) < 0.001);
+  const d2 = r.timing.notes.find(n => r.ex[n.start] === 'd');
+  assert.equal(r.ex.slice(d2.start, d2.end), 'd2');
+  assert.equal(r.timing.notes.filter(n => n.grace).length, 1);
+  assert.equal(r.timing.rests.length, 2);
+  assert.equal(r.ex.slice(r.timing.rests[1].start, r.timing.rests[1].end), 'z2');
+  // No M: → no meter; no Q: → abc2svg's 120.
+  const plain = a2s('X:1\nK:C\nc4 |\n');
+  assert.equal(plain.meter, null);
+  assert.equal(plain.timing.notes[0].msPerWhole, 2000);
+});
+
+test('momentsFromTiming: abcjs\'s noteTimings shape — one moment per onset, every voice\'s entries, pitches with whole-note durations', () => {
+  const src = 'X:1\nM:4/4\nL:1/8\nK:C\nV:1\n[ce]2 d2 z2 e2 |\nV:2\nC4 D4 |\n';
+  const r = a2s(src);
+  const moments = momentsFromTiming(r.timing, { meterSize: 1 });
+  assert.deepEqual(moments.map(m => m.milliseconds), [0, 500, 1000, 1500]);
+  const first = moments[0];
+  assert.equal(first.type, 'event');
+  assert.equal(first.millisecondsPerMeasure, 2000);                     // 4/4 at ♩ = 120
+  assert.equal(first.left, 0);                                          // "placed" for the consumers that skip bar entries
+  // Two voices start at 0: the chord [ce] (one entry, two pitches) and C4.
+  assert.equal(first.startCharArray.length, 2);
+  assert.deepEqual(first.startCharArray.map(s => r.ex.slice(s, s + 4)), ['[ce]', 'C4 D']);
+  assert.deepEqual(first.endCharArray.map((e, i) => r.ex.slice(first.startCharArray[i], e)), ['[ce]2', 'C4']);
+  assert.deepEqual(first.midiPitches.map(p => [p.pitch, p.startChar, p.duration, p.volume, p.instrument]),
+                   [[72, first.startCharArray[0], 0.25, 95, 0], [76, first.startCharArray[0], 0.25, 95, 0], [60, first.startCharArray[1], 0.5, 95, 0]]);
+  assert.equal(first.startChar, first.startCharArray[0]);
+  assert.equal(first.elements.length, 2);
+  // The rest at 1000 ms is an entry with no pitch (the piano roll's add-note target).
+  const third = moments[2];
+  assert.equal(r.ex.slice(third.startCharArray[0], third.endCharArray[0]), 'z2');
+  assert.equal(third.midiPitches.length, 1);                            // D4 sounds there too
+  // Grace notes do not make moments of their own.
+  const grace = a2s('X:1\nK:C\n{g}a2 {ab}c2 | d4 |\n');
+  assert.equal(momentsFromTiming(grace.timing).length, 3);
+});
+
+test('sequenceFromTiming: CreateSynth\'s sequence in seconds — one track per voice, program first, muted voices out, grace notes in', () => {
+  const r = a2s('X:1\nK:C\nV:1\n{g}c2 d2 |\nV:2\n%%MIDI program 40\nC4 |\n');
+  const seq = sequenceFromTiming(r.timing);
+  assert.equal(seq.tracks.length, 2);
+  assert.deepEqual(seq.tracks[0][0], { cmd: 'program', instrument: 0, channel: 0 });
+  assert.deepEqual(seq.tracks[1][0], { cmd: 'program', instrument: 40, channel: 1 });
+  const v1 = seq.tracks[0].filter(e => e.cmd === 'note');
+  assert.equal(v1.length, 3);                                           // the grace note sounds
+  assert.ok(v1.every(e => Number.isInteger(e.pitch) && e.volume === 95 && e.gap === 0 && e.instrument === 0));
+  assert.ok(Math.abs(seq.totalDuration - 1) < 0.001);                   // c2 d2 = 2 quarters at 120 = 1 s
+  // Second voice muted by position.
+  const v2starts = new Set(r.timing.notes.filter(n => n.voice === '2').map(n => n.start));
+  const muted = sequenceFromTiming(r.timing, { isMuted: (s) => v2starts.has(s) });
+  assert.equal(muted.tracks.length, 1);
+  assert.equal(muted.tracks[0][0].channel, 0);
 });
