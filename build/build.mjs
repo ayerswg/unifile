@@ -93,24 +93,6 @@ export const APP_CHANNEL = detectChannel();
 // esbuild plugins for bundle size / offline behaviour
 // ---------------------------------------------------------------------------
 
-/**
- * Redirect abcjs's internal `require('./load-note')` to our offline note loader
- * (src/dsl/abcjs-piano-loader.js), which decodes the bundled FluidR3
- * acoustic_grand_piano soundfont on demand instead of fetching per-note mp3s.
- * Only matches the require coming from inside the abcjs package.
- */
-const loadNoteOverridePlugin = {
-  name: 'abcjs-load-note-override',
-  setup(build) {
-    build.onResolve({ filter: /load-note$/ }, (args) => {
-      if (args.importer && args.importer.replace(/\\/g, '/').includes('node_modules/abcjs')) {
-        return { path: join(SRC, 'dsl', 'abcjs-piano-loader.js') };
-      }
-      return null;
-    });
-  },
-};
-
 /*
  * abc2svg is a <script>-tag library: its core does `var abc2svg = {}` and hangs
  * everything off that global — no ESM/CJS exports.  To bundle it with esbuild
@@ -258,7 +240,7 @@ function makeInitialData(defaultDslType = DEFAULT_DSL_TYPE) {
  */
 function buildOptions(entryPoint, unifileMode, plugins) {
   const esPlugins = [];
-  if (plugins.includes('abcjs'))   esPlugins.push(loadNoteOverridePlugin, abc2svgExportPlugin);
+  if (plugins.includes('abcjs'))   esPlugins.push(abc2svgExportPlugin);
 
   return {
     entryPoints: [entryPoint],
