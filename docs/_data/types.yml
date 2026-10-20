@@ -66,8 +66,8 @@
   tagline: Write music, hear it, route it — offline.
   overview: >
     A dedicated ABC notation editor with a bundled offline acoustic piano, a
-    play/scrub transport, guitar/violin tablature, and live MIDI output so you
-    can drive an external instrument such as Kontakt.
+    play/scrub transport, string tablature, and live MIDI output so you can
+    drive an external instrument such as Kontakt.
   features:
     - Offline acoustic piano (FluidR3) — bundled, no network
     - Transport with seekable progress + tablature

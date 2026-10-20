@@ -1,8 +1,9 @@
-// abc2svg's timing (core/abc-timing.js) against abcjs's — the two engines
-// {compose} runs. abc2svg draws the score; these tests pin down that the timed
-// events its own player module derives from the SAME parse line up with the
-// text, and that both engines agree on what sounds once the source has been
-// through expandAbc (the one transform every engine call goes through).
+// abc2svg's timing (core/abc-timing.js). abc2svg draws the score; these tests
+// pin down that the timed events its own player module derives from the SAME
+// parse line up with the text once the source has been through expandAbc (the
+// one transform every engine call goes through) — the cases below were the
+// 2026-10 parity suite against abcjs, which {compose} no longer bundles; the
+// abc2svg side of each is kept as a regression table.
 //
 // Pure Node: abc2svg loads from its CommonJS export and ToAudio is sliced out
 // of play-1.js (build/abc2svg-node.mjs — the same slice the bundle carries).
@@ -16,7 +17,6 @@ import { timingFromEvents, countOnsets } from '../src/core/abc-timing.js';
 import { expandAbc } from '../src/core/abc-shorthand.js';
 
 const require = createRequire(import.meta.url);
-const abcjs = require('abcjs');
 
 const PREFIX = '%%linebreak $\n';          // what the app injects in front of every engraving
 
@@ -25,25 +25,6 @@ function a2s(src) {
   const ex = expandAbc(src).text;
   const r = engraveModel(PREFIX + ex);
   return { ...r, ex, timing: timingFromEvents(r.events, { offset: -PREFIX.length, voices: r.voices, graceStarts: r.graceStarts, syms: r.syms }) };
-}
-
-/**
- * abcjs: the sounding source positions as the app sees them — `_engineParity`
- * reads `midiPitches[].startChar` off the timing events, which TimingCallbacks
- * copies from the note ELEMENTS after `setUpAudio` (grace notes ride on their
- * principal's element; an ornament keeps its principal; a rest has no pitch).
- */
-function abcjsPositions(ex) {
-  const tune = abcjs.parseOnly(ex)[0];
-  tune.setUpAudio({});
-  const starts = new Set();
-  for (const line of tune.lines) for (const st of line.staff ?? []) for (const v of st.voices ?? []) {
-    for (const el of v) {
-      if (el.el_type !== 'note') continue;
-      for (const p of el.midiPitches ?? []) if (p?.startChar != null) starts.add(p.startChar);
-    }
-  }
-  return starts;
 }
 
 test('timingFromEvents: rows → notes / rests / controls in ms, prefix offset applied, prefix rows dropped', () => {
@@ -120,64 +101,53 @@ test('toAudioSource: the slice is the ToAudio function, with exactly one guarded
   assert.throws(() => toAudioSource('nothing here'), /cannot find function ToAudio/);
 });
 
-// ── Parity: both engines read the same tune (the check `_engineParity` runs in the app) ──
+// ── Sounding positions per tune (the 2026-10 abcjs parity suite, abc2svg side) ──
 
-const PARITY = {
+const POSITIONS = {
   'four voices with @id, % separators (the bug report, blank lines in the header)':
-    'X:1\nT:Example Song\n\nV:1 clef=treble\nV:2 clef=bass\nV:3 clef=treble\nV:4 clef=bass\n\n@1 cdef |\n@2 abcd |\n@3 abcd |\n@4 a,,b,,c,,d,, |\n%\n@1 abcd |\n@2 bdef |\n%\n@1 abcd |\n@2 bdef |\n',
-  'ties and slurs': 'X:1\nK:C\nc2-c2 | (d2 e2) | f4- | f4 |\n',
-  'chords': 'X:1\nK:C\n[CEG]2 [DFA]2 | [ceg]4 |\n',
-  'grace notes': 'X:1\nK:C\n{g}a2 {ab}c2 | d4 |\n',
-  'repeats': 'X:1\nK:C\n|: c d e f :| g4 a4 |]\n',
-  'first and second endings': 'X:1\nK:C\n|: c d e f |1 g4 :|2 a4 |]\n',
-  'meter, unit length and tempo': 'X:1\nM:3/4\nL:1/8\nQ:1/4=90\nK:G\nGAB cde | fga b2 z2 |\n',
-  'tuplets and broken rhythm': 'X:1\nK:C\n(3cde (3fga | b4 | c>d e<f |\n',
-  'two V: voices': 'X:1\nK:C\nV:1\nc2 d2 e2 f2 | g4 a4 |\nV:2\nC4 D4 | E8 |\n',
-  'ornaments (abcjs plays a trill as many notes, with no source position of their own)': 'X:1\nK:C\n!trill!c4 d4 | ~e2 .f2 g4 |\n',
-  'no X: and no K: at all': 'V:1\nV:2\n@1 cdef |\n@2 CDEF |\n',
+    ['X:1\nT:Example Song\n\nV:1 clef=treble\nV:2 clef=bass\nV:3 clef=treble\nV:4 clef=bass\n\n@1 cdef |\n@2 abcd |\n@3 abcd |\n@4 a,,b,,c,,d,, |\n%\n@1 abcd |\n@2 bdef |\n%\n@1 abcd |\n@2 bdef |\n', 32],
+  'ties and slurs': ['X:1\nK:C\nc2-c2 | (d2 e2) | f4- | f4 |\n', 4],        // a tie joins: c2-c2 and f4-f4 sound once each
+  'chords': ['X:1\nK:C\n[CEG]2 [DFA]2 | [ceg]4 |\n', 3],                     // a chord is one position
+  'grace notes': ['X:1\nK:C\n{g}a2 {ab}c2 | d4 |\n', 3],                     // principals only (grace rows are flagged)
+  'repeats': ['X:1\nK:C\n|: c d e f :| g4 a4 |]\n', 6],                       // a repeat replays the same positions
+  'first and second endings': ['X:1\nK:C\n|: c d e f |1 g4 :|2 a4 |]\n', 6],
+  'meter, unit length and tempo': ['X:1\nM:3/4\nL:1/8\nQ:1/4=90\nK:G\nGAB cde | fga b2 z2 |\n', 10],
+  'tuplets and broken rhythm': ['X:1\nK:C\n(3cde (3fga | b4 | c>d e<f |\n', 11],
+  'two V: voices': ['X:1\nK:C\nV:1\nc2 d2 e2 f2 | g4 a4 |\nV:2\nC4 D4 | E8 |\n', 9],
+  'ornaments (a trill is one position)': ['X:1\nK:C\n!trill!c4 d4 | ~e2 .f2 g4 |\n', 5],
+  'no X: and no K: at all': ['V:1\nV:2\n@1 cdef |\n@2 CDEF |\n', 8],
 };
 
-for (const [name, src] of Object.entries(PARITY)) {
-  test(`parity: ${name}`, () => {
+for (const [name, [src, count]] of Object.entries(POSITIONS)) {
+  test(`positions: ${name}`, () => {
     const r = a2s(src);
     const drawn = [...new Set(r.timing.notes.filter(n => !n.grace).map(n => n.start))].sort((a, b) => a - b);
-    const played = [...abcjsPositions(r.ex)].sort((a, b) => a - b);
-    assert.ok(drawn.length > 0, 'abc2svg timed nothing');
-    // The same NUMBER of sounding positions (what the app compares)…
-    assert.equal(played.length, drawn.length, `abcjs ${played.length} vs abc2svg ${drawn.length}`);
-    // …and each abcjs position sits on or shortly before abc2svg's: abcjs's
-    // startChar is the start of the whole token (a leading `(`, `!deco!` or
-    // space included — the landmine CLAUDE.md records), abc2svg's istart is the
-    // note letter itself.
-    for (let i = 0; i < drawn.length; i++) {
-      assert.ok(played[i] <= drawn[i] && drawn[i] - played[i] <= 12, `note ${i}: abcjs ${played[i]} (${JSON.stringify(r.ex.slice(played[i], played[i] + 4))}) vs abc2svg ${drawn[i]} (${JSON.stringify(r.ex.slice(drawn[i], drawn[i] + 4))})`);
-    }
+    assert.equal(drawn.length, count);
+    // Every position is a note letter (or a chord's `[`) in the expanded text —
+    // abc2svg's istart is the token itself, never a leading `(`, `!deco!` or space.
+    for (const p of drawn) assert.match(r.ex[p], /[A-Ga-g[]/, `position ${p}: ${JSON.stringify(r.ex.slice(p, p + 4))}`);
   });
 }
 
-test('parity: the header blank lines are what made abcjs read an empty tune', () => {
-  const src = PARITY['four voices with @id, % separators (the bug report, blank lines in the header)'];
-  // Through expandAbc (the app's path) both engines read 32 notes…
+test('the header blank lines that once emptied the tune read fine through expandAbc', () => {
+  const src = POSITIONS['four voices with @id, % separators (the bug report, blank lines in the header)'][0];
   const r = a2s(src);
   assert.equal(r.timing.notes.length, 32);
-  assert.equal(abcjsPositions(r.ex).size, 32);
-  assert.deepEqual(r.errors, []);                                       // abc2svg no longer warns either
-  // …while the raw text, as the user wrote it, gives abcjs a title and nothing else.
+  assert.deepEqual(r.errors, []);                                       // no "Empty line in tune header" either
+  // The raw text, as the user wrote it, still draws abc2svg's warning.
   const raw = src.replace(/^@(\w+) /gm, '[V:$1] ');
-  assert.equal(abcjsPositions(raw).size, 0);
   assert.match(engraveModel(PREFIX + raw).errors.map(e => e.msg).join('\n'), /Empty line in tune header/);
 });
 
-test('parity: a blank line in the BODY ends the tune for both engines alike', () => {
+test('a blank line in the BODY ends the tune', () => {
   const src = 'X:1\nK:C\ncdef |\n\nabcd |\n';
   const r = a2s(src);
   assert.equal(r.timing.notes.length, 4);
-  assert.equal(abcjsPositions(r.ex).size, 4);
   assert.deepEqual(expandAbc(src).blanks.map(b => b.where), ['body']);
 });
 
-// ── The two views abcjs.js consumes (the one-parser swap, PR 2) ──────────────
-import { modelInfo, momentsFromTiming, notesFromMoments } from '../src/core/abc-timing.js';
+// ── The view abcjs.js consumes (the one-parser swap, PR 2) ───────────────────
+import { modelInfo, momentsFromTiming } from '../src/core/abc-timing.js';
 
 test('modelInfo: token extents, written lengths, the tempo in force, grace istarts and the meter', () => {
   const src = 'X:1\nM:3/4\nL:1/8\nQ:1/4=90\nK:G\nGAB {c}d2 z | fga b2 z2 |\n';
@@ -223,18 +193,6 @@ test('momentsFromTiming: abcjs\'s noteTimings shape — one moment per onset, ev
   // Grace notes do not make moments of their own.
   const grace = a2s('X:1\nK:C\n{g}a2 {ab}c2 | d4 |\n');
   assert.equal(momentsFromTiming(grace.timing).length, 3);
-});
-
-test('notesFromMoments: the way back from the noteTimings shape — one flat note per pitch, ms durations, velocity from volume', () => {
-  const r = a2s('X:1\nM:4/4\nL:1/8\nK:C\nV:1\n[ce]2 d2 |\nV:2\nC4 |\n');
-  const moments = momentsFromTiming(r.timing, { meterSize: 1 });
-  moments[0].midiPitches[0].volume = 70;                                // as abcjs's flattener would set it
-  const notes = notesFromMoments(moments, 1);
-  assert.deepEqual(notes.map(n => [n.ms, n.midi, n.durMs, n.velocity]),
-                   [[0, 72, 500, 70], [0, 76, 500, 95], [0, 60, 1000, 95], [500, 74, 500, 95]]);
-  assert.ok(notes.every(n => n.start >= 0));
-  assert.deepEqual(notesFromMoments([]), []);
-  assert.deepEqual(notesFromMoments(null), []);
 });
 
 // ── abc2svg's diagnostics for the editor ─────────────────────────────────────

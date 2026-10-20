@@ -25,9 +25,6 @@
  *   • `momentsFromTiming` — the table abcjs.js's transport, cursor, highlight,
  *     seek, audition, piano roll and Web MIDI paths read (abcjs's noteTimings
  *     shape, so every consumer kept working when the source engine changed);
- *   • `notesFromMoments`  — the way back: a flat note list for the sampler
- *     (core/abc-sampler.js) from a table in that shape, for the one case where
- *     the table is abcjs's own (abcjs drew the score).
  * The sampler plays `timing.notes` directly — the piano (core/abc-sampler.js)
  * reads `ms`, `durMs`, `midi`, `velocity` (core/abc-dynamics.js) and `start`.
  */
@@ -239,28 +236,6 @@ export function momentsFromTiming(timing, { meterSize = 1 } = {}) {
   return out;
 }
 
-/**
- * The inverse of `momentsFromTiming` for a table that did NOT come from abc2svg
- * (abcjs's own `noteTimings`, when abcjs drew the score): the flat note list
- * the sampler plays (core/abc-sampler.js), `{ ms, durMs, midi, velocity, start }`
- * sorted by onset. Durations come from `duration` (whole notes) × the moment's
- * `millisecondsPerMeasure` / the meter size, as every consumer converts them.
- * @param {object[]} moments
- * @param {number} meterSize  num/den of the meter (1 when unknown)
- */
-export function notesFromMoments(moments, meterSize = 1) {
-  const out = [];
-  for (const ev of moments ?? []) {
-    const msPerWhole = (ev.millisecondsPerMeasure || 1000) / (meterSize || 1);
-    for (const p of ev.midiPitches ?? []) {
-      if (p?.pitch == null) continue;
-      out.push({ ms: ev.milliseconds, durMs: Math.max(1, (p.duration ?? 0.25) * msPerWhole),
-                 midi: p.pitch, velocity: p.volume ?? 95, start: p.startChar ?? -1 });
-    }
-  }
-  out.sort((a, b) => a.ms - b.ms || a.start - b.start);
-  return out;
-}
 
 /**
  * One of abc2svg's `user.errmsg(text, line, col)` calls as a diagnostic the

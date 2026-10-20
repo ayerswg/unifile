@@ -38,7 +38,6 @@
     "@marp-team/marpit": "^3.2.3",
     "@marp-team/marpit-svg-polyfill": "^2.1.0",
     "abc2svg": "^1.22.1",
-    "abcjs": "^6.0.0",
     "docx": "^8.5.0",
     "dompurify": "^3.0.0",
     "marked": "^11.0.0",
