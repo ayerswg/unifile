@@ -421,6 +421,7 @@ async function render(rawContent, el) {
     // lint carries abc2svg's complaints and the pane says so (below).
     let localScore = null;
     localScore = renderAbc2svg(content, container, {
+      velocity: _velocityConfig(content),   // the document's midi.map velocity layer
       onSelect: (from, to) => {
         // Re-establish this block as the active playback context.
         _a2sScore    = localScore;
@@ -1028,8 +1029,54 @@ function _normalizeMap(raw, octave) {
 
 /** True if an entry switches articulation (fires a keyswitch/CC/program). */
 function _isSwitch(e) { return e && (e.note != null || e.cc != null || e.program != null); }
-/** True if an entry sets a sticky dynamic level (absolute or scaled velocity). */
-function _isLevel(e)  { return e && (e.velAbs != null || e.velScale != null); }
+/** The velocity part of an entry (`velAbs` sticky level | `velScale` | `velBump`), or null. */
+function _velocityPart(e) {
+  if (!e || (e.velAbs == null && e.velScale == null && !e.velBump)) return null;
+  return { velAbs: e.velAbs, velScale: e.velScale, velBump: e.velBump };
+}
+
+/**
+ * The document's `midi.map` VELOCITY layer for core/abc-dynamics.js — read from
+ * the front matter (`midi.map` / the legacy `midi.keyswitches`, per-voice
+ * `midi.voices.<n>.map` and `.velocity`), so the sampler, the MIDI file and the
+ * external port all hear the same velocities (2026-10; until then only the
+ * external port applied them). Voice ids are the timing's (`V:` ids); the
+ * `midi.voices.<n>` number is the voice's score order (core/abc-voices.js),
+ * the same index the piano roll and the keyswitch plan use. Null when the
+ * document maps nothing — then abc-dynamics.js's built-in rules stand alone.
+ * @param {string} expandedContent  the section abc2svg parses (for the voice order)
+ */
+function _velocityConfig(expandedContent) {
+  let meta;
+  try { meta = parseGlobalFrontMatter(state.currentContent ?? '').meta; } catch { return null; }
+  const midi = meta?.midi;
+  if (!midi || typeof midi !== 'object') return null;
+  const hasVoices = midi.voices && typeof midi.voices === 'object';
+  const hasMap = (midi.map && typeof midi.map === 'object') ||
+                 (midi.keyswitches && typeof midi.keyswitches === 'object');
+  if (!hasVoices && !hasMap) return null;
+  const octave = _midiOctaveBase(midi);
+  const globalMap = { ..._normalizeMap(midi.keyswitches, octave), ..._normalizeMap(midi.map, octave) };
+  const perVoice = new Map();   // voice number → { map, scale }
+  if (hasVoices) {
+    for (const [k, v] of Object.entries(midi.voices)) {
+      const vn = parseInt(k, 10);
+      if (!Number.isFinite(vn) || !v || typeof v !== 'object') continue;
+      perVoice.set(vn, {
+        map: { ..._normalizeMap(v.keyswitches, octave), ..._normalizeMap(v.map, octave) },
+        scale: v.velocity != null ? (parseFloat(v.velocity) || 1) : 1,
+      });
+    }
+  }
+  const order = buildVoiceMap(expandedContent).order ?? [];
+  const numberOf = (id) => { const i = order.indexOf(id); return i >= 0 ? i + 1 : 1; };
+  return {
+    entryFor: (voiceId, name) => _velocityPart(perVoice.get(numberOf(voiceId))?.map[name] ?? globalMap[name]),
+    voiceScale: (voiceId) => perVoice.get(numberOf(voiceId))?.scale ?? 1,
+    aliases: MARK_ALIAS,
+    shorthands: SHORTHAND_DECO,
+  };
+}
 
 /** Octave that middle C is called, from `midi.octave` (e.g. `c3`, `4`). Default 3 (Kontakt). */
 function _midiOctaveBase(midi) {
@@ -1075,7 +1122,6 @@ function _buildKeyswitchPlan() {
         channel: v.channel != null ? +v.channel : vn,
         volume:  v.volume   != null ? Math.max(0, Math.min(127, +v.volume)) : null,
         pan:     v.pan      != null ? Math.max(0, Math.min(127, +v.pan))    : null,
-        velScale: v.velocity != null ? (parseFloat(v.velocity) || 1) : 1,
         map: { ...globalMap, ...vMap },
       });
     }
@@ -1083,7 +1129,6 @@ function _buildKeyswitchPlan() {
   const cfg             = (vn) => voiceConfig.get(vn);
   const entryFor        = (vn, name) => cfg(vn)?.map[name] ?? globalMap[name];
   const channelForVoice = (vn) => ((cfg(vn)?.channel ?? vn) - 1) & 0x0f;
-  const velScaleForVoice = (vn) => cfg(vn)?.velScale ?? 1;
 
   // The notes = the timing table's entries (one parser: abc2svg's starts and
   // token ends), de-duplicated per token. Voice number = the voice's score
@@ -1142,7 +1187,7 @@ function _buildKeyswitchPlan() {
 
   return {
     leadMs, hold, slurName, globalMap,
-    charToVoice, channelForVoice, velScaleForVoice, entryFor,
+    charToVoice, channelForVoice, entryFor,
     noteMarks,
     /** The marks of the note whose token contains `sc` (see noteAt). */
     marksFor: (sc) => noteMarks.get(noteAt(sc)?.startChar ?? sc) ?? noteMarks.get(sc),
@@ -1173,7 +1218,7 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopMs, meterSize, ks
   const vstate = new Map();
   const vget = (vn) => {
     let s = vstate.get(vn);
-    if (!s) { s = { artic: null, lastArtic: undefined, level: null, heldKs: null, lastSc: -1 }; vstate.set(vn, s); }
+    if (!s) { s = { artic: null, lastArtic: undefined, heldKs: null, lastSc: -1 }; vstate.set(vn, s); }
     return s;
   };
 
@@ -1200,23 +1245,16 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopMs, meterSize, ks
       const ch = ksPlan ? ksPlan.channelForVoice(voice) : 0;
       const st = ksPlan ? vget(voice) : null;
 
-      // Per-note velocity bumps (accents) accumulate here; sticky state below.
-      let bump = 0;
+      // Articulation switches are sticky state; process this note's markings
+      // once (not per chord-pitch), in source order. Velocity needs no work
+      // here: the timing table's `volume` already carries the dynamics AND the
+      // document's midi.map velocity layer (core/abc-dynamics.js via
+      // _velocityConfig), the same number the sampler and the MIDI file use.
       if (ksPlan && sc !== st.lastSc) {
-        // Process this note's markings once (not per chord-pitch), in source order.
         st.lastSc = sc;
         for (const name of ksPlan.marksFor(sc) ?? []) {
           const e = ksPlan.entryFor(voice, name);
-          if (!e) continue;
-          if (_isSwitch(e)) st.artic = name;       // sticky articulation switch
-          if (_isLevel(e))  st.level = e;          // sticky dynamic level
-        }
-      }
-      // Accent-type bumps apply to THIS note only (re-read each pitch is fine).
-      if (ksPlan) {
-        for (const name of ksPlan.marksFor(sc) ?? []) {
-          const e = ksPlan.entryFor(voice, name);
-          if (e?.velBump) bump += e.velBump;
+          if (e && _isSwitch(e)) st.artic = name;
         }
       }
 
@@ -1235,14 +1273,7 @@ function _startMidiPlayback(out, noteEvents, startSeconds, stopMs, meterSize, ks
         st.lastArtic = st.artic;
       }
 
-      // Velocity: dynamic level (abs/scaled) overrides abcjs default, + accent
-      // bump, × per-voice velocity scale.
-      const abcVol = p.volume ?? 92;
-      let base = abcVol;
-      if (st?.level?.velAbs   != null) base = st.level.velAbs;
-      else if (st?.level?.velScale != null) base = abcVol * st.level.velScale;
-      const scale = ksPlan ? ksPlan.velScaleForVoice(voice) : 1;
-      const vel = Math.max(1, Math.min(127, Math.round((base + bump) * scale)));
+      const vel = Math.max(1, Math.min(127, Math.round(p.volume ?? 95)));
 
       const pitch = Math.round(p.pitch);
       const durMs = Math.max(40, (p.duration ?? 0.25) * msPerMeasure / meterSize);
@@ -2277,7 +2308,7 @@ async function exportMIDI(content) {
   // velocities), written as a Standard MIDI File (core/midi-file.js) — one
   // parser for the score, the playback and the export. Null when nothing timed.
   const expanded = expandAbc(_withDerivedTitle(content)).text;
-  const { timing } = abc2svgTiming(expanded);
+  const { timing } = abc2svgTiming(expanded, { velocity: _velocityConfig(expanded) });
   if (!timing.notes.length) return null;
   return new Blob([midiFileFromTiming(timing, { title: state.title ?? '' })], { type: 'audio/midi' });
 }

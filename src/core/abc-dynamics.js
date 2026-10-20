@@ -10,6 +10,14 @@
  * place {compose} reads markings (abcjs dropped the ones it did not know;
  * abc2svg keeps them in its model but the player rows do not carry them).
  *
+ * The document's `midi.map` velocity entries (front matter; see abcjs.js
+ * `_velocityConfig`) layer on top through `opts.velocity`, so the sampler, the
+ * MIDI file and the external MIDI port all hear the same velocities: an
+ * absolute `velocity: 120` is a sticky flat level, a decimal `0.8` a sticky
+ * scale of the dynamics in force, `+25` a per-note bump; `midi.voices.<n>.velocity`
+ * scales a whole voice. A mark that has a map entry no longer applies its
+ * built-in effect (a mapped `accent` bumps by ITS amount, not 15).
+ *
  * Pure, Node-tested in test/abc-dynamics.test.mjs. `applyDynamics` mutates the
  * timing's notes (`velocity`, 1–127) and returns the timing.
  */
@@ -33,10 +41,12 @@ const OPEN_DIM = new Set(['diminuendo(', '>(']), CLOSE_DIM = new Set(['diminuend
 const clamp = (v) => Math.max(1, Math.min(127, Math.round(v)));
 
 /**
- * The marks in the text: `!name!` decorations, plus the `L` shorthand (accent)
- * when it directly precedes a note's token. `at` = where the mark starts.
+ * The marks in the text: `!name!` decorations that mean something to the
+ * dynamics — levels, hairpins, accents. With `{ all: true }` every other
+ * `!name!` is listed too (kind `'other'`), for the document's own `midi.map`
+ * entries. `at` = where the mark starts.
  */
-export function dynamicMarks(source) {
+export function dynamicMarks(source, { all = false } = {}) {
   const marks = [];
   const re = /!([^!\n]+)!/g;
   for (let m; (m = re.exec(source)); ) {
@@ -48,6 +58,7 @@ export function dynamicMarks(source) {
     else if (OPEN_DIM.has(name)) kind = 'dim(';
     else if (CLOSE_DIM.has(name)) kind = 'dim)';
     else if (ACCENTS.has(name)) kind = 'accent';
+    else if (all) kind = 'other';
     if (kind) marks.push({ at: m.index, end: m.index + m[0].length, kind, name });
   }
   return marks;
@@ -73,33 +84,44 @@ export function beatStress(timeWhole, meter) {
 /**
  * Give every note of `timing` a `velocity` from the dynamics in `source`.
  * @param {{ notes: object[] }} timing  core/abc-timing.js timingFromEvents output; notes carry
- *   `start` (content-relative), `voiceIndex`, `grace`, and `timeWhole` when the model was available
+ *   `start` (content-relative), `voice` (id), `voiceIndex`, `grace`, and `timeWhole` when the
+ *   model was available
  * @param {string} source  the text abc2svg parsed (the EXPANDED content, same offsets as `start`)
- * @param {{ meter?: {num:number, den:number}|null, beatAccents?: boolean }} [opts]
+ * @param {object} [opts]
+ * @param {{num:number, den:number}|null} [opts.meter]
+ * @param {boolean} [opts.beatAccents=true]  the default beat stress (off = a flat 95)
+ * @param {object} [opts.velocity]  the document's `midi.map` velocity layer:
+ *   `entryFor(voiceId, name)` → `{ velAbs?, velScale?, velBump? }` or null (names lower-case),
+ *   `voiceScale(voiceId)` → a factor (1 = none), `aliases` (`{ '>': 'accent' }` — a mark's
+ *   spelling → the name the map uses) and `shorthands` (`{ L: 'accent', '.': 'staccato' }` —
+ *   the one-letter decorations before a note, looked up in the map too)
  * @returns the same timing, notes mutated
  */
-export function applyDynamics(timing, source, { meter = null, beatAccents = true } = {}) {
+export function applyDynamics(timing, source, { meter = null, beatAccents = true, velocity = null } = {}) {
   const notes = timing?.notes ?? [];
   if (!notes.length) return timing;
   const text = String(source ?? '');
-  const marks = dynamicMarks(text);
+  const aliases = velocity?.aliases ?? {};
+  const shorthands = velocity?.shorthands ?? { L: 'accent' };
+  const canon = (name) => (aliases[name] ?? name).toLowerCase();
+  const entryFor = (voiceId, name) => velocity?.entryFor?.(voiceId, canon(name)) ?? null;
+  const voiceScale = (voiceId) => { const f = Number(velocity?.voiceScale?.(voiceId)); return Number.isFinite(f) && f > 0 ? f : 1; };
+  const marks = dynamicMarks(text, { all: !!velocity });
 
   // Distinct principal tokens per voice, in source order (a chord is one token;
   // a repeat replays a token — the velocity belongs to the token).
-  const voices = new Map();   // voiceIndex → [{ start, timeWhole }]
+  const voices = new Map();   // voiceIndex → { id, tokens: [{ start, timeWhole }] }
   for (const n of notes) {
     if (n.grace) continue;
-    let list = voices.get(n.voiceIndex);
-    if (!list) { list = []; voices.set(n.voiceIndex, list); }
-    if (!list.length || list[list.length - 1].start !== n.start) {
-      if (!list.some(t => t.start === n.start)) list.push({ start: n.start, timeWhole: n.timeWhole });
-    }
+    let v = voices.get(n.voiceIndex);
+    if (!v) { v = { id: n.voice ?? String(n.voiceIndex), tokens: [] }; voices.set(n.voiceIndex, v); }
+    if (!v.tokens.some(t => t.start === n.start)) v.tokens.push({ start: n.start, timeWhole: n.timeWhole });
   }
-  for (const list of voices.values()) list.sort((a, b) => a.start - b.start);
+  for (const v of voices.values()) v.tokens.sort((a, b) => a.start - b.start);
 
   // A mark belongs to the first token at or after it in the text (its own
   // voice's: a voice's music is contiguous in the source around the mark).
-  const allTokens = [...voices.values()].flat().sort((a, b) => a.start - b.start);
+  const allTokens = [...voices.values()].flatMap(v => v.tokens).sort((a, b) => a.start - b.start);
   const marksAt = new Map();   // token start → marks
   let ti = 0;
   for (const mk of marks.sort((a, b) => a.at - b.at)) {
@@ -118,26 +140,46 @@ export function applyDynamics(timing, source, { meter = null, beatAccents = true
     list.push(mk);
   }
 
-  // The `L` shorthand: the char before the token (past its accidentals).
-  const shorthandAccent = (start) => {
+  // The one-letter shorthand before the token (past its accidentals): `L` is
+  // an accent; any other letter counts only through a map entry.
+  const shorthandOf = (start) => {
     let i = start;
     while (i > 0 && /[\^_=]/.test(text[i - 1])) i--;
-    return text[i - 1] === 'L';
+    const ch = text[i - 1];
+    return ch != null && shorthands[ch] ? shorthands[ch] : null;
   };
 
-  // Walk each voice: a sticky level, hairpins ramping toward the next mark.
+  // Walk each voice: a sticky level, hairpins ramping toward the next mark,
+  // and the map's sticky absolute level / scale over them.
   const velocityOf = new Map();   // token start → velocity
-  const graceLevel = new Map();   // token start → the level in force (for grace notes before it)
-  for (const tokens of voices.values()) {
+  const graceLevel = new Map();   // token start → the soft level in force (for grace notes before it)
+  for (const { id: voiceId, tokens } of voices.values()) {
     let level = DEFAULT_LEVEL.slice();
     let ramp = null;              // { per: number, left: number }
+    let mapAbs = null, mapScale = null;
+    const vScale = voiceScale(voiceId);
     for (let i = 0; i < tokens.length; i++) {
       const tok = tokens[i];
-      const here = marksAt.get(tok.start) ?? [];
-      let accent = shorthandAccent(tok.start);
+      const here = (marksAt.get(tok.start) ?? []).slice();
+      const sh = shorthandOf(tok.start);
+      if (sh) here.push({ kind: sh === 'accent' ? 'accent' : 'other', name: sh, at: tok.start, shorthand: true });
+      let bump = 0;
       for (const mk of here) {
-        if (mk.kind === 'level') { level = DYNAMIC_LEVELS[mk.name].slice(); ramp = null; }
-        else if (mk.kind === 'accent') accent = true;
+        // A level mark always sets the dynamic in force (so a later mapped
+        // scale is relative to it) and ends a mapped absolute level …
+        if (mk.kind === 'level') { level = DYNAMIC_LEVELS[mk.name].slice(); ramp = null; mapAbs = null; }
+        // … then its map entry, when it has one, shapes the output: an
+        // absolute level overrides the table, a scale rides on it, a bump
+        // adds. A mapped mark replaces its built-in bump (a mapped `accent`
+        // adds its own amount, not 15).
+        const e = entryFor(voiceId, mk.name);
+        if (e) {
+          if (e.velAbs != null) { mapAbs = Math.max(0, Math.min(127, +e.velAbs)); mapScale = null; }
+          if (e.velScale != null) { const f = +e.velScale; if (Number.isFinite(f) && f > 0) { mapScale = f; mapAbs = null; } }
+          if (e.velBump) bump += +e.velBump || 0;
+          if (e.velAbs != null || e.velScale != null || e.velBump) continue;
+        }
+        if (mk.kind === 'accent') bump += ACCENT_BUMP;
         else if (mk.kind === 'cresc(' || mk.kind === 'dim(') {
           const closeKind = mk.kind === 'cresc(' ? 'cresc)' : 'dim)';
           // Tokens until the matching close (the close's own token included).
@@ -162,11 +204,10 @@ export function applyDynamics(timing, source, { meter = null, beatAccents = true
         level = level.map(v => Math.max(1, Math.min(127, v + ramp.per)));
         if (--ramp.left <= 0) ramp = null;
       }
-      graceLevel.set(tok.start, level[2]);
+      const shape = (v) => (mapAbs != null ? mapAbs : v) * (mapScale ?? 1) * vScale;
+      graceLevel.set(tok.start, shape(level[2]));
       const stress = beatAccents ? beatStress(tok.timeWhole, meter) : 1;
-      let vel = level[stress];
-      if (accent) vel += ACCENT_BUMP;
-      velocityOf.set(tok.start, clamp(vel));
+      velocityOf.set(tok.start, clamp(shape(level[stress]) + bump));
     }
   }
 
