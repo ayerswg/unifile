@@ -177,7 +177,7 @@ test('parity: a blank line in the BODY ends the tune for both engines alike', ()
 });
 
 // ── The two views abcjs.js consumes (the one-parser swap, PR 2) ──────────────
-import { modelInfo, momentsFromTiming, sequenceFromTiming } from '../src/core/abc-timing.js';
+import { modelInfo, momentsFromTiming, notesFromMoments } from '../src/core/abc-timing.js';
 
 test('modelInfo: token extents, written lengths, the tempo in force, grace istarts and the meter', () => {
   const src = 'X:1\nM:3/4\nL:1/8\nQ:1/4=90\nK:G\nGAB {c}d2 z | fga b2 z2 |\n';
@@ -225,21 +225,16 @@ test('momentsFromTiming: abcjs\'s noteTimings shape — one moment per onset, ev
   assert.equal(momentsFromTiming(grace.timing).length, 3);
 });
 
-test('sequenceFromTiming: CreateSynth\'s sequence in seconds — one track per voice, program first, muted voices out, grace notes in', () => {
-  const r = a2s('X:1\nK:C\nV:1\n{g}c2 d2 |\nV:2\n%%MIDI program 40\nC4 |\n');
-  const seq = sequenceFromTiming(r.timing);
-  assert.equal(seq.tracks.length, 2);
-  assert.deepEqual(seq.tracks[0][0], { cmd: 'program', instrument: 0, channel: 0 });
-  assert.deepEqual(seq.tracks[1][0], { cmd: 'program', instrument: 40, channel: 1 });
-  const v1 = seq.tracks[0].filter(e => e.cmd === 'note');
-  assert.equal(v1.length, 3);                                           // the grace note sounds
-  assert.ok(v1.every(e => Number.isInteger(e.pitch) && e.volume === 95 && e.gap === 0 && e.instrument === 0));
-  assert.ok(Math.abs(seq.totalDuration - 1) < 0.001);                   // c2 d2 = 2 quarters at 120 = 1 s
-  // Second voice muted by position.
-  const v2starts = new Set(r.timing.notes.filter(n => n.voice === '2').map(n => n.start));
-  const muted = sequenceFromTiming(r.timing, { isMuted: (s) => v2starts.has(s) });
-  assert.equal(muted.tracks.length, 1);
-  assert.equal(muted.tracks[0][0].channel, 0);
+test('notesFromMoments: the way back from the noteTimings shape — one flat note per pitch, ms durations, velocity from volume', () => {
+  const r = a2s('X:1\nM:4/4\nL:1/8\nK:C\nV:1\n[ce]2 d2 |\nV:2\nC4 |\n');
+  const moments = momentsFromTiming(r.timing, { meterSize: 1 });
+  moments[0].midiPitches[0].volume = 70;                                // as abcjs's flattener would set it
+  const notes = notesFromMoments(moments, 1);
+  assert.deepEqual(notes.map(n => [n.ms, n.midi, n.durMs, n.velocity]),
+                   [[0, 72, 500, 70], [0, 76, 500, 95], [0, 60, 1000, 95], [500, 74, 500, 95]]);
+  assert.ok(notes.every(n => n.start >= 0));
+  assert.deepEqual(notesFromMoments([]), []);
+  assert.deepEqual(notesFromMoments(null), []);
 });
 
 // ── abc2svg's diagnostics for the editor ─────────────────────────────────────

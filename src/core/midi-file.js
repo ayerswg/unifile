@@ -5,8 +5,10 @@
  * the text by an engine that reads some tunes differently from the one that
  * draws the score (2026-10, the one-parser work). This writer takes the same
  * `timing` the transport plays: one track per voice, the voice's `%%MIDI
- * program` first, every note on/off at its ms with one velocity (abc2svg's rows
- * carry no dynamics), grace notes included, `%%MIDI control` rows as CCs.
+ * program` first, every note on/off at its ms with the note's own velocity
+ * (core/abc-dynamics.js — beat stress, `!p!`…`!ff!`, hairpins, accents; `volume`
+ * is the fallback for a note without one), grace notes included, `%%MIDI
+ * control` rows as CCs.
  *
  * Time base: 500 ticks per quarter at a fixed tempo of 500 000 µs per quarter,
  * so ONE TICK IS ONE MILLISECOND — the timing's ms land on the grid exactly and
@@ -30,7 +32,8 @@ const chunk = (tag, bytes) => [...[...tag].map(ch => ch.charCodeAt(0)), ...u32(b
 
 /**
  * @param {import('./abc-timing.js').timingFromEvents extends (...a: any) => infer R ? R : never} timing
- * @param {{ volume?: number, title?: string }} [opts]  `volume` = velocity 1–127 (default 95)
+ * @param {{ volume?: number, title?: string }} [opts]  `volume` = the velocity 1–127 for a note
+ *   without its own `velocity` (default 95)
  * @returns {Uint8Array}  the .mid file
  */
 export function midiFileFromTiming(timing, { volume = 95, title = '' } = {}) {
@@ -47,7 +50,8 @@ export function midiFileFromTiming(timing, { volume = 95, title = '' } = {}) {
     const v = lane(n.voiceIndex);
     v.program = n.instr & 0x7f;
     const pitch = Math.max(0, Math.min(127, Math.round(n.midi)));
-    v.events.push({ at: n.ms, order: 1, bytes: [0x90, pitch, vel] });
+    const nv = n.velocity != null ? Math.max(1, Math.min(127, Math.round(n.velocity))) : vel;
+    v.events.push({ at: n.ms, order: 1, bytes: [0x90, pitch, nv] });
     v.events.push({ at: n.ms + n.durMs, order: 0, bytes: [0x80, pitch, 0] });   // offs before ons at the same tick
   }
   for (const c of timing.controls ?? []) {

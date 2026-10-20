@@ -25,8 +25,11 @@
  *   • `momentsFromTiming` — the table abcjs.js's transport, cursor, highlight,
  *     seek, audition, piano roll and Web MIDI paths read (abcjs's noteTimings
  *     shape, so every consumer kept working when the source engine changed);
- *   • `sequenceFromTiming` — what abcjs's CreateSynth plays (the offline piano
- *     stays; abcjs just mixes the samples at the times abc2svg says).
+ *   • `notesFromMoments`  — the way back: a flat note list for the sampler
+ *     (core/abc-sampler.js) from a table in that shape, for the one case where
+ *     the table is abcjs's own (abcjs drew the score).
+ * The sampler plays `timing.notes` directly — the piano (core/abc-sampler.js)
+ * reads `ms`, `durMs`, `midi`, `velocity` (core/abc-dynamics.js) and `start`.
  */
 
 /**
@@ -78,6 +81,7 @@ export function modelInfo(tsfirst, C, voice_tb = null) {
       end: s.iend != null && s.iend > s.istart ? s.iend : s.istart + 1,
       dur: s.dur ?? 0,
       msPerWhole: 1000 * BLEN / playFactor,
+      timeWhole: (s.time ?? 0) / BLEN,      // the WRITTEN position (repeats share it) — the beat stress reads it
       rest,
     });
   };
@@ -146,6 +150,7 @@ export function timingFromEvents(events, { offset = 0, voices = [], graceStarts 
       const note = {
         start, end: tokenEnd, ms, durMs,
         durWhole: durMs / msPerWhole, msPerWhole,
+        timeWhole: sym?.timeWhole,            // written position, whole notes (core/abc-dynamics.js beat stress)
         midi: e[3], voice, voiceIndex, instr: instr | 0,
       };
       if (graceStarts?.has(istart)) note.grace = true;
@@ -179,7 +184,7 @@ export function countOnsets(timing) {
  * `startCharArray`, `left: 0`…) are abcjs's conventions, not ours.
  *
  * Principal notes and rests only: grace notes ride on their principal in
- * abcjs's table too (they still SOUND — `sequenceFromTiming` keeps them).
+ * abcjs's table too (they still SOUND — the sampler plays `timing.notes`).
  * `millisecondsPerMeasure` = ms per whole × the meter fraction, which is how
  * every consumer converts a `duration` in whole notes back to ms.
  * @param {ReturnType<typeof timingFromEvents>} timing
@@ -212,7 +217,7 @@ export function momentsFromTiming(timing, { meterSize = 1 } = {}) {
     entry(m, n.start, n.end);
     m.midiPitches.push({
       pitch: n.midi, startChar: n.start, endChar: n.end,
-      duration: n.durWhole, volume: 95, instrument: n.instr & 0x7f,
+      duration: n.durWhole, volume: n.velocity ?? 95, instrument: n.instr & 0x7f,
     });
   }
   for (const r of timing.rests) {
@@ -235,37 +240,26 @@ export function momentsFromTiming(timing, { meterSize = 1 } = {}) {
 }
 
 /**
- * What abcjs's `CreateSynth` should play: its `sequence` input, with `start`
- * and `duration` in SECONDS. Pass `millisecondsPerMeasure: 1000` to `init`
- * alongside it — with a sequence (no visualObj) the synth's meter size is 1,
- * so one sequence unit is then exactly one second. One track per voice, a
- * `program` event first (the GM program from `%%MIDI program`, bank dropped),
- * grace notes included (they sound), muted voices left out.
- * @param {ReturnType<typeof timingFromEvents>} timing
- * @param {{ isMuted?: (start: number) => boolean, volume?: number }} [opts]
- *   `isMuted(start)` = the app's per-char mute/solo test; `volume` = the MIDI
- *   velocity for every note (ToAudio's rows carry no dynamics).
- * @returns {{ tempo: number, instrument: number, tracks: object[][], totalDuration: number }}
+ * The inverse of `momentsFromTiming` for a table that did NOT come from abc2svg
+ * (abcjs's own `noteTimings`, when abcjs drew the score): the flat note list
+ * the sampler plays (core/abc-sampler.js), `{ ms, durMs, midi, velocity, start }`
+ * sorted by onset. Durations come from `duration` (whole notes) × the moment's
+ * `millisecondsPerMeasure` / the meter size, as every consumer converts them.
+ * @param {object[]} moments
+ * @param {number} meterSize  num/den of the meter (1 when unknown)
  */
-export function sequenceFromTiming(timing, { isMuted = null, volume = 95 } = {}) {
-  const tracks = new Map();   // voiceIndex → events
-  let total = 0;
-  for (const n of timing.notes) {
-    if (isMuted && isMuted(n.start)) continue;
-    if (n.durMs <= 0) continue;
-    const program = n.instr & 0x7f;
-    let t = tracks.get(n.voiceIndex);
-    if (!t) {
-      t = [{ cmd: 'program', instrument: program, channel: n.voiceIndex }];
-      tracks.set(n.voiceIndex, t);
+export function notesFromMoments(moments, meterSize = 1) {
+  const out = [];
+  for (const ev of moments ?? []) {
+    const msPerWhole = (ev.millisecondsPerMeasure || 1000) / (meterSize || 1);
+    for (const p of ev.midiPitches ?? []) {
+      if (p?.pitch == null) continue;
+      out.push({ ms: ev.milliseconds, durMs: Math.max(1, (p.duration ?? 0.25) * msPerWhole),
+                 midi: p.pitch, velocity: p.volume ?? 95, start: p.startChar ?? -1 });
     }
-    const start = n.ms / 1000, duration = n.durMs / 1000;
-    t.push({ cmd: 'note', pitch: Math.round(n.midi), volume, start, duration, gap: 0, instrument: program,
-             startChar: n.start, endChar: n.end });
-    if (start + duration > total) total = start + duration;
   }
-  const ordered = [...tracks.keys()].sort((a, b) => a - b).map(k => tracks.get(k));
-  return { tempo: 120, instrument: 0, tracks: ordered, totalDuration: total };
+  out.sort((a, b) => a.ms - b.ms || a.start - b.start);
+  return out;
 }
 
 /**
