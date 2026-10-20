@@ -1096,7 +1096,7 @@ midi:
     accent: { velocity: +25 }   # per-note bump (+/-)
     soft:   { velocity: 0.8 }   # scale of default
 ---</code></pre>
-<p class="help-note">Standard ABC dynamics (<code>!ff!</code>…<code>!pp!</code>) already affect velocity. <code>midi.map</code> lets you redefine any marking: an integer is an absolute level, <code>+n</code>/<code>-n</code> is a per-note bump (accents), a decimal scales the default.</p>`
+<p class="help-note">Standard ABC dynamics (<code>!ff!</code>…<code>!pp!</code>, hairpins, accents) already shape velocity. <code>midi.map</code> lets you redefine any marking: an integer is an absolute level (sticky, flat), <code>+n</code>/<code>-n</code> is a per-note bump (accents), a decimal scales the dynamics in force. A mapped marking replaces its built-in effect. Applies everywhere — the built-in piano, the exported MIDI file and an external MIDI port alike.</p>`
       },
       {
         group: 'Front matter (unifile)',
@@ -1124,7 +1124,7 @@ midi:
     1: { channel: 1, volume: 100, pan: 54 }
     2: { channel: 2, volume: 85,  pan: 74, velocity: 0.9 }
 ---</code></pre>
-<p class="help-note">Per voice (by number): <code>channel</code>, <code>volume</code> (CC7), <code>pan</code> (CC10, 0-127), a velocity <code>scale</code>, and its own <code>map</code>/<code>keyswitches</code> that override the global ones. Applies on the external MIDI path.</p>`
+<p class="help-note">Per voice (by number): <code>channel</code>, <code>volume</code> (CC7), <code>pan</code> (CC10, 0-127), a <code>velocity</code> scale, and its own <code>map</code>/<code>keyswitches</code> that override the global ones. The velocity scale and the map's velocities apply everywhere; channel, volume, pan and keyswitches on the external MIDI path.</p>`
       },
 
       // ── Tune header ──────────────────────────────────────────────────────

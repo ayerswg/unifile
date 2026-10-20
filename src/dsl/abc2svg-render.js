@@ -450,7 +450,7 @@ function makeResponsive(el) {
  * `pairs` are section-relative [{from, to}] char ranges (abcjs noteTimings
  * startChar/endChar space — identical source string, so offsets line up).
  */
-export function renderAbc2svg(content, el, { onSelect } = {}) {
+export function renderAbc2svg(content, el, { onSelect, velocity = null } = {}) {
   // Fill the pane (parity with abcjs's responsive:'resize'): abc2svg engraves
   // to its page width — default A4 (~794px) — and AUTO-WRAPS source lines that
   // overflow it, so without this a wide system breaks early no matter how wide
@@ -591,8 +591,9 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     // note and its glyphs share a key. abcjs.js compares this against its own
     // table (`_engineParity`) and the one-parser work swaps its consumers over.
     // … with dynamics → velocity from the text (core/abc-dynamics.js: beat
-    // stress, !p!…!ff!, hairpins, accents) — abc2svg's rows carry none.
-    timing: applyDynamics(timingFromEvents(events, { offset: -prefix.length, voices, graceStarts, syms: timingSyms }), content, { meter }),
+    // stress, !p!…!ff!, hairpins, accents, plus the document's midi.map
+    // velocity layer in `velocity`) — abc2svg's rows carry none.
+    timing: applyDynamics(timingFromEvents(events, { offset: -prefix.length, voices, graceStarts, syms: timingSyms }), content, { meter, velocity }),
     // The tune's meter (num/den) from its first M:, null when it has none —
     // abcjs.js's fallback when abcjs parsed no tune to ask.
     meter,
@@ -818,16 +819,17 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
  * editor's lint): the same parse the score gets — the default line-flow
  * directive in front, nothing else injected — engraved into a throwaway buffer.
  * @param {string} content  the EXPANDED ABC (abc-shorthand.js expandAbc)
+ * @param {{ velocity?: object|null }} [opts]  the `midi.map` velocity layer for applyDynamics
  * @returns {{ timing: ReturnType<typeof timingFromEvents>, errors: {msg:string,l:number,c:number}[],
  *             prefixLines: number, truncated: boolean, meter: {num:number,den:number}|null }}
  */
-export function abc2svgTiming(content) {
+export function abc2svgTiming(content, { velocity = null } = {}) {
   const src = withDefaultDirective(content, 'linebreak', DEFAULT_LINEBREAK);
   const prefixLen = src.length - content.length;
   const prefixLines = (src.slice(0, prefixLen).match(/\n/g) ?? []).length;
   const { errors, events, voices, truncated, graceStarts, syms, meter } = engrave(src, { timing: true, preserveSheet: true });
   return {
-    timing: applyDynamics(timingFromEvents(events, { offset: -prefixLen, voices, graceStarts, syms }), content, { meter }),
+    timing: applyDynamics(timingFromEvents(events, { offset: -prefixLen, voices, graceStarts, syms }), content, { meter, velocity }),
     errors, prefixLines, truncated, meter,
   };
 }
