@@ -1795,16 +1795,14 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
    units drop these declarations → the score stays in the column (safe). The
    abc2svg render measures the wrap's clientWidth for %%pagewidth, so the wider
    box directly becomes a wider engraving (more bars per line). */
-.preview-content .abc2svg-wrap,
-.preview-content .abc-preview-wrap {
+.preview-content .abc2svg-wrap {
   width: clamp(100%, 100cqw - 64px, 1100px);
   margin-left: calc((100% - clamp(100%, 100cqw - 64px, 1100px)) / 2);
 }
 /* Phones: a slim gutter (the engraving adds its own 14px margins), so the
    staff gets the width — 64px of chrome on a 400px pane is a lot of score. */
 @media (max-width: 640px), (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
-  .preview-content .abc2svg-wrap,
-  .preview-content .abc-preview-wrap {
+  .preview-content .abc2svg-wrap {
     width: clamp(100%, 100cqw - 24px, 1100px);
     margin-left: calc((100% - clamp(100%, 100cqw - 24px, 1100px)) / 2);
   }
@@ -1828,42 +1826,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   font-weight: 600;
   color: var(--text);
   padding: 8px 12px 0;
-}
-
-.abc-preview-wrap {
-  padding: 16px;
-  border-radius: var(--radius);
-  position: relative;   /* positioning context for the score-cursor overlay */
-}
-.abc-preview-wrap svg { max-width: 100%; }
-/* In dark mode abcjs renders black strokes — invert to white for readability.
-   Reset color to black first so inherited CSS color doesn't contaminate the
-   SVG fill before the filter is applied (which would invert it to a dark tone).
-   The cursor overlay (.uf-abc-overlay-svg) is EXCLUDED so its accent colours are
-   not inverted. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .abc-preview-wrap svg:not(.uf-abc-overlay-svg) { color: black; filter: invert(1) hue-rotate(180deg); }
-}
-[data-theme="dark"] .abc-preview-wrap svg:not(.uf-abc-overlay-svg) { color: black; filter: invert(1) hue-rotate(180deg); }
-[data-theme="light"] .abc-preview-wrap svg:not(.uf-abc-overlay-svg) { filter: none; }
-
-/* Score-level playback cursor + range overlay (drawn over the abcjs SVG, in a
-   separate <svg> so it escapes the dark-mode invert filter above).  Positioned
-   to the abcjs SVG box in JS; shares its viewBox so coordinates map 1:1. */
-.uf-abc-overlay-svg { position: absolute; pointer-events: none; overflow: visible; }
-.uf-abc-cursor {
-  stroke: var(--accent);
-  stroke-width: 1.25;                  /* thinner than the solid range brackets */
-  stroke-dasharray: 4 3;               /* dashed, so it reads as the moving playhead */
-  vector-effect: non-scaling-stroke;   /* constant px width regardless of scale */
-}
-.uf-abc-range-band { fill: var(--accent); opacity: .13; }
-.uf-abc-range-edge {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 2;
-  opacity: .85;
-  vector-effect: non-scaling-stroke;
 }
 
 /* ── abc2svg score (default engraving engine; see dsl/abc2svg-render.js) ──
@@ -1919,47 +1881,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   opacity: .8;
   pointer-events: none;
   z-index: 2;
-}
-
-/* Clickable note/rest elements get a pointer cursor */
-.abc-preview-wrap svg g[class*="abcjs-note"],
-.abc-preview-wrap svg g[class*="abcjs-rest"],
-.abc-preview-wrap svg g[class*="abcjs-chord"] { cursor: pointer; }
-/* abcjs sets fill="#ff0000" directly on selected-note g elements via its own highlight().
-   We add a matching red drop-shadow glow. #ff0000 → invert → cyan → hue-rotate(180°) → red,
-   so the glow colour survives the dark-mode double-transform and stays red in both modes. */
-.abc-preview-wrap svg g.abcjs-note_selected {
-  filter: drop-shadow(0 0 5px #ff0000);
-}
-
-/* Muted / non-soloed voice — its notes are dimmed in the score so it's clear
-   they won't sound or highlight (the class is toggled per note group in abcjs.js). */
-.abc-preview-wrap svg g.abc-voice-muted { opacity: .3; }
-
-/* While ABC audio is playing, .abcjs-note_playing is added directly to each
-   simultaneously-playing SVG group element (one per voice).  CSS fill overrides
-   abcjs's inline fill attribute.
-   Green #00c800 survives the dark-mode invert+hue-rotate double-transform:
-   invert → magenta, hue-rotate(180°) → green. */
-.abc-playing.abc-preview-wrap svg g.abcjs-note_playing path,
-.abc-playing.abc-preview-wrap svg g.abcjs-note_playing rect {
-  fill: #00c800 !important;
-}
-.abc-playing.abc-preview-wrap svg g.abcjs-note_playing {
-  filter: drop-shadow(0 0 5px #00c800);
-}
-/* Light / no-dark-transform mode: Catppuccin Latte green */
-[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_playing path,
-[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_playing rect {
-  fill: #40a02b !important;
-}
-[data-theme="light"] .abc-playing.abc-preview-wrap svg g.abcjs-note_playing {
-  filter: drop-shadow(0 0 5px #40a02b);
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_playing path,
-  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_playing rect { fill: #40a02b !important; }
-  :root:not([data-theme]) .abc-playing.abc-preview-wrap svg g.abcjs-note_playing { filter: drop-shadow(0 0 5px #40a02b); }
 }
 
 .preview-spinner {
@@ -2149,7 +2070,7 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
   display: block;
 }
 
-/* Wrapper elements (e.g. .abc-preview-wrap) inside non-markdown slide parts
+/* Wrapper elements (e.g. .abc2svg-wrap) inside non-markdown slide parts
    must also carry the height constraint so their children's max-height: 100%
    resolves against the part height, not the wrapper's unconstrained auto height. */
 .uf-slide-part:not(.uf-dsl-markdown) > :not(svg) {
@@ -2286,9 +2207,6 @@ details[open] > .plugin-ext-summary::before { transform: rotate(90deg); }
 .uf-doc-page    .uf-dsl-mermaid svg rect.background {
   fill: transparent !important;
 }
-/* Prevent the dark-mode ABC SVG invert from leaking into slides or doc pages */
-.uf-slide-frame .abc-preview-wrap svg,
-.uf-doc-page    .abc-preview-wrap svg { filter: none !important; }
 
 /* Slide number badge — bottom-right corner */
 .uf-slide-num {

@@ -47,10 +47,6 @@ import { applyDynamics } from '../core/abc-dynamics.js';
 const DEFAULT_PAGE_WIDTH = 794;
 
 /** True when abc2svg is the active engraver (default; 'abcjs' opts out). */
-export function useAbc2svg() {
-  try { return localStorage.getItem('uf_engraver') !== 'abcjs'; } catch { return true; }
-}
-
 // abc2svg frontends define these hooks; the core calls them. No-ops keep it
 // fully offline (no %%abc-include fetches, no dynamic module loads).
 abc2svg.abc_end = abc2svg.abc_end || function () {};

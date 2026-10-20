@@ -13,21 +13,20 @@
  *   |: CDEF GABc :|
  */
 
-import abcjs from 'abcjs';
 import { StreamLanguage } from '@codemirror/language';
 import { linter } from '@codemirror/lint';
 import { hoverTooltip, EditorView } from '@codemirror/view';
 import { registerDSL } from './registry.js';
 import { alignAbcVoices } from './abc-align.js';
 import {
-  renderAbc2svg, useAbc2svg, abc2svgExportSvg, abc2svgExportPrintBody, abc2svgTiming, abc2svgDiagnostics,
-} from './abc2svg-render.js';   // THE engine: it draws the score and times it (abcjs mixes the piano, draws tablature)
+  renderAbc2svg, abc2svgExportSvg, abc2svgExportPrintBody, abc2svgTiming, abc2svgDiagnostics,
+} from './abc2svg-render.js';   // THE engine: it draws the score and times it (the sampler plays its timing)
 import { state } from '../ui/state.js';
 import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matter.js';
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
-import { expandAbc, sourceLineBreaks, tuneBlankLines, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
-import { momentsFromTiming, notesFromMoments, parseErrmsg } from '../core/abc-timing.js';
+import { expandAbc, tuneBlankLines, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
+import { momentsFromTiming, parseErrmsg } from '../core/abc-timing.js';
 import { midiFileFromTiming } from '../core/midi-file.js';
 import { PianoSampler } from '../core/abc-sampler.js';
 import PIANO_FONT from '../assets/piano-soundfont.js';
@@ -125,96 +124,32 @@ const abcLanguage = StreamLanguage.define({
 });
 
 // ---------------------------------------------------------------------------
-// Tablature helpers
+// Tablature
 // ---------------------------------------------------------------------------
 
 /**
- * Supported tablature instruments and their human-readable names.
- * These match the keys registered in abcjs's internal pluginTab table.
+ * abcjs's `%%tablature` / `%%tab` pragma (it ADDED a tab staff under the
+ * notation). abcjs is gone (2026-10), and abc2svg has no equivalent — its
+ * `%%strtab <strings>` (strtab-1.js, bundled) CONVERTS a voice into a tab
+ * staff instead. The lint points a document that still carries the old
+ * directive at it; the engine ignores the line (an unknown %% directive).
  */
-// Case-insensitive instrument lookup → abcjs's exact pluginTab key.
-const TAB_INSTRUMENTS = new Map([
-  ['guitar', 'guitar'], ['mandolin', 'mandolin'], ['violin', 'violin'],
-  ['fiddle', 'fiddle'], ['fivestring', 'fiveString'],
-]);
-
-/**
- * Parse tablature pragmas from an ABC source string into the `tablature` array
- * abcjs's renderAbc expects (abcjs renders one tab staff per array entry, in
- * declaration order).  Forgiving about syntax so the common forms all work:
- *
- *   %%tablature instrument=guitar capo=2 label="Gtr"
- *   %%tablature guitar              (instrument as a bare positional word)
- *   %%tab guitar                    (%%tab is accepted as a shorthand)
- *   %%tablature violin tuning=G,D,A,e
- *
- * Recognised keys (case-insensitive): instrument, capo, label, tuning
- * (comma/space separated → array), transpose / visualtranspose, firststaffonly,
- * hidetabsymbol.  A line with an unknown/empty instrument becomes a placeholder
- * ({instrument:''}) so per-voice ordering still works (e.g. tab on voice 1 only).
- *
- * Returns the array, or null when no tablature pragma is present.
- */
-function parseTabDirectives(src) {
-  const tabs = [];
-  for (const line of src.split('\n')) {
-    const m = line.match(/^%%tab(?:lature)?\b(.*)/i);
-    if (!m) continue;
-    const rest = m[1];
-
-    // key=value pairs (value may be "quoted" to allow spaces).
-    const raw = {};
-    for (const pair of rest.matchAll(/(\w+)\s*=\s*("[^"]*"|\S+)/g)) {
-      raw[pair[1].toLowerCase()] = pair[2].replace(/^"|"$/g, '');
-    }
-
-    // Instrument: explicit instrument=… else first bare known-instrument token.
-    let inst = raw.instrument;
-    if (!inst) {
-      for (const tok of rest.split(/\s+/)) {
-        if (TAB_INSTRUMENTS.has(tok.toLowerCase())) { inst = tok; break; }
-      }
-    }
-
-    // Build the abcjs-shaped args (correct camelCase keys).
-    const args = {};
-    const key = inst ? TAB_INSTRUMENTS.get(inst.toLowerCase()) : null;
-    args.instrument = key || '';               // '' = placeholder slot
-    if (raw.capo !== undefined)  args.capo = parseInt(raw.capo, 10) || 0;
-    if (raw.label !== undefined) args.label = raw.label;
-    if (raw.tuning) args.tuning = raw.tuning.split(/[,\s]+/).filter(Boolean);
-    const transpose = raw.transpose ?? raw.visualtranspose;
-    if (transpose !== undefined) args.visualTranspose = parseInt(transpose, 10) || 0;
-    if (raw.firststaffonly !== undefined) args.firstStaffOnly = raw.firststaffonly === 'true';
-    if (raw.hidetabsymbol !== undefined) args.hideTabSymbol = raw.hidetabsymbol === 'true';
-
-    tabs.push(args);
-  }
-  return tabs.length ? tabs : null;
-}
+const TABLATURE_DIRECTIVE_RE = /^%%tab(?:lature)?\b/i;
 
 // ---------------------------------------------------------------------------
 // Module-level playback and render state
 // ---------------------------------------------------------------------------
 
-// The abcjs engraver exposes rangeHighlight(from, to) which finds all note
-// elements whose source char range overlaps [from, to] and visually selects
-// them (adds abcjs-note_selected class + fill="#ff0000"). Updated on every
-// render; null when no ABC content has been rendered yet.
-let _engraver = null;
-
-// Full tune objects array from the last renderAbc call; needed for synth init.
-let _tuneObjects = null;
-
-// Note-timing events for the last-rendered tune (abcjs TimingCallbacks output,
-// filtered to type==='event').  Cached at render so we can map a section-relative
-// char offset → playback ms (for selection-driven scrubber seeking) without
-// rebuilding the timing table on every cursor move.
+// Note-timing events for the last-rendered tune: abc2svg's timing in the
+// MOMENT shape (core/abc-timing.js momentsFromTiming — one entry per onset
+// with `startCharArray` / `midiPitches` / `millisecondsPerMeasure`). Cached
+// at render so a section-relative char offset → playback ms lookup (for
+// selection-driven seeking) needs no rebuild on every cursor move.
 let _noteEvents = [];
 
 // Raw ABC source of the last render (section-relative).  Needed to scan for
-// `!name!` articulation tokens — abcjs drops unknown decorations, so we read
-// them from the source ourselves; their indices line up with note startChars.
+// `!name!` articulation tokens — no engine hands us decorations, so we read
+// them from the source ourselves; their indices line up with note starts.
 let _lastAbcSource = '';   // the EXPANDED section the engines parsed
 let _lastRawSource = '';   // the same section as written (voice shorthand intact)
 
@@ -229,32 +164,13 @@ function _isMutedAtChar(sectionChar) {
   return id != null && state.isVoiceMuted(id);
 }
 
-/** Score-order voice indices that are muted (for the synth `voicesOff` option). */
-function _mutedVoiceIndices() {
-  const idx = [];
-  _voiceMap.order.forEach((id, i) => { if (state.isVoiceMuted(id)) idx.push(i); });
-  return idx;
-}
-
-/** Dim the note groups of muted voices in the rendered score (toggled on change). */
+/** Fade the muted / non-soloed voices in the rendered score (toggled on change):
+ *  every annotation rect knows its voice id — one pass (abc2svg-render.js). */
 function _applyVoiceFade() {
-  // abc2svg score: every annotation rect knows its voice id — one pass.
-  if (_a2sScore) { _a2sScore.setVoiceFade(id => state.isVoiceMuted(id)); return; }
-  if (!_playEl) return;
-  _playEl.querySelectorAll('.abc-voice-muted').forEach(el => el.classList.remove('abc-voice-muted'));
-  if (state.abcMutedVoices.size === 0 && state.abcSoloVoices.size === 0) return;
-  for (const ev of _noteEvents) {
-    const starts = ev.startCharArray ?? [ev.startChar];
-    const groups = ev.elements ?? [];
-    starts.forEach((s, i) => {
-      if (s != null && _isMutedAtChar(s)) {
-        (groups[i] ?? []).forEach(el => el?.classList?.add('abc-voice-muted'));
-      }
-    });
-  }
+  _a2sScore?.setVoiceFade(id => state.isVoiceMuted(id));
 }
 
-// The preview container element; we add/remove 'abc-playing' class on it.
+// The score wrap of the active block (`.abc2svg-wrap`); carries 'abc-playing'.
 let _playEl = null;
 
 // The last editor selection range (updated by 'editor-select' events).
@@ -283,11 +199,11 @@ function _setNoteSelected(v) {
   }
 }
 
-// engraver.rangeHighlight() does an O(notes) DOM scan inside abcjs.  When the
-// user drags the cursor / makes a selection it can fire many times per frame, so
-// coalesce to one call per animation frame (latest range wins) to keep the main
-// thread responsive on large scores.  Other rangeHighlight callers (playback,
-// stopPlayback) run synchronously — they aren't on a high-frequency path.
+// highlightRange() walks the score's symbols. When the user drags the cursor /
+// makes a selection it can fire many times per frame, so coalesce to one call
+// per animation frame (latest range wins) to keep the main thread responsive on
+// large scores.  Other callers (playback, stopPlayback) run synchronously — they
+// aren't on a high-frequency path.
 let _rangeHighlightRaf = 0;
 function _scheduleRangeHighlight(adjFrom, adjTo) {
   if (_rangeHighlightRaf) cancelAnimationFrame(_rangeHighlightRaf);
@@ -297,15 +213,14 @@ function _scheduleRangeHighlight(adjFrom, adjTo) {
   });
 }
 
-// The abc2svg score object for the active block (null when the abcjs renderer
-// is active — localStorage escape hatch — or abc2svg failed on this content).
-// Mirrors _engraver's lifecycle: replaced per render, re-established on click.
+// The abc2svg score object for the active block (null when abc2svg could not
+// engrave the content). Replaced per render, re-established on click.
 let _a2sScore = null;
 
 // Re-engrave when the pane width settles or changes: abc2svg engraves to a
 // fixed page width measured at render time, which is 0/stale on the very first
 // render (pane not laid out yet) and goes stale on window/split resizes
-// (abcjs's responsive mode re-flowed CSS-only; abc2svg needs a re-render).
+// (a CSS-only reflow is not possible: abc2svg engraves to a width).
 // Deferred while playing — a re-render would reset the transport position.
 let _a2sResizeObs   = null;
 let _a2sResizeTimer = 0;
@@ -336,7 +251,6 @@ function _watchWidth(watchEl, engravedW, stillCurrent, reengrave) {
 // Debug introspection for preview automation (harmless in production).
 if (typeof globalThis !== 'undefined') {
   globalThis.__ufAbcDebug = Object.assign(() => ({
-    engraver: !!_engraver,
     a2s: !!_a2sScore,
     a2sSyms: _a2sScore?.symCount ?? null,
     a2sNotes: _a2sScore?.timing?.notes.length ?? null,   // abc2svg's timed notes (core/abc-timing.js)
@@ -349,15 +263,12 @@ if (typeof globalThis !== 'undefined') {
     sectionOffset: _sectionOffset,
     noteEvents: _noteEvents.length,
     events: _noteEvents.map(e => ({ ms: e.milliseconds, starts: e.startCharArray ?? [e.startChar], ends: e.endCharArray ?? [e.endChar] })),
-  }), { exportSvg: abc2svgExportSvg, exportPrintBody: abc2svgExportPrintBody, exportMidi: exportMIDI,
-        abcjsRendered: () => !!_tuneObjects?.[0] });
+  }), { exportSvg: abc2svgExportSvg, exportPrintBody: abc2svgExportPrintBody, exportMidi: exportMIDI });
 }
 
-/** Selection highlight on whichever engraver is live (section-relative chars). */
+/** Selection highlight on the live score (section-relative chars). */
 function _rangeHighlightNow(adjFrom, adjTo) {
-  if (_a2sScore) { _a2sScore.highlightRange(adjFrom, adjTo); return; }
-  if (!_engraver) return;
-  try { _engraver.rangeHighlight(adjFrom, adjTo); } catch { /* stale after re-render */ }
+  _a2sScore?.highlightRange(adjFrom, adjTo);
 }
 
 // Active playback handles (null when not playing).
@@ -447,8 +358,6 @@ async function render(rawContent, el) {
   // Note-selected state is NOT reset here.  Clearing happens in the editor-select
   // handler (collapsed cursor) so that a debounced re-render triggered by
   // active-section-change does not flash the play button away after a note click.
-  _engraver    = null;
-  _tuneObjects = null;
   _a2sScore    = null;
   _playEl      = null;
   _a2sResizeObs?.disconnect();
@@ -465,14 +374,15 @@ async function render(rawContent, el) {
   }
 
   const container = document.createElement('div');
-  container.className = 'abc-preview-wrap';
+  container.className = 'abc2svg-wrap';
   el.appendChild(container);
 
   // Derived tune title: when the ABC has no explicit `T:` field, show the
   // document title (set once, in the top bar) as the sheet's title. An explicit
-  // `T:` overrides it. This is a DOM heading, NOT a source injection, so abcjs's
-  // char positions still map 1:1 to the editor (note↔source highlighting stays
-  // correct). Exports inject `T:` into the string instead (see _withDerivedTitle).
+  // `T:` overrides it. This is a DOM heading, NOT a source injection, so the
+  // engine's char positions still map 1:1 to the editor (note↔source
+  // highlighting stays correct). Exports inject `T:` into the string instead
+  // (see _withDerivedTitle).
   if (!/^\s*T:/m.test(content)) {
     const t = (state.title || '').trim();
     if (t && !/^untitled/i.test(t)) {
@@ -484,8 +394,8 @@ async function render(rawContent, el) {
   }
 
   // In layout mode (slides / document / webpage), dslContentFrom is set on el.
-  // Mark the wrapper so _bindClickBack in preview.js defers to abcjs's own
-  // precise clickListener rather than emitting a coarse block-level selection.
+  // Mark the wrapper so _bindClickBack in preview.js defers to the score's own
+  // precise note clicks rather than emitting a coarse block-level selection.
   // We only set this in layout mode — in standalone mode stopPropagation handles
   // it, and we must not pollute this.content across re-renders.
   if (el.dataset.dslContentFrom != null) {
@@ -493,137 +403,46 @@ async function render(rawContent, el) {
   }
 
   // Capture the section offset for this specific block at render time.
-  // When multiple abcjs blocks exist (e.g. layout: webpage), the clickListener
-  // closure uses localOffset so it always refers to its own block, and it
-  // re-establishes the module-level context variables when clicked.
+  // When multiple ABC blocks exist (e.g. layout: webpage), the onSelect closure
+  // uses localOffset so it always refers to its own block, and it re-establishes
+  // the module-level context variables when clicked.
   const localOffset = _sectionOffset;
   const localMap    = srcMap;
 
   try {
-    const tablature = parseTabDirectives(content);
-    // The abcjs render is the VISIBLE score only for %%tablature docs and the
-    // abcjs escape hatch; there, mirror the abc2svg default (source newlines
-    // do not break staff lines) with abcjs's own re-wrapping (`wrap` needs a
-    // staffwidth). The hidden audio/timing render never needs it.
-    const abcjsVisible = !useAbc2svg() || !!tablature;
-    // The width a flowing abcjs score is engraved for; null when the source's
-    // own line breaks rule (then width does not change the layout). A hidden
-    // pane measures 0 → the 760 default, re-engraved once it shows.
-    let engravedForW = null;
-    const flowOpts = () => {
-      if (sourceLineBreaks(content)) return {};
-      engravedForW = el.clientWidth || 760;
-      return {
-        staffwidth: Math.max(300, engravedForW - 30),
-        wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 },
-      };
-    };
-    const wrapOpts = abcjsVisible ? flowOpts() : {};
-
-    // Declared before renderAbc so the clickListener closure can capture the
-    // binding; assigned after renderAbc once we have the tuneObjects back.
-    let localEngraver    = null;
-    let localTuneObjects = null;
-
-    const abcjsOpts = {
-      responsive: 'resize',
-      add_classes: true,
-      ...(tablature ? { tablature } : {}),
-      // abcjs highlights the clicked note (abcjs-note_selected + fill="#ff0000").
-      // We tell the editor which source range to jump to, and show the play button.
-      clickListener: (abcElem, _tuneNum, _classes, _analysis, _drag, mouseEvent) => {
-        mouseEvent?.stopPropagation();
-        // Re-establish this block as the active playback context so that the
-        // play button always acts on the tune whose note was last clicked.
-        _engraver    = localEngraver;
-        _tuneObjects = localTuneObjects;
-        _playEl      = container;
-        _sectionOffset = localOffset;
-        _srcMap      = localMap;
-        if (abcElem.startChar !== undefined && abcElem.endChar !== undefined) {
-          // Remember which block's note was clicked so we can restore the
-          // visual highlight if the block re-renders before the user moves.
-          _lastNoteBlockOffset = localOffset;
-          _lastNoteClickRange  = { from: abcElem.startChar, to: abcElem.endChar };
-          state.emit('dsl-select', {
-            from: _toDoc(abcElem.startChar),
-            to:   _toDoc(abcElem.endChar),
-          });
-          _setNoteSelected(true); // show the play button
-        }
-      }
-    };
-    // abcjs parses the tune ONLY when it is the engraver the user sees (2026-10,
-    // one parser): %%tablature documents and the escape hatch here, or below
-    // when abc2svg cannot engrave the content. Everything timed comes from
-    // abc2svg's own model (score.timing) otherwise — the hidden per-keystroke
-    // abcjs render that used to feed the transport is gone.
-    let tuneObjects = abcjsVisible ? abcjs.renderAbc(container, content, { ...abcjsOpts, ...wrapOpts }) : null;
-    const adoptAbcjs = () => {
-      localEngraver    = tuneObjects?.[0]?.engraver ?? null;
-      localTuneObjects = tuneObjects ?? null;
-      _engraver    = localEngraver;
-      _tuneObjects = localTuneObjects;
-    };
-    adoptAbcjs();
     _lastAbcSource = content;
     _lastRawSource = rawContent;
     _voiceMap    = buildVoiceMap(content);
     _playEl      = container;
 
-    // abc2svg engraving (default): it draws the score the user sees AND says
-    // when each note sounds (renderAbc2svg → score.timing, core/abc-timing.js).
-    // If abc2svg can't render this content, abcjs draws (and times) instead.
-    //
-    // `%%tablature`/`%%tab` (the abcjs pragma) keeps the abcjs renderer: abcjs
-    // ADDS a tab staff below the notation, while abc2svg's %%strtab CONVERTS a
-    // voice into a tab staff — falling back preserves those docs exactly.
-    // abc2svg-native tablature is available via %%strtab (strtab-1.js bundled).
+    // abc2svg engraves the score the user sees AND says when each note sounds
+    // (renderAbc2svg → score.timing, core/abc-timing.js). Null when it cannot
+    // engrave the content — then there is no score and nothing to play; the
+    // lint carries abc2svg's complaints and the pane says so (below).
     let localScore = null;
-    if (useAbc2svg() && !tablature) {
-      const engravingEl = document.createElement('div');
-      engravingEl.className = 'abc2svg-wrap';
-      el.appendChild(engravingEl);
-      localScore = renderAbc2svg(content, engravingEl, {
-        onSelect: (from, to) => {
-          // Re-establish this block as the active playback context (parity
-          // with the abcjs clickListener above).
-          _engraver    = localEngraver;
-          _tuneObjects = localTuneObjects;
-          _a2sScore    = localScore;
-          _playEl      = container;
-          _sectionOffset = localOffset;
-          _srcMap      = localMap;
-          _lastNoteBlockOffset = localOffset;
-          _lastNoteClickRange  = { from, to };
-          state.emit('dsl-select', { from: _toDoc(from), to: _toDoc(to) });
-          _setNoteSelected(true);
-          localScore.highlightRange(from, to);
-        },
-      });
-      if (localScore) container.style.display = 'none';
-      else {
-        // abc2svg could not engrave this content, so abcjs draws (and times)
-        // the score the user sees — flowing, like the {compose} default.
-        engravingEl.remove();
-        tuneObjects = abcjs.renderAbc(container, content, { ...abcjsOpts, ...flowOpts() });
-        adoptAbcjs();
-      }
+    localScore = renderAbc2svg(content, container, {
+      onSelect: (from, to) => {
+        // Re-establish this block as the active playback context.
+        _a2sScore    = localScore;
+        _playEl      = container;
+        _sectionOffset = localOffset;
+        _srcMap      = localMap;
+        _lastNoteBlockOffset = localOffset;
+        _lastNoteClickRange  = { from, to };
+        state.emit('dsl-select', { from: _toDoc(from), to: _toDoc(to) });
+        _setNoteSelected(true);
+        localScore.highlightRange(from, to);
+      },
+    });
 
-      // Watch the wrap's width and re-engrave when it differs meaningfully
-      // from the width the score was engraved for (first-layout settle,
-      // window/split resize, the phone's render pane appearing — it is
-      // display:none while the editor shows, so the render that ran behind
-      // it measured 0 and engraved the default page). pageWidth is null when
-      // the doc pins its own %%pagewidth — then the layout is the author's,
-      // don't second-guess it.
-      if (localScore?.pageWidth) _watchWidth(engravingEl, localScore.pageWidth, () => _a2sScore === localScore, () => render(rawContent, el));
-      else if (!localScore && engravedForW) _watchWidth(container, engravedForW, () => _playEl === container, () => render(rawContent, el));
-    } else if (engravedForW) {
-      // The abcjs render IS the score (tablature docs, the escape hatch):
-      // the same re-engrave on a meaningful width change.
-      _watchWidth(container, engravedForW, () => _playEl === container, () => render(rawContent, el));
-    }
+    // Watch the wrap's width and re-engrave when it differs meaningfully
+    // from the width the score was engraved for (first-layout settle,
+    // window/split resize, the phone's render pane appearing — it is
+    // display:none while the editor shows, so the render that ran behind
+    // it measured 0 and engraved the default page). pageWidth is null when
+    // the doc pins its own %%pagewidth — then the layout is the author's,
+    // don't second-guess it.
+    if (localScore?.pageWidth) _watchWidth(container, localScore.pageWidth, () => _a2sScore === localScore, () => render(rawContent, el));
     _a2sScore = localScore;
 
     // If a note from this block was selected before the re-render, restore the
@@ -632,11 +451,11 @@ async function render(rawContent, el) {
       _rangeHighlightNow(_lastNoteClickRange.from, _lastNoteClickRange.to);
     }
 
-    _setHasTune(!!(localScore || tuneObjects?.[0]));
+    _setHasTune(!!localScore);
 
     // Transport: build the note-timing table (drives duration, the scrubber, and
     // char→ms mapping for selection-driven seeking) and reset position.
-    _buildNoteEvents(tuneObjects?.[0] ?? null, localScore);
+    _buildNoteEvents(localScore);
     _totalMs = _durationFromEvents();
     _pausedAtMs = 0;
     _selRangeMs = null;
@@ -645,9 +464,6 @@ async function render(rawContent, el) {
     state.emit('abc-range', null);
     _emitRollData();
     _scoreNotices(localScore, el);
-    // Score-level overlay: the playback cursor bar + range band that span the
-    // staves in the render pane.  Created against the freshly-rendered SVG.
-    _setupScoreCursor(container);
     // Re-project the current editor selection onto the fresh timing table so a
     // persisted range highlight / cursor position survives a re-render.
     _syncTransportToSelection(_lastEditorSel.from, _lastEditorSel.to);
@@ -675,14 +491,9 @@ function _setHasTune(hasTune) {
 // Reverse highlight: editor selection → ABC preview
 //
 // When the user selects or positions the cursor in CodeMirror, the editor
-// emits 'editor-select' with the selection range.  We call
-// engraver.rangeHighlight(from, to) to drive the preview selection.
-//
-// A collapsed cursor (from === to) uses rangeHighlight(0, 0) which calls
-// clearSelection() and then matches nothing — effectively clearing all
-// SVG highlights.  This fixes the "selection persists after clicking in
-// the text editor" bug (the previous rangeHighlight(pos, pos) call sometimes
-// left inline fill attributes set by abcjs's own click handler intact).
+// emits 'editor-select' with the selection range, which drives the score's
+// highlightRange(from, to). A collapsed cursor (from === to) highlights (0, 0)
+// — matches nothing, so it clears every score highlight.
 // ---------------------------------------------------------------------------
 
 state.on('editor-select', ({ from, to }) => {
@@ -692,7 +503,7 @@ state.on('editor-select', ({ from, to }) => {
   // Guard against clearing during playback (user may move cursor while music plays).
   if (from === to && !state.abcPlaying) _setNoteSelected(false);
 
-  if (_engraver && (state.activeDslId ?? state.data?.dslType) === 'abcjs' && !state.abcPlaying) {
+  if (_a2sScore && (state.activeDslId ?? state.data?.dslType) === 'abcjs' && !state.abcPlaying) {
     // Translated to section-relative: collapsed cursor clears, range highlights.
     // Coalesced to one rangeHighlight per frame (see _scheduleRangeHighlight).
     const adjFrom = from === to ? 0 : _toSec(from);
@@ -805,18 +616,7 @@ function _auditionFlash(startChar, endChar, durMs) {
   const to   = _toDoc(endChar);
   const from = _trimToNoteStart(doc, _toDoc(startChar), to);
 
-  // abcjs-engraver fallback (escape hatch / %%tablature): the note's own SVG
-  // groups, green via the container's playback palette class.
-  const groups = [];
-  for (const ev of _noteEvents) {
-    const starts = ev.startCharArray ?? [ev.startChar];
-    (ev.elements ?? []).forEach((els, i) => {
-      if (starts[i] === startChar) groups.push(...(els ?? []));
-    });
-  }
   _playEl?.classList.add('abc-playing');
-  groups.forEach(el => el?.classList?.add('abcjs-note_playing'));
-
   _a2sScore?.setPlaying([{ from: startChar, to: endChar }]);
   state.emit('abc-play-cursor', from < to ? [{ from, to }] : null);
 
@@ -824,8 +624,6 @@ function _auditionFlash(startChar, endChar, durMs) {
   _auditionFlashTimer = setTimeout(() => {
     if (state.abcPlaying) return;   // playback started mid-flash — leave its highlight
     _playEl?.classList.remove('abc-playing');
-    _playEl?.querySelectorAll('.abcjs-note_playing').forEach(el =>
-      el.classList.remove('abcjs-note_playing'));
     _a2sScore?.setPlaying(null);
     state.emit('abc-play-cursor', null);
   }, durMs);
@@ -1531,11 +1329,6 @@ function _trimToNoteStart(content, from, to) {
 // char ranges for the editor's green play-cursor.  `event` is a noteTimings entry
 // (or null to clear).  Driven by the wall-clock visual loop below.
 function _highlightEvent(event) {
-  if (_playEl) {
-    _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
-      el.classList.remove('abcjs-note_playing')
-    );
-  }
   if (!event) {
     _a2sScore?.setPlaying(null);
     state.emit('abc-play-cursor', null);
@@ -1546,18 +1339,16 @@ function _highlightEvent(event) {
   // earlier note still held in another voice (a bass half note stays green
   // while the treble's eighths pass over it — the highlight is what plays, not
   // what just started; see _soundingEntries). Editor: emit all their char
-  // ranges for green text-colour highlighting. abcjs char indices are
+  // ranges for green text-colour highlighting. The table's char indices are
   // section-relative → _toDoc maps them to document positions; and trim
   // leading decorations/whitespace so the green covers the note, not its
-  // `!legato!`/`.` marks (abcjs's startChar can point at the decoration that
-  // precedes the note). Muted / non-soloed voices are skipped entirely —
-  // neither the SVG note nor the editor cursor lights up.
+  // `!legato!`/`.` marks. Muted / non-soloed voices are skipped entirely —
+  // neither the score glyphs nor the editor cursor light up.
   const doc    = state.currentContent ?? '';
   const ranges = [];
   const secPairs = [];   // section-relative pairs for the abc2svg score
   for (const e of _soundingEntries(event.milliseconds)) {
     if (_isMutedAtChar(e.startChar)) continue;
-    if (_playEl) e.elements.forEach(el => el?.classList?.add('abcjs-note_playing'));
     secPairs.push({ from: e.startChar, to: e.endChar });
     const to   = _toDoc(e.endChar);
     const from = _trimToNoteStart(doc, _toDoc(e.startChar), to);
@@ -1597,29 +1388,14 @@ function _soundingEntries(ms) {
   return _soundingCache.list.filter(e => e.ms <= ms + 0.5 && ms < e.endMs - 0.5);
 }
 
-// Wall-clock visual driver.  abcjs's own TimingCallbacks fire the cursor on a
-// clock that can trail the audio (rAF granularity plus the 60ms setTimeout
-// jogger fallback when a frame is dropped), so the highlight was landing
-// slightly BEHIND the sound.  We drive the highlight from the transport's
-// wall-clock progress loop instead, and fire it a small lead ahead of the audio
-// position so the note lights up as it sounds rather than just after.  The lead
+// Wall-clock visual driver.  The highlight is driven from the transport's
+// progress loop and fired a small lead ahead of the audio position so the note
+// lights up as it sounds rather than just after (a cursor on a clock trailing
+// the audio — rAF granularity — landed slightly BEHIND the sound).  The lead
 // compensates render + audio-output latency; tune on-device if needed.
 const VISUAL_LEAD_MS = 40;
 let _visualStopMs   = null;  // range-end ms while playing (null = whole tune)
 let _visualIdx      = -1;    // last-highlighted event index (skip redundant work)
-
-// ── Score-level cursor + range overlay (render pane) ───────────────────────
-// A separate <svg> layered over the abcjs SVG (kept OUT of the dark-mode invert
-// filter so its colours are correct) sharing the abcjs viewBox, so note-timing
-// x-coordinates map 1:1.  Holds a vertical playback bar that tracks the scrubber
-// position across the staves, plus a translucent band + edge bars for the
-// currently selected playback range.
-let _overlaySvg     = null;  // our overlay <svg class="uf-abc-overlay-svg">
-let _abcSvgEl       = null;  // the abcjs <svg> (for per-line getBBox lookups)
-let _cursorLine     = null;  // <line> playback position bar
-let _rangeGroup     = null;  // <g> range band + edge bars
-let _lineExtents    = null;  // Map<lineIndex, {y, h}> — cached per render
-let _overlayResizeObs = null;// keeps the overlay box aligned to the responsive SVG
 
 /** Highlight the note(s) sounding at `targetMs` (= audio position + lead). */
 function _applyVisualAt(targetMs) {
@@ -1639,179 +1415,7 @@ function _applyVisualAt(targetMs) {
 }
 
 // The end of a run (the range's end, the tune's end) is detected by the same
-// progress loop (_startProgress) — abcjs's TimingCallbacks, which used to fire
-// it, are gone since the timing table comes from abc2svg (2026-10).
-
-const _SVG_NS = 'http://www.w3.org/2000/svg';
-
-/** Build the overlay <svg> over the freshly-rendered abcjs SVG. */
-function _setupScoreCursor(container) {
-  _overlaySvg = _abcSvgEl = _cursorLine = _rangeGroup = null;
-  _lineExtents = new Map();
-  _overlayResizeObs?.disconnect();
-  _overlayResizeObs = null;
-
-  // abc2svg mode: the cursor bar is the score object's own positioned div
-  // (see abc2svg-render.js cursorAt) — no abcjs-viewBox overlay to build.
-  if (_a2sScore) return;
-
-  const svg = container?.querySelector('svg');
-  const viewBox = svg?.getAttribute('viewBox');
-  if (!svg || !viewBox) return;
-  _abcSvgEl = svg;
-
-  const ov = document.createElementNS(_SVG_NS, 'svg');
-  ov.setAttribute('class', 'uf-abc-overlay-svg');
-  ov.setAttribute('viewBox', viewBox);
-  ov.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-  ov.setAttribute('aria-hidden', 'true');
-
-  const rg = document.createElementNS(_SVG_NS, 'g');
-  rg.setAttribute('class', 'uf-abc-range');
-  const ln = document.createElementNS(_SVG_NS, 'line');
-  ln.setAttribute('class', 'uf-abc-cursor');
-  ln.style.display = 'none';
-  ov.appendChild(rg);   // band behind
-  ov.appendChild(ln);   // cursor in front
-  container.appendChild(ov);
-
-  _overlaySvg = ov;
-  _rangeGroup = rg;
-  _cursorLine = ln;
-
-  // Keep the overlay box exactly over the abcjs SVG (which scales responsively).
-  // SVG elements have no offset* geometry, so measure with getBoundingClientRect
-  // relative to the shared parent (the positioned .abc-preview-wrap container).
-  const sync = () => {
-    if (!_overlaySvg || !_abcSvgEl) return;
-    const pr = container.getBoundingClientRect();
-    const sr = _abcSvgEl.getBoundingClientRect();
-    if (!sr.width || !sr.height) return;   // not laid out yet
-    _overlaySvg.style.left   = (sr.left - pr.left) + 'px';
-    _overlaySvg.style.top    = (sr.top  - pr.top)  + 'px';
-    _overlaySvg.style.width  = sr.width  + 'px';
-    _overlaySvg.style.height = sr.height + 'px';
-  };
-  sync();
-  try {
-    _overlayResizeObs = new ResizeObserver(sync);
-    _overlayResizeObs.observe(_abcSvgEl);
-  } catch { /* ResizeObserver unsupported — box set once above */ }
-}
-
-/** Vertical extent {y, h} (viewBox units) of a system.  abcjs already reports
- *  each note event's `top`/`height` = the extent of the system (all staves) it
- *  sits in, so use that first: it's authoritative and needs no DOM/getBBox, which
- *  avoids the whole-page cursor bug where an early `_lineExtent` call (before the
- *  SVG had laid out → getBBox height 0) cached the full-viewBox fallback for a
- *  system permanently.  Falls back to the rendered `.abcjs-l{line}` group's bbox
- *  only when no event geometry is available. */
-function _lineExtentFor(line) {
-  for (const e of _noteEvents) {
-    if (e.line === line && e.top != null && e.height > 0) return { y: e.top, h: e.height };
-  }
-  return _lineExtent(line);
-}
-
-/** Vertical extent {y, h} (viewBox units) of a rendered line/system, from the DOM. */
-function _lineExtent(line) {
-  if (_lineExtents?.has(line)) return _lineExtents.get(line);
-  let ext = null;
-  try {
-    const g = _abcSvgEl?.querySelector(`.abcjs-l${line}`);
-    if (g) { const b = g.getBBox(); if (b.height > 0) ext = { y: b.y, h: b.height }; }
-  } catch { /* getBBox can throw if not laid out */ }
-  if (!ext) {
-    const vb = _abcSvgEl?.getAttribute('viewBox')?.split(/\s+/).map(Number);
-    // Only memoise a real measurement; a fallback (SVG not laid out yet) must not
-    // stick, or the cursor would span the whole page for that system forever.
-    return (vb && vb.length === 4) ? { y: vb[1], h: vb[3] } : { y: 0, h: 100 };
-  }
-  _lineExtents?.set(line, ext);
-  return ext;
-}
-
-/** Leftmost rendered x (viewBox units) of a note event's glyphs. abcjs's `left`
- *  is the notehead; leading accidentals / grace notes render further left but are
- *  part of the same note group (`ev.elements`), so union their bounding boxes. */
-function _noteGlyphLeft(ev) {
-  let x = ev.left;
-  for (const el of (ev.elements ?? []).flat()) {
-    try {
-      const b = el?.getBBox?.();
-      if (b && b.width > 0 && b.x < x) x = b.x;
-    } catch { /* element not laid out yet */ }
-  }
-  return x;
-}
-
-/** Horizontal center (viewBox units) of a note event's notehead(s) — the point a
- *  cursor should sit dead-on. Targets the notehead glyph so a leading accidental
- *  (part of the same group) doesn't bias the center left.
- *
- *  A whole/half rest is engraved CENTERED in its measure, far right of a note that
- *  onsets on the same beat. If an event mixes real notes with a resting voice (e.g.
- *  a bass chord on the downbeat while the top voice holds a whole rest), unioning
- *  the rest's bbox drags the center to mid-measure and floats the cursor off the
- *  notes that actually sound. So center on the NOTEHEADS only when any exist, and
- *  fall back to rest/other glyph geometry (then abcjs's `left`) only for an event
- *  that is entirely rests. */
-function _noteCenterX(ev) {
-  let min = Infinity, max = -Infinity;       // notehead extent
-  let rMin = Infinity, rMax = -Infinity;     // fallback: rest/other glyph extent
-  for (const g of (ev.elements ?? []).flat()) {
-    if (!g?.getBBox) continue;
-    const heads = [];
-    if (g.matches?.('.abcjs-notehead')) heads.push(g);
-    g.querySelectorAll?.('.abcjs-notehead').forEach(h => heads.push(h));
-    if (heads.length) {
-      for (const t of heads) {
-        try {
-          const b = t.getBBox();
-          if (b.width > 0) { min = Math.min(min, b.x); max = Math.max(max, b.x + b.width); }
-        } catch { /* element not laid out yet */ }
-      }
-    } else {
-      try {
-        const b = g.getBBox();
-        if (b.width > 0) { rMin = Math.min(rMin, b.x); rMax = Math.max(rMax, b.x + b.width); }
-      } catch { /* element not laid out yet */ }
-    }
-  }
-  if (max > min)   return (min + max) / 2;    // notes present → ignore resting voices
-  if (rMax > rMin) return (rMin + rMax) / 2;  // all-rest moment → center on the rest
-  return ev.left;
-}
-
-/** Score position {x, y, h} of the note/rest that would sound at `ms`: the last
- *  event whose onset is at/before ms (the note playback continues from), or the
- *  first event when ms precedes it. x is the glyph's center, so the cursor snaps
- *  dead onto a note rather than floating in the gap between onsets; y/h are the
- *  extent of the system that note sits in, so the cursor stays confined to the
- *  currently-playing system rather than spanning the page. */
-function _scoreSnapForMs(ms) {
-  if (!_noteEvents.length) return null;
-  const placed = e => e.left != null;      // skip bar/end entries without geometry
-  let ev = null;
-  for (const e of _noteEvents) {
-    if (!placed(e)) continue;
-    if (e.milliseconds <= ms + 0.5) ev = e; else break;
-  }
-  if (!ev) ev = _noteEvents.find(placed);  // before the first note → snap to it
-  if (!ev) return null;
-  const { y, h } = _lineExtentFor(ev.line ?? 0);
-  return { x: _noteCenterX(ev), y, h };
-}
-
-/** Last placed note event at/before `ms` (or the first, when ms precedes it). */
-function _eventAtMs(ms) {
-  let ev = null;
-  for (const e of _noteEvents) {
-    if (e.left == null) continue;                // skip bar/end entries
-    if (e.milliseconds <= ms + 0.5) ev = e; else break;
-  }
-  return ev ?? _noteEvents.find(e => e.left != null) ?? null;
-}
+// progress loop (_startProgress).
 
 /** The unmuted section-relative char pairs of a note event (for the a2s score). */
 function _eventCharPairs(ev, { includeMuted = false } = {}) {
@@ -1848,92 +1452,26 @@ function _audiblePairsAtMs(ms) {
   return null;
 }
 
-/** Position the playback cursor bar at `ms` (the true scrubber position). */
+/** Position the playback cursor bar at `ms` (the true scrubber position) —
+ *  the score's own bar (abc2svg-render.js cursorAt). */
 function _updateScoreCursor(ms) {
-  if (_a2sScore) { _a2sScore.cursorAt(_audiblePairsAtMs(ms)); return; }
-  if (!_cursorLine) return;
-  const p = _scoreSnapForMs(ms);
-  if (!p) { _cursorLine.style.display = 'none'; return; }
-  const { y, h } = p;
-  _cursorLine.setAttribute('x1', p.x);
-  _cursorLine.setAttribute('x2', p.x);
-  _cursorLine.setAttribute('y1', y);
-  _cursorLine.setAttribute('y2', y + h);
-  _cursorLine.style.display = '';
+  _a2sScore?.cursorAt(_audiblePairsAtMs(ms));
 }
 
-/** Draw (or clear) the selected-range band + start/end edge bars in the score. */
+/** Draw (or clear) the selected-range band in the score. */
 function _updateScoreRange() {
-  if (_a2sScore) {
-    const r = _selRangeMs;
-    if (!r || !_noteEvents.length) { _a2sScore.setRange(null); return; }
-    // Every voice's chars of every note that will play (onset in [start, end)) —
-    // the band covers all voices; muting shows through the uf-muted fade instead.
-    const pairs = [];
-    for (const e of _noteEvents) {
-      if (e.left == null) continue;
-      if (e.milliseconds < r.startMs - 0.5 || e.milliseconds >= r.endMs - 0.5) continue;
-      pairs.push(...(_eventCharPairs(e, { includeMuted: true }) ?? []));
-    }
-    _a2sScore.setRange(pairs.length ? pairs : null);
-    return;
-  }
-  if (!_rangeGroup) return;
-  while (_rangeGroup.firstChild) _rangeGroup.removeChild(_rangeGroup.firstChild);
+  if (!_a2sScore) return;
   const r = _selRangeMs;
-  if (!r || !_noteEvents.length) return;
-
-  // Notes that will actually play (onset within [startMs, endMs)); the stop note
-  // at endMs is excluded so the band ends where playback stops.
-  const inRange = _noteEvents.filter(
-    e => e.left != null && e.milliseconds >= r.startMs - 0.5 && e.milliseconds < r.endMs - 0.5
-  );
-  // One band per line the range spans (handles line wraps), in line order.
-  const byLine = new Map();
-  for (const e of inRange) {
-    const c = byLine.get(e.line) ?? { min: Infinity, max: -Infinity };
-    c.min = Math.min(c.min, e.left);
-    c.max = Math.max(c.max, e.endX ?? e.left);
-    byLine.set(e.line, c);
+  if (!r || !_noteEvents.length) { _a2sScore.setRange(null); return; }
+  // Every voice's chars of every note that will play (onset in [start, end)) —
+  // the band covers all voices; muting shows through the uf-muted fade instead.
+  const pairs = [];
+  for (const e of _noteEvents) {
+    if (e.left == null) continue;
+    if (e.milliseconds < r.startMs - 0.5 || e.milliseconds >= r.endMs - 0.5) continue;
+    pairs.push(...(_eventCharPairs(e, { includeMuted: true }) ?? []));
   }
-  // Extend the band's opening edge to the first note's full glyph extent so any
-  // leading accidental / grace note (drawn left of the notehead `left`) is inside
-  // the highlight — those marks belong to the note that plays. Interior notes'
-  // accidentals already fall within the band; only the first note's lead escapes.
-  const firstEv = inRange[0];
-  if (firstEv) {
-    const band = byLine.get(firstEv.line);
-    if (band) band.min = Math.min(band.min, _noteGlyphLeft(firstEv));
-  }
-  const lines = [...byLine.entries()]
-    .filter(([, c]) => c.max > c.min)
-    .sort((a, b) => a[0] - b[0]);
-  for (const [line, c] of lines) {
-    const { y, h } = _lineExtentFor(line);
-    const rect = document.createElementNS(_SVG_NS, 'rect');
-    rect.setAttribute('class', 'uf-abc-range-band');
-    rect.setAttribute('x', c.min);
-    rect.setAttribute('y', y);
-    rect.setAttribute('width', c.max - c.min);
-    rect.setAttribute('height', h);
-    _rangeGroup.appendChild(rect);
-  }
-  // Start + end markers drawn as framing brackets ([ … ]) so the span's bounds
-  // read as more than just the highlight, without a busy dashed line. Anchor them
-  // to the band's own edges (not the stop-note onset, which sits past the band).
-  if (!lines.length) return;
-  const CAP = 9;   // viewBox units — length of each bracket end-cap
-  const bracket = (line, x, dir) => {   // dir: +1 → opening "[" (start), -1 → closing "]" (end)
-    const { y, h } = _lineExtentFor(line);
-    const path = document.createElementNS(_SVG_NS, 'path');
-    path.setAttribute('class', 'uf-abc-range-edge');
-    path.setAttribute('d', `M${x + dir * CAP} ${y} L${x} ${y} L${x} ${y + h} L${x + dir * CAP} ${y + h}`);
-    _rangeGroup.appendChild(path);
-  };
-  const [firstLine, firstC] = lines[0];
-  const [lastLine,  lastC]  = lines[lines.length - 1];
-  bracket(firstLine, firstC.min, 1);   // opening "[" at the band's left edge
-  bracket(lastLine,  lastC.max, -1);   // closing "]" at the band's right edge
+  _a2sScore.setRange(pairs.length ? pairs : null);
 }
 
 // ---------------------------------------------------------------------------
@@ -1997,30 +1535,17 @@ function _acquireAudioContext() {
  * Its SOURCE is abc2svg (2026-10, the one-parser work): `score.timing` is
  * derived from the very model abc2svg drew, so what you see is what plays —
  * the transport, the cursor bar, the green highlight, seek, the audition, the
- * piano roll, Web MIDI and the synth all read this one table.
- * `momentsFromTiming` keeps abcjs's `noteTimings` shape (one MOMENT per onset,
- * `startCharArray` / `midiPitches` / `millisecondsPerMeasure`…), which is why
- * none of those consumers changed. abcjs's own table exists only when abcjs
- * drew the score (`%%tablature` documents, the escape hatch, an abc2svg
- * failure) — `score` is null and `tune` is abcjs's parse then; otherwise abcjs
- * never parsed the text at all (one parser, 2026-10).
+ * piano roll, Web MIDI and the sampler all read this one table.
+ * `momentsFromTiming` keeps the MOMENT shape (one entry per onset,
+ * `startCharArray` / `midiPitches` / `millisecondsPerMeasure`…) every consumer
+ * was written against. No score → an empty table.
  */
-let _abcjsEvents = [];
-function _buildNoteEvents(tune, score) {
-  _abcjsEvents = [];
-  let mf = null;
-  if (tune) {
-    try {
-      tune.setUpAudio({});
-      const tc = new abcjs.TimingCallbacks(tune, { eventCallback: () => {} });
-      _abcjsEvents = (tc.noteTimings ?? []).filter(e => e.type === 'event');
-      mf = tune.getMeterFraction?.() ?? null;
-    } catch { _abcjsEvents = []; }
-  }
-  if (!mf || !(mf.num > 0 && mf.den > 0)) mf = score?.meter ?? { num: 4, den: 4 };
+function _buildNoteEvents(score) {
+  let mf = score?.meter;
+  if (!mf || !(mf.num > 0 && mf.den > 0)) mf = { num: 4, den: 4 };
   _meterFrac = mf;
   _meterSize = (mf.num / mf.den) || 1;
-  _noteEvents = score?.timing ? momentsFromTiming(score.timing, { meterSize: _meterSize }) : _abcjsEvents;
+  _noteEvents = score?.timing ? momentsFromTiming(score.timing, { meterSize: _meterSize }) : [];
   _timingEndMs = score?.timing?.totalMs ?? 0;
   _lastAuditionChar = -1;   // fresh table — cursor audition dedupe restarts
 }
@@ -2106,18 +1631,22 @@ function _emitRollData() {
  */
 function _scoreNotices(score, el) {
   el.querySelectorAll('.abc-engine-warning').forEach(n => n.remove());
-  if (!score) return;
   const notes = [];
-  if (score.timingTruncated) {
+  if (!score) {
+    // abc2svg engraved nothing at all (no tune it could read) — there is no
+    // score and nothing to play; the editor's lint carries its complaints.
+    notes.push('No music to engrave yet — nothing to show or play. The editor\'s warnings say why (a tune needs a K: line and some notes).');
+  }
+  if (score?.timingTruncated) {
     notes.push('The repeats in this tune never end as written, so the timing was cut short.');
   }
-  const diags = (score.errors ?? []).map(e => parseErrmsg(e, score.prefixLines ?? 0)).filter(Boolean);
+  const diags = (score?.errors ?? []).map(e => parseErrmsg(e, score.prefixLines ?? 0)).filter(Boolean);
   const errors = diags.filter(d => d.severity === 'error');
   if (errors.length) {
     const shown = errors.slice(0, 2).map(d => `${d.message} (line ${d.line + 1})`).join('; ');
     notes.push(`abc2svg: ${shown}${errors.length > 2 ? ` and ${errors.length - 2} more` : ''}.`);
   }
-  if (score.timing && score.symCount > 0 && !score.timing.notes.length) {
+  if (score?.timing && score.symCount > 0 && !score.timing.notes.length) {
     notes.push('The score shows no note the player could time — nothing to play.');
   }
   if (!notes.length) return;
@@ -2315,7 +1844,7 @@ function togglePlay() {
   // Play whenever an abcjs tune is loaded.  The cursor may be parked in the front
   // matter or a non-abcjs section (activeDslId !== 'abcjs'); that must NOT disable
   // the transport — startPlayback falls back to the beginning when nothing is cued.
-  if (!_a2sScore?.timing && !_tuneObjects?.[0]) return;   // nothing timed by either engine
+  if (!_a2sScore?.timing) return;   // nothing timed
   if (state.abcPlaying || state.abcStarting) {
     // Playing → pause here. Still STARTING (the synth is priming after the
     // previous tap) → cancel that start: it stays cued where it was going to
@@ -2373,7 +1902,7 @@ function _abortStart() {
 }
 
 async function startPlayback(opts = {}) {
-  if (!_a2sScore?.timing && !_tuneObjects?.[0]) return;   // nothing timed by either engine
+  if (!_a2sScore?.timing) return;   // nothing timed
 
   // Restart cleanly if something is already playing (e.g. a seek while playing).
   if (_synth) {
@@ -2382,12 +1911,9 @@ async function startPlayback(opts = {}) {
   const gen = ++_startGen;
   const superseded = () => gen !== _startGen;
 
-  // abcjs's parse exists only when abcjs drew the score (%%tablature, the escape
-  // hatch, an abc2svg failure) — then it is also the synth's input (below).
-  const tune = _tuneObjects?.[0] ?? null;
   // Translate full-doc editor positions to section-relative positions so they
-  // match the char indices in abcjs noteTimings (which are 0-based from the
-  // start of the section content passed to render()).
+  // match the char indices in the timing table (0-based from the start of the
+  // section content passed to render()).
   const selFrom = _toSec(_lastEditorSel.from);
   const selTo   = _toSec(_lastEditorSel.to);
 
@@ -2395,7 +1921,7 @@ async function startPlayback(opts = {}) {
   // FluidR3 acoustic grand (src/assets/piano-soundfont.js) — offline, no fetch.
 
   // ── 1.  The timing table — built per render from abc2svg's model, see
-  //        _buildNoteEvents (abcjs's own table only when abcjs drew the score).
+  //        _buildNoteEvents.
 
   let startSeconds = 0;
   let stopMs       = null;
@@ -2497,12 +2023,11 @@ async function startPlayback(opts = {}) {
   // instant); the notes themselves are scheduled in step 4, after the context
   // is confirmed running, with a look-ahead — sound starts at once instead of
   // after a whole-tune mix (what abcjs's CreateSynth did until 2026-10).
-  // The notes are abc2svg's timing when it drew the score — each with the
-  // velocity core/abc-dynamics.js gave it — else abcjs's own table flattened
-  // (tablature docs, the escape hatch). Muted / non-soloed voices are skipped
-  // by position (`_isMutedAtChar`), the same test every other path uses.
+  // The notes are abc2svg's timing — each with the velocity
+  // core/abc-dynamics.js gave it. Muted / non-soloed voices are skipped by
+  // position (`_isMutedAtChar`), the same test every other path uses.
   let sampler = null;
-  const samplerNotes = _a2sScore?.timing?.notes ?? notesFromMoments(noteEvents, _meterSize || 1);
+  const samplerNotes = _a2sScore.timing.notes;
   try {
     sampler = _getSampler();
     await sampler.load();
@@ -2583,11 +2108,6 @@ function stopPlayback(opts = {}) {
   // Keep the persistent AudioContext alive (do NOT close it) — closing and
   // recreating per play is exactly what breaks audio on iOS.
 
-  if (_playEl) {
-    _playEl.querySelectorAll('.abcjs-note_playing').forEach(el =>
-      el.classList.remove('abcjs-note_playing')
-    );
-  }
   _a2sScore?.setPlaying(null);
   _playEl?.classList.remove('abc-playing');
 
@@ -2664,31 +2184,13 @@ function _withDerivedTitle(content) {
 
 async function renderToString(content) {
   content = expandAbc(_withDerivedTitle(content)).text;
-  const tablature = parseTabDirectives(content);
-  // The quine's static preview: the same engine as the live score (abc2svg,
-  // fonts embedded via %%fullsvg); abcjs for %%tablature docs / the escape hatch.
-  if (useAbc2svg() && !tablature) {
-    try {
-      const svg = abc2svgExportSvg(content);
-      if (svg) return `<div class="abc2svg-wrap">${svg}</div>`;
-    } catch { /* fall through to abcjs */ }
-  }
-  const tmp = document.createElement('div');
-  document.body.appendChild(tmp);
+  // The quine's static preview: the same engine as the live score (fonts
+  // embedded via %%fullsvg).
   try {
-    abcjs.renderAbc(tmp, content, {
-      responsive: 'resize',
-      // The static preview flows like the live score (abcjs's re-wrap ignores
-      // source newlines) unless the document pins %%linebreak <EOL>.
-      ...(sourceLineBreaks(content) ? {} : { staffwidth: 740, wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
-      ...(tablature ? { tablature } : {}),
-    });
-    return tmp.innerHTML;
-  } catch {
-    return `<pre>${content}</pre>`;
-  } finally {
-    document.body.removeChild(tmp);
-  }
+    const svg = abc2svgExportSvg(content);
+    if (svg) return `<div class="abc2svg-wrap">${svg}</div>`;
+  } catch { /* nothing engraved */ }
+  return `<pre>${content.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</pre>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2697,68 +2199,21 @@ async function renderToString(content) {
 
 async function exportSVG(content) {
   content = expandAbc(_withDerivedTitle(content)).text;
-  const tablature = parseTabDirectives(content);
-  // abc2svg engraving for exports too (same engine as the on-screen score);
-  // falls through to abcjs on failure, %%tablature docs, or the escape hatch.
-  if (useAbc2svg() && !tablature) {
-    const svg = abc2svgExportSvg(content);
-    if (svg) return new Blob([svg], { type: 'image/svg+xml' });
-  }
-  const tmp = document.createElement('div');
-  document.body.appendChild(tmp);
-  abcjs.renderAbc(tmp, content, {
-    ...(sourceLineBreaks(content) ? {} : { staffwidth: 740, wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
-    ...(tablature ? { tablature } : {}),
-  });
-  const svgContent = tmp.innerHTML;
-  document.body.removeChild(tmp);
-  return new Blob([svgContent], { type: 'image/svg+xml' });
+  // The same engine as the on-screen score.
+  const svg = abc2svgExportSvg(content);
+  if (!svg) return null;
+  return new Blob([svg], { type: 'image/svg+xml' });
 }
 
 async function exportPDF(content) {
   content = expandAbc(_withDerivedTitle(content)).text;
-  // ── 1. Render offscreen with oneSvgPerLine ─────────────────────────────────
-  // oneSvgPerLine splits the single large SVG into one <div><svg></svg></div>
-  // per staff system.  Each SVG carries a viewBox so it can be scaled by CSS
-  // in the print window, and each wrapper div has a fixed height so that
-  // page-break-inside: avoid can be enforced between systems.
-  //
-  // staffwidth 680 is abcjs's own print default ("pixels in 8.5 in minus 1 cm
-  // margin") and gives good note spacing for typical scores.
-  //
-  // The container must be in the live DOM with a real width so that abcjs can
-  // call getBBox() on each staff <g> during the split.  position:fixed +
-  // left:-9999px keeps it off-screen while still being layout-computed.
-  const STAFF_W = 680;
-  const tablature = parseTabDirectives(content);
-  let bodyHtml = null;
-
-  // abc2svg engraving for print/PDF (it naturally emits one SVG per system —
-  // exactly the per-system page-break structure this export needs).
-  // %%tablature docs stay on abcjs (see render()).
-  if (useAbc2svg() && !tablature) bodyHtml = abc2svgExportPrintBody(content);
-
-  if (bodyHtml == null) {
-    const tmp = document.createElement('div');
-    tmp.style.cssText = `position:fixed;left:-9999px;top:0;width:${STAFF_W}px;visibility:hidden;`;
-    document.body.appendChild(tmp);
-
-    try {
-      abcjs.renderAbc(tmp, content, {
-        oneSvgPerLine: true,
-        staffwidth: STAFF_W,
-        add_classes: true,
-        ...(sourceLineBreaks(content) ? {} : { wrap: { minSpacing: 1.8, maxSpacing: 2.7, preferredMeasuresPerLine: 4 } }),
-        ...(tablature ? { tablature } : {}),
-      });
-    } catch (e) {
-      document.body.removeChild(tmp);
-      return null;
-    }
-
-    bodyHtml = tmp.innerHTML;
-    document.body.removeChild(tmp);
-  }
+  // ── 1. Engrave for print ───────────────────────────────────────────────────
+  // abc2svg naturally emits one SVG per system — exactly the per-system
+  // page-break structure this export needs: each <div><svg></div> carries a
+  // viewBox so it scales by CSS in the print window, and break-inside: avoid
+  // keeps a system on one page.
+  const bodyHtml = abc2svgExportPrintBody(content);
+  if (bodyHtml == null) return null;
 
   // ── 2. Build a clean, self-contained print page ────────────────────────────
   //
@@ -2771,10 +2226,8 @@ async function exportPDF(content) {
   //                          aspect ratio, keeping notation proportional.
   //
   // body > div { height:auto !important; page-break-inside:avoid }
-  //                       →  overrides abcjs's fixed inline height on each
-  //                          wrapper so the scaled SVG sets the div's height,
-  //                          and prevents the browser from splitting a staff
-  //                          system across a page.
+  //                       →  the scaled SVG sets each wrapper's height, and the
+  //                          browser never splits a staff system across a page.
   // The window title becomes the browser's suggested PDF filename — use the
   // document's real title so "Save as PDF" lands as "Silence Speaks.pdf",
   // not "Sheet Music.pdf".
@@ -2790,7 +2243,7 @@ async function exportPDF(content) {
   html, body { margin: 0; padding: 0; background: white; color: black; }
   body { padding: 0.35in 0.5in; font-family: serif; }
 
-  /* Never break a staff system across a page; override abcjs fixed height */
+  /* Never break a staff system across a page */
   body > div {
     height: auto !important;
     page-break-inside: avoid;
@@ -2800,10 +2253,6 @@ async function exportPDF(content) {
   /* Scale every SVG to the content column width */
   svg { display: block; width: 100%; height: auto; }
 
-  /* Strip interactive red selection highlights */
-  [fill="#ff0000"] { fill: black !important; }
-  .abcjs-note_selected path,
-  .abcjs-note_selected rect { fill: black !important; }
 </style>
 </head>
 <body>${bodyHtml}</body>
@@ -2824,21 +2273,13 @@ async function exportPDF(content) {
 }
 
 async function exportMIDI(content) {
-  // The same timing the transport plays (abc2svg's), written as a Standard MIDI
-  // File (core/midi-file.js) — one parser for the score, the playback and the
-  // export. abcjs's own writer only when abc2svg has nothing (the escape hatch,
-  // or content it cannot parse).
+  // The same timing the transport plays (abc2svg's, with core/abc-dynamics.js's
+  // velocities), written as a Standard MIDI File (core/midi-file.js) — one
+  // parser for the score, the playback and the export. Null when nothing timed.
   const expanded = expandAbc(_withDerivedTitle(content)).text;
-  if (useAbc2svg()) {
-    try {
-      const { timing } = abc2svgTiming(expanded);
-      if (timing.notes.length) {
-        return new Blob([midiFileFromTiming(timing, { title: state.title ?? '' })], { type: 'audio/midi' });
-      }
-    } catch (e) { console.warn('[abcjs] abc2svg MIDI export failed, using abcjs:', e?.message ?? e); }
-  }
-  const midiData = abcjs.synth.getMidiFile(expanded, {});
-  return new Blob([midiData], { type: 'audio/midi' });
+  const { timing } = abc2svgTiming(expanded);
+  if (!timing.notes.length) return null;
+  return new Blob([midiFileFromTiming(timing, { title: state.title ?? '' })], { type: 'audio/midi' });
 }
 
 // ---------------------------------------------------------------------------
@@ -3280,6 +2721,16 @@ function abcLintSource(view) {
     if (!/^\s*K:/m.test(body))
       diags.push({ ...anchor, severity: 'info', message: 'No K: (key) header — C major assumed. K: sets the key and ends the tune header.' });
 
+    // abcjs's %%tablature pragma — abcjs is gone; abc2svg's %%strtab is the way.
+    let lineStart = 0;
+    for (const line of body.split('\n')) {
+      if (TABLATURE_DIRECTIVE_RE.test(line)) {
+        const from = bodyFrom + lineStart;
+        diags.push({ from, to: from + line.length, severity: 'warning',
+          message: '%%tablature is no longer supported (it was abcjs\'s). abc2svg draws tablature with %%strtab <strings>, highest first — e.g. %%strtab E4 B3 G3 D3 A2 E2 for guitar — which turns the voice into a tab staff.' });
+      }
+      lineStart += line.length + 1;
+    }
     diags.push(..._slurIssues(bodyFrom, body));
     diags.push(..._blankLineIssues(view, bodyFrom, body));
     diags.push(..._abcParseWarnings(view, bodyFrom, body, docLen));

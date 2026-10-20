@@ -1354,9 +1354,11 @@ clef=none          % no clef / percussion</code></pre>`
       {
         group: 'Voices & layout',
         title: 'Tablature',
-        content: `<pre><code>%%tablature instrument=guitar capo=0 label=Tab
-%%tablature instrument=mandolin</code></pre>
-<p class="help-note">Adds a tab staff under the notes. Instruments: <code>guitar</code>, <code>mandolin</code>, <code>violin</code>, <code>fiddle</code>, <code>fiveString</code>. Put <code>%%tablature</code> directives before <code>K:</code>.</p>`
+        content: `<pre><code>%%strtab E4 B3 G3 D3 A2 E2    % guitar
+%%strtab G2 D3 A3 E4          % mandolin / violin
+V:1
+%%strtab E4 B3 G3 D3 A2 E2    % one voice only</code></pre>
+<p class="help-note"><code>%%strtab</code> lists the strings <strong>highest first</strong> and turns the voice into a tab staff (fret numbers instead of notes). Put it before <code>K:</code> for every voice, or after a <code>V:</code> line for that voice alone. To show notation <em>and</em> tab, write the music in two voices and give the second one <code>%%strtab</code>. (<code>%%tablature</code>, the old abcjs pragma, is no longer supported.)</p>`
       },
       {
         group: 'Voices & layout',
