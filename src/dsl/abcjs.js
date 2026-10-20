@@ -27,8 +27,10 @@ import { parseGlobalFrontMatter, getFrontMatterRange } from '../core/front-matte
 import { schemaCompletions, schemaLint, parseFmEntries } from '../core/fm-schema.js';
 import { buildVoiceMap } from '../core/abc-voices.js';
 import { expandAbc, sourceLineBreaks, tuneBlankLines, VOICE_PREFIX_RE } from '../core/abc-shorthand.js';
-import { momentsFromTiming, sequenceFromTiming, parseErrmsg } from '../core/abc-timing.js';
+import { momentsFromTiming, notesFromMoments, parseErrmsg } from '../core/abc-timing.js';
 import { midiFileFromTiming } from '../core/midi-file.js';
+import { PianoSampler } from '../core/abc-sampler.js';
+import PIANO_FONT from '../assets/piano-soundfont.js';
 
 // ---------------------------------------------------------------------------
 // Simple ABC Notation stream language for CodeMirror 6
@@ -339,6 +341,8 @@ if (typeof globalThis !== 'undefined') {
     a2sSyms: _a2sScore?.symCount ?? null,
     a2sNotes: _a2sScore?.timing?.notes.length ?? null,   // abc2svg's timed notes (core/abc-timing.js)
     a2sTotalMs: _a2sScore?.timing?.totalMs ?? null,
+    a2sVelocities: _a2sScore?.timing?.notes.map(n => [n.start, n.velocity]) ?? null,   // core/abc-dynamics.js
+    sampler: _sampler ? { ready: _sampler.ready, sounding: _sampler._live.size, run: !!_synth } : null,
     a2sErrors: _a2sScore?.errors ?? null,
     a2sLive: _a2sScore ? document.contains(_a2sScore.el) : null,
     a2s_debug: _a2sScore?._debug?.() ?? null,
@@ -357,9 +361,35 @@ function _rangeHighlightNow(adjFrom, adjTo) {
 }
 
 // Active playback handles (null when not playing).
-// _synth is used as a boolean sentinel — truthy while playing.
+// _synth is used as a boolean sentinel — truthy while playing (the sampler
+// run's `{stop}` handle, or the oscillator fallback's stub).
 let _synth = null;
 let _audioContext = null;
+let _sampler = null;          // core/abc-sampler.js PianoSampler on _audioContext
+
+/** The piano sampler on the CURRENT persistent AudioContext (rebuilt with it
+ *  after an iOS interruption killed the old one). Call inside a user gesture
+ *  the first time — _acquireAudioContext unlocks the context there. */
+function _getSampler() {
+  _acquireAudioContext();
+  if (!_sampler || _sampler.ctx !== _audioContext) _sampler = new PianoSampler(_audioContext, PIANO_FONT);
+  return _sampler;
+}
+
+/** Sound `pitches` (timing-table midiPitches) once through the sampler — the
+ *  audition. Loads the samples on first use (a few hundred ms, once). */
+function _samplerAudition(pitches, msPerMeasure) {
+  const sampler = _getSampler();
+  const play = () => {
+    for (const p of pitches) {
+      if (p?.pitch == null) continue;
+      const durMs = Math.min(1500, Math.max(60, (p.duration ?? 0.25) * (msPerMeasure || 1000) / (_meterSize || 1)));
+      sampler.playNote(p.pitch, durMs, p.volume ?? 95);
+    }
+  };
+  if (sampler.ready) play();
+  else sampler.load().then(play).catch(() => { /* no audio */ });
+}
 // iOS: backgrounding the app interrupts the audio session and leaves the
 // AudioContext dead — resume() reports success but no sound comes out until the
 // context is rebuilt. Set when the OS interrupts us (see the statechange /
@@ -754,7 +784,7 @@ state.on('checkout',      () => state.clearVoiceSelections());
 //
 // Output follows the playback routing: the selected external MIDI port when one
 // is set (single note on/off, default channel — per-voice channel/keyswitch
-// state is a playback concern), else abcjs.synth.playEvent on the persistent
+// state is a playback concern), else the piano sampler on the persistent
 // AudioContext (the bundled offline piano). Muted / non-soloed voices stay
 // silent. Never fires during playback.
 // ---------------------------------------------------------------------------
@@ -859,11 +889,7 @@ function _auditionAt(adjChar, { force = false } = {}) {
   try {
     // Same iOS rules as playback: persistent context, media-style session.
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* unsupported */ }
-    _acquireAudioContext();
-    abcjs.synth.registerAudioContext(_audioContext);
-    // playEvent builds a throwaway one-moment synth; with no soundFontUrl it
-    // resolves through the overridden load-note → the bundled offline piano.
-    abcjs.synth.playEvent(pitches, undefined, msPerMeasure).catch(() => { /* no audio */ });
+    _samplerAudition(pitches, msPerMeasure);
   } catch { /* audio unavailable — audition is best-effort */ }
 }
 
@@ -883,12 +909,7 @@ state.on('abc-audition-pitch', ({ midi, durMs = 300, volume = 95 } = {}) => {
   }
   try {
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* unsupported */ }
-    _acquireAudioContext();
-    abcjs.synth.registerAudioContext(_audioContext);
-    abcjs.synth.playEvent(
-      [{ pitch, volume, duration: 0.25, instrument: 0, startChar: 0, endChar: 0 }],
-      undefined, 1000
-    ).catch(() => { /* no audio */ });
+    _samplerAudition([{ pitch, volume, duration: durMs / 1000 }], 1000);
   } catch { /* audio unavailable — audition is best-effort */ }
 });
 
@@ -2370,13 +2391,8 @@ async function startPlayback(opts = {}) {
   const selFrom = _toSec(_lastEditorSel.from);
   const selTo   = _toSec(_lastEditorSel.to);
 
-  // Playback uses the abcjs synthesiser by default — this build bundles the
-  // FluidR3 acoustic_grand_piano soundfont and serves it offline (see
-  // abcjs-piano-loader.js), so the default sound is a real piano with no fetch.
-  // A user-supplied soundfont URL (extension slot) overrides the base URL for
-  // richer/other instruments.  Read directly from state.data so the live
-  // document value is always seen.
-  const soundfontUrl = state.data?.pluginExtensions?.abcjs?.['soundfont-url']?.value ?? null;
+  // Playback is the piano sampler (core/abc-sampler.js) over the bundled
+  // FluidR3 acoustic grand (src/assets/piano-soundfont.js) — offline, no fetch.
 
   // ── 1.  The timing table — built per render from abc2svg's model, see
   //        _buildNoteEvents (abcjs's own table only when abcjs drew the score).
@@ -2475,69 +2491,31 @@ async function startPlayback(opts = {}) {
   }
   if (superseded()) return;
 
-  if (abcjs.synth?.CreateSynth) {
-    // ── 3a.  Soundfont synth path (default: bundled offline piano) ────────
-    //
-    // abcjs.synth.CreateSynth decodes per-note AudioBuffers via our overridden
-    // load-note (acoustic_grand_piano from the bundle, offline).  When the user
-    // supplies a soundFontUrl it is used as the base for other instruments.
-    // Arbitrary start offsets are handled by seek() before start() (below).
-    try {
-      const synth = new abcjs.synth.CreateSynth();
-      // Muted / non-soloed voices → drop them from the synth sequence by their
-      // score-order index (abcjs's `voicesOff`), so the internal piano plays only
-      // the audible voices. Highlighting is filtered separately (_highlightEvent).
-      const voicesOff = _mutedVoiceIndices();
-      // abc2svg drew the score → it also says what sounds when: the synth gets
-      // a prebuilt SEQUENCE in seconds (core/abc-timing.js sequenceFromTiming;
-      // `millisecondsPerMeasure: 1000` makes one sequence unit one second) and
-      // only mixes the piano samples. Muted / non-soloed voices are left out of
-      // it (`voicesOff` is abcjs's own-parse mechanism; the fallback below).
-      // Without an abc2svg score (tablature docs, the escape hatch) abcjs
-      // flattens its own parse as before.
-      const a2sTiming = _a2sScore?.timing;
-      await synth.init({
-        audioContext: _audioContext,
-        ...(a2sTiming
-          ? { sequence: sequenceFromTiming(a2sTiming, { isMuted: _isMutedAtChar }), millisecondsPerMeasure: 1000 }
-          : { visualObj: tune }),
-        options: {
-          // Omit soundFontUrl to use abcjs's default FluidR3 base — for which
-          // this build serves acoustic_grand_piano from the bundle offline.
-          ...(soundfontUrl ? { soundFontUrl: soundfontUrl } : {}),
-          ...(voicesOff.length ? { voicesOff } : {}),
-          // Only react to a NATURAL end.  Manually stopping the synth (pause /
-          // seek / stop) also fires onEnded; guarding on abcPlaying stops that
-          // re-entrant call from wiping the remembered pause position.
-          onEnded:      () => { if (state.abcPlaying) stopPlayback(); },
-        },
-      });
-      await synth.prime();
-      if (superseded()) { try { synth.stop(); } catch { /* never started */ } return; }
-      _synth = synth;
-    } catch (err) {
-      // Synth setup failed (e.g. a custom URL is wrong / unreachable, or a note
-      // couldn't be decoded).  Fall through to the oscillator path so playback
-      // still works.  Only surface a banner when the user explicitly configured
-      // a remote soundfont — the default bundled piano falling back is silent.
-      const msg = err?.message ?? String(err);
-      if (soundfontUrl && _playEl) {
-        const banner = document.createElement('div');
-        banner.className = 'abc-soundfont-error';
-        banner.textContent = `⚠ Soundfont failed to load (${msg}). Using oscillator playback instead.`;
-        _playEl.insertAdjacentElement('afterbegin', banner);
-        setTimeout(() => banner.remove(), 8000);
-      }
-      console.warn('[abcjs] Synth init failed, falling back to oscillators:', msg);
-      _synth = null;
-      // Keep the persistent context; just make sure it's running for oscillators.
-      try { await _audioContext.resume(); } catch { /* ignore */ }
-      if (superseded()) return;
-    }
+  // ── 3a.  The piano sampler (default) ─────────────────────────────────
+  //
+  // Decode the bundled samples once (a few hundred ms the first time, then
+  // instant); the notes themselves are scheduled in step 4, after the context
+  // is confirmed running, with a look-ahead — sound starts at once instead of
+  // after a whole-tune mix (what abcjs's CreateSynth did until 2026-10).
+  // The notes are abc2svg's timing when it drew the score — each with the
+  // velocity core/abc-dynamics.js gave it — else abcjs's own table flattened
+  // (tablature docs, the escape hatch). Muted / non-soloed voices are skipped
+  // by position (`_isMutedAtChar`), the same test every other path uses.
+  let sampler = null;
+  const samplerNotes = _a2sScore?.timing?.notes ?? notesFromMoments(noteEvents, _meterSize || 1);
+  try {
+    sampler = _getSampler();
+    await sampler.load();
+    if (superseded()) return;
+  } catch (err) {
+    console.warn('[abcjs] Piano samples failed to decode, falling back to oscillators:', err?.message ?? err);
+    sampler = null;
+    try { await _audioContext.resume(); } catch { /* ignore */ }
+    if (superseded()) return;
   }
 
-  if (!_synth) {
-    // ── 3b.  Web Audio oscillator path (offline, no soundfont) ───────────
+  if (!sampler) {
+    // ── 3b.  Web Audio oscillator path (the samples would not decode) ────
     _scheduleOscillators(noteEvents, startSeconds, stopMs);
     _synth = { stop: () => {} };
   }
@@ -2562,11 +2540,14 @@ async function startPlayback(opts = {}) {
     if (superseded()) return;
   }
 
-  if (typeof _synth?.start === 'function') {
-    // Seek to the requested start position before starting (synth.seek() sets
-    // pausedTimeSec so that start() resumes from there rather than the beginning).
-    if (startSeconds > 0) _synth.seek(startSeconds, 'seconds');
-    _synth.start();
+  if (sampler) {
+    // Any start offset: a note already sounding there begins mid-sample. The
+    // run ends itself when the last scheduled note has sounded out; a manual
+    // stop (pause / seek) never fires onEnded, so the guard is belt-and-braces.
+    _synth = sampler.play(samplerNotes, {
+      fromMs: startSeconds * 1000, stopMs, isMuted: _isMutedAtChar,
+      onEnded: () => { if (state.abcPlaying) stopPlayback(); },
+    });
   }
 
   // Drive the transport progress bar (works for all audio paths).
@@ -3366,24 +3347,6 @@ const abcjsDSL = {
     return /^X:\s*\d+/m.test(content) || /^T:/m.test(content);
   },
 
-  /**
-   * Extension slots — configurable sub-capabilities exposed in the
-   * Extensions modal.  Each slot is a user-configurable input that
-   * the DSL can read at runtime via plugin-extensions.js helpers.
-   */
-  extensionSlots: [
-    {
-      id:          'soundfont-url',
-      type:        'text',
-      label:       'Soundfont URL',
-      placeholder: 'https://paulrosen.github.io/midi-js-soundfonts/FluidR3_GM/',
-      description: 'Playback already uses a bundled offline acoustic piano. '
-        + 'Set this only to use a different/remote soundfont collection (requires a network connection). '
-        + 'Compatible URLs: …/FluidR3_GM/  or  …/MusyngKite/  '
-        + '(the …/abcjs/ path uses a different format and will not work here). '
-        + 'If a note cannot be loaded, playback falls back to the built-in oscillators.',
-    },
-  ],
 };
 
 registerDSL(abcjsDSL);

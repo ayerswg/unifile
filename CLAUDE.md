@@ -72,9 +72,14 @@ src/
     abc-timing.js    abc2svg's timing in the app's terms (pure, `test/abc-timing.test.mjs`): `modelInfo` (token ends,
                      written lengths, tempo, grace istarts, meter), `timingFromEvents` (ToAudio rows → notes/rests/
                      controls keyed by istart), `momentsFromTiming` (abcjs's noteTimings shape for the consumers),
-                     `sequenceFromTiming` (CreateSynth's input), `parseErrmsg` (abc2svg's errmsg → an editor diagnostic)
-    midi-file.js     Standard MIDI File (format 1, one tick = one ms) from abc2svg's timing — the {compose} MIDI export
-                     (pure, `test/midi-file.test.mjs`)
+                     `notesFromMoments` (the way back, for abcjs's own table), `parseErrmsg` (abc2svg's errmsg → an
+                     editor diagnostic)
+    abc-dynamics.js  Dynamics → velocity on the timing's notes (pure, `test/abc-dynamics.test.mjs`): beat stress,
+                     `!pp!`…`!ff!`, hairpins, accents — abcjs's rules, read from the SOURCE (`applyDynamics`)
+    abc-sampler.js   THE PIANO: a Web Audio sampler over the committed FluidR3 soundfont playing the timing's notes
+                     with a look-ahead (`PianoSampler`; pure `noteName`/`nearestSample`/`scheduleWindow` tested)
+    midi-file.js     Standard MIDI File (format 1, one tick = one ms) from abc2svg's timing, per-note velocities —
+                     the {compose} MIDI export (pure, `test/midi-file.test.mjs`)
     assets.js        Document ASSETS (`data.assets`, images by name, base64, outside the text): naming, `![…](name)`
                      resolution, save-time pruning — Marpit-free so app.js can import it in every build
     slides/          The {slides} deck engine (pure, Node-tested): deck.js (Marpit render, `---`/`===` split, exports'
@@ -367,9 +372,9 @@ visible `.abc2svg-wrap` and the SAME parse yields `score.timing` (when every not
 (`abc2svgDiagnostics`), the MIDI export (`abc2svgTiming` → `core/midi-file.js`) and the quine's static preview.
 **abcjs parses only when it is the engraver the user sees**: `%%tablature` documents, the escape hatch
 (`localStorage.uf_engraver='abcjs'`, no rebuild) and content abc2svg cannot engrave — then abcjs draws into
-`.abc-preview-wrap` and its own timing table / synth input / `getMidiFile` are used. Otherwise abcjs is a sample
-player: `CreateSynth` mixes the offline piano at the times abc2svg says (a prebuilt `sequence`), `playEvent` sounds
-the audition. The hidden per-keystroke `abcjs.renderAbc` that fed the transport until 2026-10 is gone — one parse
+`.abc-preview-wrap` and its own timing table / `getMidiFile` are used. **The sound is our own sampler**
+(`core/abc-sampler.js`, below — abcjs's synth is no longer used for anything); abcjs is on its way out entirely
+(the retirement PR). The hidden per-keystroke `abcjs.renderAbc` that fed the transport until 2026-10 is gone — one parse
 per render, and a tune that abcjs read differently (the blank-line bug) can no longer silently play nothing while
 drawing fine.
 
@@ -426,10 +431,8 @@ drawing fine.
   instrument}]`, `elements: []`, `left: 0` so the "placed" filters keep it) — so the transport, the cursor bar, the
   green highlight (`_soundingEntries`), seek (`_charToMs` / `_selectionMsRange`), the audition, the piano roll
   (`_emitRollData`), Web MIDI and the oscillators all read it UNCHANGED. What changed around it: (1) **the synth
-  gets a prebuilt sequence** — `CreateSynth.init({ sequence: sequenceFromTiming(timing, { isMuted: _isMutedAtChar }),
-  millisecondsPerMeasure: 1000 })` (with a sequence the synth's meterSize is 1, so one unit = one second; one
-  track per voice, `program` first from `%%MIDI program`, grace notes in, muted voices out, pitches rounded —
-  the synth looks samples up by integer pitch) — abcjs only mixes the offline piano's samples at abc2svg's times;
+  got a prebuilt sequence** (`sequenceFromTiming` → abcjs's `CreateSynth`; SUPERSEDED the same month by the sampler,
+  below, which plays `timing.notes` directly — the function is gone);
   (2) **abcjs's TimingCallbacks are gone**: the wall-clock progress loop (`_startProgress`, which already drove the
   cursor) now also ENDS the run — a range stops at its end onset (time-based, every voice together), the whole tune
   300 ms past its last onset so the synth's own `onEnded` (buffer end + fade) wins when it fires first; (3) the
@@ -443,9 +446,33 @@ drawing fine.
   hidden render — for the parity check (`_abcjsEvents`), the meter, `_buildKeyswitchPlan`'s voice identity, MIDI
   export (`getMidiFile`) and as THE table when abcjs is the visible engraver (`%%tablature`, the escape hatch:
   `score` is null → `_noteEvents = _abcjsEvents`). **Default tempo is now abc2svg's 120 bpm** for a tune with no
-  `Q:` (abcjs's was 180); dynamics (`!p!` `!ff!`) no longer shape the internal piano's velocity (ToAudio carries
-  none — the Web MIDI `midi.map` velocity path is unaffected). A score abc2svg timed as empty plays nothing even if
-  abcjs read notes: what you see is what plays, the preview notice says why.
+  `Q:` (abcjs's was 180). A score abc2svg timed as empty plays nothing even if abcjs read notes: what you see is
+  what plays, the preview notice says why.
+- **THE PIANO IS OURS (2026-10, the fourth PR: `core/abc-sampler.js` + `core/abc-dynamics.js`; abcjs's synth is
+  unused).** `PianoSampler(ctx, font)` decodes the 88 committed FluidR3 mp3s ONCE (`load()`, a few hundred ms,
+  `_getSampler()` keeps one per persistent AudioContext — rebuilt with the context after an iOS interruption) and
+  `play(notes, { fromMs, stopMs, isMuted, onEnded })` schedules `timing.notes` on the audio clock with a 1.2 s
+  look-ahead (`scheduleWindow`, pure: notes already over at the seek point are skipped, one sounding ACROSS it
+  starts mid-sample at its offset, `stopMs` keeps a range's end out, `isMuted(start)` is `_isMutedAtChar`), each
+  note a BufferSource + gain envelope (velocity → `(v/127)²`, 80 ms release; a missing key = the nearest within an
+  octave re-pitched by `playbackRate`, which also carries microtones). Sound starts at once — abcjs's `CreateSynth`
+  mixed the WHOLE tune into one buffer first (the slow start `abcStarting` papers over; still useful for the decode).
+  `startPlayback` step 3a `load()`s, step 4 `play()`s after the resume, and `_synth` is the run's `{stop}`; the
+  oscillators remain the fallback when no sample decodes. The audition is `playNote` (`_samplerAudition`, both
+  the note/chord and the piano roll's raw-pitch paths). On the abcjs-drawn path (`%%tablature`, the escape hatch)
+  the sampler plays `notesFromMoments(_noteEvents)` — the SAME player for both tables. **Dynamics → velocity are
+  back (`applyDynamics(timing, expandedText, { meter })`, run by `renderAbc2svg` AND `abc2svgTiming` so the
+  transport, the piano roll's volumes and the MIDI file agree):** abcjs's own rules, read from the TEXT — beat
+  stress by default (first beat 105 / beat 95 / off-beat 85, from each token's `timeWhole` = `s.time / BLEN` +
+  the meter; x/8 compound meters beat in dotted quarters), a sticky level per voice from `!pppp!`…`!ffff!`
+  (`DYNAMIC_LEVELS`), hairpins (`!crescendo(!`/`!<(!` … `)`, `!diminuendo(!`/`!>(!`) ramping token by token toward
+  the next level mark after the close (else ±50, floor 15), accents (`!accent!` `!>!` `!marcato!` `!sfz!`, the `L`
+  shorthand before the note) +15; a chord's pitches and a repeat's passes share the token's velocity, a grace note
+  takes the off-beat level in force at its principal. A mark belongs to the first token at or after it (a mark
+  inside a chord / after accidentals to the token containing it). `midiFileFromTiming` writes `n.velocity`
+  (`volume` is the fallback). abcjs's table (`momentsFromTiming`) carries it as `midiPitches[].volume`, so the Web
+  MIDI path's `midi.map` velocity effects layer on top as before. The `soundfont-url` extension slot (a remote
+  soundfont for abcjs's synth) is gone with the synth. `__ufAbcDebug().a2sVelocities` / `.sampler` for Playwright.
 - **ONE PARSER, FULL STOP (2026-10, the third PR): no abcjs parse unless abcjs draws.** `render()` calls
   `abcjs.renderAbc` only when `abcjsVisible` (tablature / the escape hatch) or after abc2svg failed to engrave
   (`adoptAbcjs()`); `_setHasTune(localScore || tune)`, and `togglePlay`/`startPlayback` accept either engine's
@@ -482,7 +509,7 @@ drawing fine.
   defer, the audition and `_syncTransportToSelection` treat starting like playing. Reproduced with Playwright under
   `Emulation.setCPUThrottlingRate` (6–10×): two taps 250 ms apart left the transport paused at 0.2 s (one run) or
   double-started (the other); the `abc-play-state` timeline now shows start → cancel → nothing else.
-- **Note audition** (abcjs.js "Note audition" section): a single note/chord sounds when **written** (a note letter / octave mark typed → `editor-type` sets `_pendingTypeAudition`, consumed at the end of `render()` once the fresh timing table can resolve its pitch — the AudioContext is acquired/unlocked *inside the keystroke* because the deferred audition runs outside the gesture and would otherwise hit the autoplay policy on first use) or **selected** (collapsed editor cursor on a note via `editor-select`, debounced 80 ms + deduped per note token; preview note click via `dsl-select`, forced so re-clicks replay). The audited note gets the **playback-style green flash** (`_auditionFlash`: score `setPlaying` / `.abcjs-note_playing` + editor `abc-play-cursor`) for roughly its sounding length, cleared on a timer that stands down if real playback started meanwhile. Strictly *covering* char match — no nearest-note fallback (a half-typed accidental must not audition the next note); rests and muted/non-soloed voices stay silent; never during playback. Output follows playback routing: external MIDI port (single on/off, default channel) or `abcjs.synth.playEvent` (`registerAudioContext(_audioContext)` first so it uses the persistent context; no soundFontUrl → the bundled offline piano). Multi-char insertions (paste) deliberately don't audition.
+- **Note audition** (abcjs.js "Note audition" section): a single note/chord sounds when **written** (a note letter / octave mark typed → `editor-type` sets `_pendingTypeAudition`, consumed at the end of `render()` once the fresh timing table can resolve its pitch — the AudioContext is acquired/unlocked *inside the keystroke* because the deferred audition runs outside the gesture and would otherwise hit the autoplay policy on first use) or **selected** (collapsed editor cursor on a note via `editor-select`, debounced 80 ms + deduped per note token; preview note click via `dsl-select`, forced so re-clicks replay). The audited note gets the **playback-style green flash** (`_auditionFlash`: score `setPlaying` / `.abcjs-note_playing` + editor `abc-play-cursor`) for roughly its sounding length, cleared on a timer that stands down if real playback started meanwhile. Strictly *covering* char match — no nearest-note fallback (a half-typed accidental must not audition the next note); rests and muted/non-soloed voices stay silent; never during playback. Output follows playback routing: external MIDI port (single on/off, default channel) or the piano sampler's `playNote` (`_samplerAudition` — the samples load on first use, within the gesture). Multi-char insertions (paste) deliberately don't audition.
 - **Web MIDI output** (Chromium-only): route playback to an external instrument (e.g. Kontakt via IAC) *instead of* the internal piano. Picker is in **Settings → Audio output**. `_startMidiPlayback` builds a time-sorted note queue pumped with look-ahead timestamps; panic (all-notes-off) on stop.
 - **iOS audio**: reuse ONE persistent AudioContext (never `close()` it), unlock with a silent buffer in the user gesture, and set `navigator.audioSession.type = 'playback'` so the hardware mute switch doesn't silence it.
 - **Unified `midi.map`** (front matter): maps any abcjs marking (dynamics `ff`/`pp`, accents `>`, articulations `legato`/`pizzicato`, custom names) to a MIDI action combining `note` (keyswitch), `cc`, `program`, and a `velocity` effect. `velocity: 112`=absolute level (sticky), `0.8`=scale, `+30`=per-note bump (accents). Per-voice overrides under `midi.voices.<n>` (channel/volume(CC7)/pan(CC10)/velocity scale/map). `midi.octave` = the octave middle-C (60) is called (`c3` default = Kontakt). See README/inline docs for the full schema.

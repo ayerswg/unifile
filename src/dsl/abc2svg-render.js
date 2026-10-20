@@ -41,6 +41,7 @@ import 'abc2svg/MIDI-1.js';
 import { ToAudio } from 'abc2svg/play-1.js';
 import { DEFAULT_LINEBREAK } from '../core/abc-shorthand.js';
 import { timingFromEvents, modelInfo, parseErrmsg } from '../core/abc-timing.js';
+import { applyDynamics } from '../core/abc-dynamics.js';
 
 /** abc2svg's own page width when none is injected (A4 at 96 dpi, px). */
 const DEFAULT_PAGE_WIDTH = 794;
@@ -593,7 +594,9 @@ export function renderAbc2svg(content, el, { onSelect } = {}) {
     // `timing.notes[].start` is content-relative like `sym.start`, so a timed
     // note and its glyphs share a key. abcjs.js compares this against its own
     // table (`_engineParity`) and the one-parser work swaps its consumers over.
-    timing: timingFromEvents(events, { offset: -prefix.length, voices, graceStarts, syms: timingSyms }),
+    // … with dynamics → velocity from the text (core/abc-dynamics.js: beat
+    // stress, !p!…!ff!, hairpins, accents) — abc2svg's rows carry none.
+    timing: applyDynamics(timingFromEvents(events, { offset: -prefix.length, voices, graceStarts, syms: timingSyms }), content, { meter }),
     // The tune's meter (num/den) from its first M:, null when it has none —
     // abcjs.js's fallback when abcjs parsed no tune to ask.
     meter,
@@ -828,7 +831,7 @@ export function abc2svgTiming(content) {
   const prefixLines = (src.slice(0, prefixLen).match(/\n/g) ?? []).length;
   const { errors, events, voices, truncated, graceStarts, syms, meter } = engrave(src, { timing: true, preserveSheet: true });
   return {
-    timing: timingFromEvents(events, { offset: -prefixLen, voices, graceStarts, syms }),
+    timing: applyDynamics(timingFromEvents(events, { offset: -prefixLen, voices, graceStarts, syms }), content, { meter }),
     errors, prefixLines, truncated, meter,
   };
 }
