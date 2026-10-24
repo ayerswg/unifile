@@ -105,3 +105,20 @@
     - Exports a real .xlsx (styles and rules included), CSV, HTML and PDF
   pwa: /pwa-sht/
   download: /dl/unifile.sht.html
+
+- id: notes
+  title: "{notes}"
+  tagline: Connected notes — links, backlinks, a graph and search across every note, offline.
+  overview: >
+    A notes app where every note knows the others. Write Markdown; `[[Page]]`
+    links another note (a missing one is created on click), `![[Page#^id]]`
+    embeds one of its blocks, `#tags` and properties organise, and every page
+    ends with who links to it. See the whole workspace as a graph, and find
+    anything with a Notion-style search whose hits are highlighted in context —
+    all on the device, with git-style version history inside each note.
+  features:
+    - Works 100% offline — no server, no account, no sync
+    - "[[Links]], block embeds, backlinks and unlinked mentions across notes"
+    - A graph of the workspace, and search with highlighted hits (Ctrl+K)
+  pwa: /pwa-nts/
+  download: /dl/unifile.nts.html

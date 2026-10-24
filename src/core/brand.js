@@ -14,7 +14,7 @@
  * dependency-free plain ESM with no DOM.
  *
  * Glyph choices are deliberately text-presentation code points: ¶ U+00B6,
- * ◇ U+25C7, ♪ U+266A, ✎ U+270E, ⌂ U+2302, ▭ U+25AD, ▦ U+25A6 — none has an emoji variant, so they
+ * ◇ U+25C7, ♪ U+266A, ✎ U+270E, ⌂ U+2302, ▭ U+25AD, ▦ U+25A6, ⊛ U+229B — none has an emoji variant, so they
  * render as monochrome text on every platform (iOS included).
  */
 
@@ -26,6 +26,7 @@ export const APPS = {
   udraft:   { name: 'draft',    glyph: '⌂', abbrev: 'dft',  edits: 'floor plans' },
   slides:   { name: 'slides',   glyph: '▭', abbrev: 'sld',  edits: 'Marp slide decks' },
   spreadsheet: { name: 'spreadsheet', glyph: '▦', abbrev: 'sht', edits: 'spreadsheets' },
+  notes:    { name: 'notes',    glyph: '⊛', abbrev: 'nts',  edits: 'connected notes' },
 };
 
 /** Wrap anything in the signature braces: brace('compose') → '{compose}'. */

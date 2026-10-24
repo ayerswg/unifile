@@ -171,6 +171,11 @@ export class App {
     state.on('save-major',       () => this.saveDocument({ major: true }));
     state.on('open-from-device', () => this._openFromDevice());
     state.on('new-document',     () => this._newDocument());
+    // Cross-document navigation from a DSL ({notes}'s [[links]], its search
+    // palette and graph): open a library record, optionally on a text range,
+    // and create a document by TITLE without the name prompt.
+    state.on('open-record',      ({ id, hit, pane }) => this._openRecordFrom(id, hit, pane));
+    state.on('create-document',  ({ title, content }) => this._createDocument({ title, content }));
     state.on('restore-version',  (hash) => this._restoreVersion(hash));
     state.on('open-library',     () => this._showLibrary(true));
     state.on('close-library',    () => this._showLibrary(false));
@@ -640,6 +645,40 @@ export class App {
     await this._openRecord(rec.id);
     state.emit('mobile-goto-pane', 'editor');
     this._components.editor?.focus?.();
+  }
+
+  /**
+   * `open-record` from a DSL: like a library click, but a `pane` keeps the
+   * phone where the user was (following a link from the rendered page stays
+   * on the rendered page).
+   */
+  async _openRecordFrom(id, hit = null, pane = null) {
+    if (!state.library || !id) return;
+    await this._openRecord(id, hit);
+    if (pane && _isMobile()) state.emit('mobile-goto-pane', pane);
+  }
+
+  /**
+   * `create-document` from a DSL: a new library document titled `title`, named
+   * after it (`suggestApiName`, suffixed until free) — no prompt, so clicking
+   * a `[[Missing Page]]` link creates the page in one tap.
+   */
+  async _createDocument({ title, content = '' } = {}) {
+    if (!state.library) return;
+    const t = String(title ?? '').trim();
+    if (!t) return;
+    let base = suggestApiName(t) || 'page';
+    let apiName = base, n = 2;
+    while (!(await state.library.isApiNameFree(apiName))) apiName = `${base}-${n++}`;
+    const data = emptyData(state.data?.dslType ?? 'markdown', {
+      title: t,
+      version: state.data?.version,
+      extra: { apiName, currentContent: content },
+    });
+    await this._persistNow();
+    const rec = await state.library.create(data);
+    await this._openRecord(rec.id);
+    if (!_isMobile()) this._components.editor?.focus?.();
   }
 
   async _removeRecord(id) {

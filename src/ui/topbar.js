@@ -1476,6 +1476,82 @@ h1 { color: crimson; }   /* this slide only */
       }
     ]
   },
+  notes: {
+    name: 'Notes',
+    docsUrl: 'https://unifile.app/notes/',
+    docsLabel: '{notes} on unifile.app',
+    sections: [
+      {
+        group: 'Connecting notes',
+        title: 'Links',
+        content: `<pre><code>See [[Meeting Notes]] and [[Research#Findings]].
+A nickname: [[Project Alpha|the project]]
+One block of another note: [[Research#^key]]
+This page's own heading: [[#Timeline]]</code></pre>
+<p class="help-note">A note is a Markdown document; every note of this app on the device is the <strong>workspace</strong>. <code>[[Title]]</code> links another note by its title, one of its <code>aliases:</code> or its file name — case does not matter. Click a link in the page to open it; <kbd>${formatShortcut('Mod')}</kbd>-click it in the text. A link to a page that does not exist yet is shown dashed: clicking it <strong>creates the page</strong>, named after the title. Type <code>[[</code> to pick from every page (and <code>#</code> after the title for its headings, <code>#^</code> for its blocks); <code>@</code> also offers the pages and inserts the link.</p>`
+      },
+      {
+        group: 'Connecting notes',
+        title: 'Blocks & Embeds',
+        content: `<pre><code>The key result: 42. ^key
+
+![[Research#^key]]          the block, rendered here (a line of its own)
+![[Research#Findings]]      a whole section
+![[Research]]               the whole page</code></pre>
+<p class="help-note">Every paragraph, heading, list item, quote, table or code block is a <strong>block</strong>. A trailing <code>^id</code> (letters, digits, <code>-</code>, <code>_</code>) names it; <strong>⋯ → Copy block reference</strong> adds one to the block at the cursor and copies <code>![[Page#^id]]</code>, and clicking the small <code>^id</code> in the page copies it too. An embed shows the source in place with a crumb (<em>Research › ^key</em>) and ↗ to go there; it follows edits to the source. Embeds nest three deep and never loop.</p>`
+      },
+      {
+        group: 'Connecting notes',
+        title: 'Backlinks & Mentions',
+        content: `<p class="help-note">Every page ends with its <strong>linked references</strong>: each block of another note that links here, rendered, grouped by note — click one to open that note on that block. Below them, <strong>unlinked mentions</strong>: blocks that write this page's title (or an alias) without a link; the <strong>Link</strong> button on a mention turns it into <code>[[Title]]</code> in that note. Renaming a page does not rewrite other notes' links — add the old title under <code>aliases:</code> instead.</p>`
+      },
+      {
+        group: 'Connecting notes',
+        title: 'Tags & Dates',
+        content: `<pre><code>---
+title: Project Alpha
+tags: work, planning
+status: active
+due: 2026-11-01
+aliases: Alpha, The Project
+---
+Inline too: #work #area/sub   and dates: @today @2026-11-01</code></pre>
+<p class="help-note">The front matter is the page's <strong>properties</strong>, shown as a table under the title: <code>tags</code> become chips, an ISO date a date chip, anything else (owner, status, due…) a row. <code>#tag</code> in the text tags the page too (not at a heading's <code>#</code> — a heading has a space after it); <code>#area/sub</code> nests, and searching <code>#area</code> finds both. Clicking a tag searches it. <code>@today</code> / <code>@2026-11-01</code> render as dates.</p>`
+      },
+      {
+        group: 'Writing',
+        title: 'Blocks & Callouts',
+        content: `<pre><code>/            at a line start: the block menu (headings, to-do, toggle, callout, table…)
+- [ ] a task     - [x] done        click the box in the page to toggle it
+> [!note] Title
+> A callout. Types: note info tip warning danger question success quote example todo
+> [!toggle] Summary
+> Folded until opened (toggle-open starts open)</code></pre>
+<p class="help-note">Plain GitHub Markdown underneath (marked): headings, lists, task lists, tables, fences, images, footnote-free. A single newline is a line break (Notion-style). <kbd>Tab</kbd> indents a list item, <kbd>Shift-Tab</kbd> outdents (the phone bubble has both). <code>&lt;!-- … --&gt;</code> comments out lines (<kbd>${formatShortcut('Mod-/')}</kbd>).</p>`
+      },
+      {
+        group: 'Finding things',
+        title: 'Search',
+        content: `<pre><code>${formatShortcut('Mod-k')}        search the workspace (also the ⌕ in the page bar, the phone bubble)
+alpha review        pages holding BOTH words (title matches rank first)
+"key result"        the exact phrase
+#work               pages tagged work (or work/…)
+title:notes         the word must be in the title
+mtng                a few letters of a title in order also find it</code></pre>
+<p class="help-note">Results group by page: the title with the matched letters marked, then up to four <strong>hits</strong> — the line around each match with every term highlighted and the heading it sits under. <kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>↵</kbd> opens (a hit lands the editor on that text), <kbd>Esc</kbd> closes. After opening a hit the terms stay <strong>highlighted in the text and in the page</strong> until <kbd>Esc</kbd> or the ⌕ chip's ×. An empty query lists the recent pages; a query no title matches offers <em>Create page</em>. ⋯ → <strong>Link to page…</strong> (${formatShortcut('Mod-Alt-l')}) runs the same search and inserts <code>[[Title]]</code> at the cursor.</p>`
+      },
+      {
+        group: 'Finding things',
+        title: 'Graph',
+        content: `<p class="help-note"><strong>Page | Graph</strong> in the bar (${formatShortcut('Mod-Shift-g')}, ⋯ → Graph / page view, the phone bubble's ⊛) draws the workspace: pages as dots sized by their links, the open page in the accent colour, tags as hollow violet dots, pages that do not exist yet dashed. <em>Local</em> shows this page and everything within two hops; <em>All</em> the whole workspace; <code>#</code> toggles the tag nodes. Hover to light up a neighbourhood, click a page to open it (a tag searches it, a missing page is created), drag a node, wheel / pinch to zoom, drag the background to pan, ⛶ fits. The picture keeps its positions while you type.</p>`
+      },
+      {
+        group: 'Finding things',
+        title: 'Navigation',
+        content: `<p class="help-note">Following links builds a history: <strong>‹ ›</strong> in the page bar (<kbd>Alt-←</kbd> / <kbd>Alt-→</kbd>) step back and forward, like a browser. The ‹ circle / sidebar lists every note with its own search (names and text). <strong>Export</strong>: Markdown (the text), HTML (one standalone page, links as text) and PDF.</p>`
+      }
+    ]
+  },
   spreadsheet: {
     name: 'Spreadsheet',
     docsUrl: 'https://unifile.app/spreadsheet/',
@@ -1638,6 +1714,8 @@ function keyboardHelpSection(dslType) {
     ['Tab', 'Indent the line (or accept the completion)'],
     ['Shift-Tab', 'Outdent the line'],
     typeof dsl?.alignSource === 'function' && ['Alt-Shift-f', 'Format the source'],
+    // A DSL's own chords (`dsl.shortcuts: [[chord, what], …]`, e.g. {notes}' search / graph).
+    ...(Array.isArray(dsl?.shortcuts) ? dsl.shortcuts : []),
     ['Alt-1', 'Editor only'],
     ['Alt-2', 'Editor and preview'],
     ['Alt-3', 'Preview only'],
