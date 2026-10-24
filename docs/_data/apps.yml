@@ -50,6 +50,12 @@
   pinned: true
   excerpt: A spreadsheet written as readable text — grid editing, formulas, formats, .xlsx export.
 
+- title: "{notes}"
+  url: /notes/
+  kind: app
+  pinned: true
+  excerpt: Connected notes — [[links]], backlinks, block embeds, a graph view and highlighted search.
+
 # ── Direct links (searchable) ──
 - title: "{document} — download (.html)"
   url: /dl/unifile.md.html
@@ -120,3 +126,13 @@
   url: /pwa-sht/
   kind: pwa
   excerpt: Install {spreadsheet} as an offline spreadsheet app.
+
+- title: "{notes} — download (.html)"
+  url: /dl/unifile.nts.html
+  kind: download
+  excerpt: Standalone single-file connected-notes app; save and open offline.
+
+- title: "{notes} — install (PWA)"
+  url: /pwa-nts/
+  kind: pwa
+  excerpt: Install {notes} as an offline notes app.

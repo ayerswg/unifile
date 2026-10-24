@@ -16,7 +16,7 @@
  *   dist/unifile.<abbrev>.html   standalone quine for each DSL
  *   dist/pwa-<abbrev>/            installable PWA for each DSL
  *
- *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | upub | udraft | slides | spreadsheet)
+ *   --dsl=<variant>      build just one variant (markdown | mermaid | abcjs | upub | udraft | slides | spreadsheet | notes)
  *     e.g. `node build/build.mjs --dsl=abcjs` → dist/unifile.abc.html (offline piano)
  *
  * npm scripts
@@ -173,6 +173,9 @@ const DSL_META = {
   // {spreadsheet}: the standard shell with ONLY the spreadsheet DSL — the
   // render pane is the grid editor (src/ui/sheet-grid.js); no marked/docx.
   spreadsheet: { abbrev: 'sht', plugins: ['spreadsheet'],        defaultDslType: 'spreadsheet', label: appName('spreadsheet') },
+  // {notes}: connected block notes — the standard shell with ONLY the notes DSL
+  // (its own marked instance; the workspace index reads the library).
+  notes:     { abbrev: 'nts',  plugins: ['notes'],               defaultDslType: 'notes',    label: appName('notes')    },
 };
 
 if (dslArg && !DSL_META[dslArg]) {

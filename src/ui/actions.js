@@ -56,6 +56,8 @@ export function defaultPrimary(dslId, view = 'editor') {
   if (view === 'render' && dslId === 'mermaid') return 'fit';
   // The spreadsheet's render view is the grid: a tap undoes, like the editors.
   if (view === 'render' && dslId === 'spreadsheet') return 'undo';
+  // The notes app's page: a tap searches the workspace (its Ctrl+K).
+  if (view === 'render' && dslId === 'notes') return 'search';
   if (view !== 'editor') return 'menu';
   // Mermaid is indentation-shaped (subgraphs, nested nodes) and a soft keyboard
   // has no Tab — so the diagram app's tap is Indent, not Undo.

@@ -11,11 +11,11 @@ time to find. Keep it up to date as the design evolves.
 **The brand is `{…}` — curly braces in a monospaced font.** Every app has two
 spellings, both from the single source `src/core/brand.js` (`APPS`, `appName()`,
 `appMark()`): a *name* in braces (`{document}`, `{diagram}`, `{compose}`,
-`{write}`, `{draft}`, `{slides}`, `{spreadsheet}`) and a *mark* — one UTF-8 TEXT glyph (never an emoji) in
-braces (`{¶}`, `{◇}`, `{♪}`, `{✎}`, `{⌂}`, `{▭}`, `{▦}`). The mark IS the app icon
+`{write}`, `{draft}`, `{slides}`, `{spreadsheet}`, `{notes}`) and a *mark* — one UTF-8 TEXT glyph (never an emoji) in
+braces (`{¶}`, `{◇}`, `{♪}`, `{✎}`, `{⌂}`, `{▭}`, `{▦}`, `{⊛}`). The mark IS the app icon
 (`build/icons.mjs` renders it as SVG text; `gen-icons.mjs` rasterizes the PNGs),
 heads the phone title bar, and sits beside the name on the site. Build ids stay
-`markdown` / `mermaid` / `abcjs` / `upub` / `udraft` / `slides` / `spreadsheet`; "uPub"/"uDraft"/"uDoc"/
+`markdown` / `mermaid` / `abcjs` / `upub` / `udraft` / `slides` / `spreadsheet` / `notes`; "uPub"/"uDraft"/"uDoc"/
 "uDraw"/"uNote" in older comments and plans are the retired u-codenames of the
 same apps. Glyphs were picked for having no emoji presentation; action glyphs
 that do (▶ ⏸ ⚙) get U+FE0E appended (`actions.js`).
@@ -90,6 +90,10 @@ src/
                      rows/cells/grid + directives), style.js (props, conditions, number formats, per-cell resolution),
                      book.js (computed workbook + the sort/filter VIEW), edit.js (every grid gesture as text → text, the
                      canonical serializer), render.js (static table, CSV, HTML/print), xlsx.js (styled .xlsx + notes)
+    notes/           THE {notes} ENGINE (pure, Node-tested `test/notes.test.mjs`): parse.js (one note → blocks, `[[links]]`,
+                     `#tags`, headings, `^ids`), index.js (the WORKSPACE index: resolution, backlinks, unlinked mentions,
+                     the graph), search.js (quick find: ranking, snippets, highlight ranges), graph.js (the force layout),
+                     render.js (Markdown → the page's HTML: marked + the notes extensions, backlinks, properties)
     zip.js           Stored-only ZIP writer (EPUB, the .xlsx, the multi-sheet CSV export)
     hash.js, crypto.js
     brand.js         `{name}` / `{glyph}` per app — THE naming source (site, manifests, icons, title bar)
@@ -100,7 +104,7 @@ src/
                      by build/gen-fa-aliases.mjs); `findFaRefs` feeds the editor's lint + completion
     (assets/piano-soundfont.js — committed FluidR3 acoustic grand, ~2.5MB, note→dataURI)
   dsl/               One module per format; self-registers via registry.js
-    markdown.js, abcjs.js, mermaid.js, slides.js, spreadsheet.js, fountain.js
+    markdown.js, abcjs.js, mermaid.js, slides.js, spreadsheet.js, notes.js, fountain.js
     mermaid-icons.js  Registers the Font Awesome packs with mermaid (lazy import()) — see {diagram}
     markdown-tables.js  Tables with formulas inside {document}: the marked block extension, DOCX/XLSX, editor pieces
     registry.js      registerDSL / getDSL / listDSLs
@@ -131,6 +135,7 @@ src/
     action-fab.js    The draggable `{glyph}` action bubble, contextual per pane: tap = primary · hold = grid · drag = snap to a corner
     library-pane.js  The document list (phone pane `library` / desktop SIDEBAR `[data-library]`): search bar (names + text,
                      contextual hits), flat list, + New (asks the name), ⋯ rename title/duplicate/delete
+    notes-search.js  {notes}' Ctrl+K palette (quick find); notes-graph.js = its graph canvas (see {notes})
     sheet-grid.js    {spreadsheet}'s GRID — the render pane as a spreadsheet editor (selection, in-cell editing, formula
                      bar, toolbar, popovers, context menu, clipboard, sheet tabs; every gesture → core/sheet/edit.js → `dsl-edit`)
     diff-view.js     DiffView overlay + DiffBar (read-only commit diff)
@@ -172,12 +177,12 @@ dist/                Build output (gitignored)
 esbuild, IIFE bundle, compile-time `define`s. Key flags/modes:
 
 - **Every content type is its own dedicated single-DSL build** (one DSL bundled in, no runtime plugins). There is no "universal" multi-DSL app and no drag-drop plugin system — both were removed.
-- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft), `slides`(sld), `spreadsheet`(sht). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
+- `node build/build.mjs` (no flags) → builds **every** variant in `DSL_META`: `markdown`(md), `mermaid`(mer), `abcjs`(abc), `upub`(upub), `udraft`(dft), `slides`(sld), `spreadsheet`(sht), `notes`(nts). Output per variant: `dist/unifile.<abbrev>.html` (quine) + `dist/pwa-<abbrev>/` (PWA).
 - A variant can ship its **own shell** instead of the standard `ui/app.js` one: `DSL_META.<id>.entry` (module relative to `src/`) replaces the generated entry, `DSL_META.<id>.css` replaces `styles/app.css`. The `upub` and `udraft` variants use this (see below) — no CodeMirror, no DSL registry, their own CSS.
 - `npm test` → `node --test test/**` — pure Node, no browser: the uDraft core, the library (`test/library.test.mjs`), page config, emoji, etc.
 - `--dsl=<variant>` → build just that one variant.
 - `--dev` → unminified + inline sourcemaps. `--no-pwa` → skip the PWA (fast iteration).
-- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model. The exceptions are `slides`, whose deck IS Markdown (Marpit) — it bundles only `slides.js` (no marked/docx) — and `spreadsheet`, which bundles only `spreadsheet.js`.
+- Note: each variant still bundles `markdown` as a base alongside its DSL (so prose sections + `#!shebang` DSL sections work within that one app); this is not the old multi-DSL "universal" model. The exceptions are `slides`, whose deck IS Markdown (Marpit) — it bundles only `slides.js` (no marked/docx) — `spreadsheet`, which bundles only `spreadsheet.js`, and `notes`, which bundles only `notes.js` (its own marked instance).
 
 **Compile-time defines** (esbuild `define`, referenced as globals; guard with `typeof … !== 'undefined'`):
 - `UNIFILE_MODE` = `"quine"` | `"pwa"` → `IS_QUINE` in storage.js.
@@ -1317,6 +1322,111 @@ sparse and large): it is a per-sheet YAML front matter + one LINE PER CELL OR RA
   confirm. Round-trip of our own export is tested.
 - **Not done / ideas**: no column windowing, no date arithmetic across time zones (everything is UTC
   serials), no chart styling beyond the house palette, no .xlsx images, no pivot tables.
+
+## {notes} (`src/dsl/notes.js` + `src/core/notes/` + `src/ui/notes-search.js` + `src/ui/notes-graph.js`, 2026-10)
+
+A dedicated **connected block notes** app (abbrev `nts`, dslType `notes`, mark `{⊛}`) on the STANDARD
+shell, `wholeDocument: true` like {slides}. The Notion / Obsidian idea in unifile's terms: a note is a
+Markdown document in the library, **the WORKSPACE is every note of this app on the device**, and the DSL
+is **cross-file aware** — the first DSL that reads other documents. It bundles its own marked instance
+(`core/notes/render.js md`), not {document}'s markdown.js.
+
+- **The text (`core/notes/parse.js`, pure).** Markdown plus five conventions: `[[Page]]` / `[[Page|alias]]`
+  / `[[Page#Heading]]` / `[[Page#^blockid]]` (a LINK — by title, `aliases:` or apiName, `normKey`
+  case/space-insensitive; `[[#Heading]]` = this page), `![[…]]` on a line of its own (an EMBED), `^id` as the
+  last thing on a block's last line (a BLOCK ID), `#tag` / `#area/sub` (a TAG — `#` after start/space/`(`
+  then a letter, so headings and `#1` are not tags), `@2026-11-01` / `@today` (a DATE). Code (fences +
+  inline spans) is masked first (`maskCode`). `splitBlocks` = Notion's block: a heading, paragraph, fence,
+  quote, table, rule, embed line, or ONE top-level list item each (nested lines ride along), with `from/to`
+  into the document. The front matter is the page's PROPERTIES (`title`, `aliases`, `tags`, anything else).
+- **The index (`core/notes/index.js`).** `buildIndex(docs)` over `{ id, title, apiName, text, updatedAt }`
+  (a `note` field = a cached parse): `resolve(target)` (titles register before names before aliases, so an
+  alias never shadows a title), `resolveRef({target, heading, block})` → the block / the heading's section
+  (`sectionRange`: to the next heading of ≤ level) / the whole body, `backlinks(id)` = one entry per
+  referencing BLOCK (the context Notion shows), `unlinkedMentions(id)` = other pages' blocks writing the
+  title or an alias as whole words outside a link (an alias inside the title matches once — longest wins),
+  `tagList` / `pagesWithTag` (`area` matches `area/sub`), and `graph({ tags, missing, center, depth })` —
+  pages as nodes, links as deduped undirected edges, optional tag nodes and `missing:` nodes for unresolved
+  targets (Obsidian's hollow dots), a local neighbourhood by BFS.
+- **The workspace lives in notes.js (`_ws`).** `refreshWorkspace()` = `state.library.list()` → docs with
+  the OPEN document's live text swapped in (`currentPageId()` = `state.docId`, `'self'` in a quine) →
+  `_indexFrom` (parses cached per `(id, text, title)`) → `'notes-index'`. Refreshed on `document-change` /
+  `saved` / `library-change` and, at render, when older than 1.5 s; `liveIndex()` rebuilds around the live
+  text without an IDB read. A quine's index is this one document; links to other pages stay unresolved
+  and `createPage` says so. **Navigation is two app-level events** (`app.js`): `open-record` `{ id, hit,
+  pane }` (`_openRecordFrom`: `_openRecord` + `mobile-goto-pane` so following a link from the phone's
+  rendered page STAYS on the rendered page) and `create-document` `{ title, content }`
+  (`_createDocument`: titled, named by `suggestApiName` suffixed until free — NO name prompt, so a missing
+  `[[Page]]` is created in one click). `openPage` on the current page is a `dsl-select` + `_scrollPageTo`.
+  A browser-like history (`_hist`: pushed on `document-change`, ‹ › in the bar, Alt-←/→; `_historyGo`
+  sets `navigating` so its own open is not pushed) — the first page is seeded at the first render because
+  init emits no `document-change`.
+- **The page (`render()` → `core/notes/render.js`).** `renderNote` renders the body BLOCK BY BLOCK (one
+  `marked.parser([token])` per top-level token, `links` carried over) into `<div class="nb"
+  data-doc-from/to>` so preview.js's click-back, the hover row and the search marks know the source; marked
+  lists are ONE token (one `.nb`), the index's finer list blocks matter for backlink context / embeds.
+  Extensions: `nbEmbed` (block-level; renders the resolved range in THAT page's context — `withContext`
+  swaps `ctx.pageId`, depth ≤ 3, an `embedStack` key stops cycles — with a crumb `Research › ^key` and ↗ to
+  the source; a mid-line `![[…]]` is just a link `is-embed`), `nbLink` (`<a class="nb-link" data-page
+  data-from data-to>`; `is-missing` = no page → click creates it; `is-dangling` = page but no such
+  heading/block), `nbTag`, `nbDate` (`formatDate`), `nbBlockId` (the `^id` badge; click copies
+  `![[Title#^id]]`); the blockquote renderer turns `> [!type] Title` into a callout (`CALLOUT_GLYPHS`) or a
+  `<details class="nb-toggle">` for `[!toggle]`; the checkbox renderer emits `<button class="nb-check">`
+  and the page's click handler flips the `[ ]`/`[x]` in the text by block offset + nth (`toggleTaskAt` →
+  `dsl-edit`). Above the body: `<h1 class="nb-title">` (hidden when the body opens with the same H1) and
+  the properties table (`renderProperties`: `tags` → chips, ISO dates → `<time>`, else inline Markdown);
+  below: `renderBacklinks` — "N linked references" grouped by page (each block rendered in its page's
+  context, `.nb-ref[data-page data-from data-to]` → open there) + a `<details>` of unlinked mentions with
+  a **Link** button (`_linkMention`: rewrites `[[Title]]` — or `[[Title|mention]]` for an alias — in the
+  OTHER record via `library.save`, or `dsl-edit` when it is this page). Everything is sanitised by
+  DOMPurify in the DSL (data-* survive); the core never emits unescaped user text. `renderToString` /
+  the HTML + PDF exports go through `noteDocument` with `NOTES_EXPORT_CSS`. The `.uf-notes` root is kept
+  across renders (the graph's canvas lives in it); only the bar is rebuilt and the page's innerHTML
+  replaced. The bar (`.nb-bar`, `data-dsl-handled`): ‹ › · Page | Graph · the ⌕ chip while terms are
+  highlighted · Search.
+- **Search (`core/notes/search.js` + `ui/notes-search.js`, Mod-k / the bar / ⋯ / the phone bubble's
+  tap in the render view).** `parseQuery`: words AND'd, `"phrase"`, `#tag` (page filter, `area` ⊇
+  `area/sub`), `title:word`; a single word that is nowhere also matches a title as a SUBSEQUENCE
+  (`fuzzyMatch`, `mtng` → Meeting Notes). Scoring: title exact 100 / prefix 60 / contains 40 / fuzzy 12,
+  tag 30, each heading hit 15, body hit 3, recency ≤ 10; ties → more hits → newer. Hits are one per LINE,
+  heading lines first, `snippetAround` trims to 48 chars a side at word boundaries with `marks` in snippet
+  coordinates and the heading above (`heading`). The palette (`NotesSearch`, `.nbs-*`) groups by page
+  (title marks, apiName, ago; up to 4 hits; "Create page" when no title equals the query; recents on an
+  empty query), ↑↓/Tab move, ↵ opens, Esc closes (a capturing document listener); `mode: 'link'` inserts
+  `[[Title]]` at the tracked caret (`_caret` from `editor-select`, or the action's `editor._view`). Opening
+  a result sets `_terms` → `'notes-search-terms'` → `searchField` marks every occurrence in the editor
+  (`cm-nb-search`) and `_markTerms` wraps the page's text nodes in `<mark class="nb-mark">` — Notion's
+  contextual highlight; Esc in the editor or the chip's × clears. A hit opens in the editor pane on phones
+  (`pane: 'editor'`), a page row keeps the pane.
+- **Graph (`core/notes/graph.js` + `ui/notes-graph.js`, Page | Graph, Mod-Shift-g).** `ForceSim`: O(n²)
+  repulsion (capped at 400 px), springs along edges (`linkDistance` + radii; heavier nodes move less),
+  gravity to the centre, velocity damping, alpha cooling; deterministic per seed (`seededRandom`, a spiral
+  start); `layout()` runs it to rest for tests. `NotesGraph` draws on a canvas (dpr-aware; colours read from
+  the CSS tokens at draw time — the DSL is `themeAware`), remembers positions in a module-level Map so a
+  keystroke's re-render reheats to 0.3 instead of reshuffling, fits once a graph settles (`_fitAfterSettle`),
+  Local (center + depth 2) / All / `#` tag toggle (localStorage `uf_notes_graph_mode` / `_tags`), hover =
+  the neighbourhood lit and the rest dimmed, click = open / search the tag / create the missing page, drag
+  a node (pinned while dragging), wheel + pinch zoom, background pan, ⛶. The host carries
+  `data-dsl-handled` so preview.js's click-back stays out.
+- **Editor.** GFM Markdown + `markdownKeymap`; a GLOBAL `languageData` completion (`notesComplete`): `[[`
+  → the pages (+ "new page" for an unmatched title), `[[Page#` → its headings, `[[Page#^` → its block ids
+  with the block text as detail, `@` → the pages (inserts `[[Title]]`; CM filters on the range AFTER the
+  trigger, so `from` excludes the `@`/`/` and `apply` functions replace the trigger too — the first cut
+  included it and nothing ever matched, real bug) + `today/tomorrow/yesterday`, `#` → the workspace's tags,
+  `/` at a line start → the block menu (`SLASH_BLOCKS`: headings, to-do, lists, toggle, callouts, quote,
+  code, divider, table, link, embed, date, tag). `inlinePlugin` tints `[[links]]` (missing = dashed, via
+  the index), tags, dates, `^ids`; `linkClick` = Mod-click opens / creates. `notesLint`: unresolved link →
+  info with a "Create page" action, a link to a missing heading/block → warning; unknown front-matter keys
+  are NOT linted (any property is welcome). Keys at `Prec.high`: Mod-k, Mod-Shift-g, Mod-Alt-l,
+  Alt-←/→, Escape (clears the highlight; false when none so other Esc bindings run) + a document-level
+  Mod-k / Mod-Shift-g for when the editor has no focus. `dsl.shortcuts` lists them in the help modal
+  (`keyboardHelpSection` reads it — a generic hook). ⋯ / bubble actions: Search…, Graph / page view, Link
+  to page…, Copy block reference (`blockIdEdit`: appends ` ^id` to the block at the caret, keeps an existing
+  one, copies `![[Title#^id]]`); `renderActions` (phone bubble in the render view): Search (the tap —
+  `defaultPrimary`), Graph / page, Fit graph.
+- **Not done / ideas**: links are not rewritten when a page is renamed (use `aliases:`); no `@Person`
+  mentions, no databases / views, no graph export, no column windowing of the backlinks on huge
+  workspaces; the index re-reads the library at most every 1.5 s during typing (fine for hundreds of notes).
 
 ## Mobile / iOS (hard-won — read before touching layout)
 

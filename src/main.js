@@ -17,6 +17,7 @@ import './dsl/abcjs.js';
 import './dsl/mermaid.js';
 import './dsl/slides.js';
 import './dsl/spreadsheet.js';
+import './dsl/notes.js';
 
 import { App } from './ui/app.js';
 
